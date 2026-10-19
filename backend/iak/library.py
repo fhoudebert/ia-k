@@ -36,11 +36,13 @@ def sha256_file(path: Path) -> str:
 
 class Library:
     def __init__(self, folder: str | Path, ocr_langs: str = ocr.DEFAULT_LANGS,
-                 tesseract: str | None = None):
+                 tesseract: str | None = None, vectors=None):
         self.folder = Path(folder)
         self.folder.mkdir(parents=True, exist_ok=True)
         self.con: sqlite3.Connection = db.connect(self.folder / "iak.sqlite")
         self.opts = extract.Options(langs=ocr_langs, tesseract=tesseract)
+        if vectors is not None:          # an index shared between connections (API)
+            self._vindex = vectors
 
     def close(self) -> None:
         self.con.close()

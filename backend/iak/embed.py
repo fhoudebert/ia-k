@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -159,6 +160,8 @@ class VectorIndex:
     _stamp: tuple | None = None
     _ids: np.ndarray | None = None
     _mat: np.ndarray | None = None
+    # the API shares one index between request threads
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def _load(self) -> None:
         # Cheap change detection: writes through this connection (total_changes)
@@ -176,15 +179,18 @@ class VectorIndex:
         self._stamp = stamp
 
     def __len__(self) -> int:
-        self._load()
-        return int(self._ids.shape[0])
+        with self._lock:
+            self._load()
+            return int(self._ids.shape[0])
 
     def search(self, qvec: np.ndarray, k: int = 50) -> list[tuple[int, float]]:
-        self._load()
-        if self._mat is None or not len(self._ids):
+        with self._lock:
+            self._load()
+            mat, ids = self._mat, self._ids
+        if mat is None or not len(ids):
             return []
-        scores = self._mat @ qvec.astype(np.float32)
+        scores = mat @ qvec.astype(np.float32)
         k = min(k, scores.shape[0])
         top = np.argpartition(-scores, k - 1)[:k]
         top = top[np.argsort(-scores[top])]
-        return [(int(self._ids[i]), float(scores[i])) for i in top]
+        return [(int(ids[i]), float(scores[i])) for i in top]

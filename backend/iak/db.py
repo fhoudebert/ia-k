@@ -140,11 +140,13 @@ CREATE INDEX analyses_doc ON analyses(doc_id);
 }
 
 
-def connect(path: str | os.PathLike) -> sqlite3.Connection:
-    """Open (and create or upgrade) the library database."""
+def connect(path: str | os.PathLike, shared: bool = False) -> sqlite3.Connection:
+    """Open (and create or upgrade) the library database. `shared` allows the
+    connection to be used from several threads (callers then serialise it)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path)
+    # wait up to 30 s for another connection's write (an import in progress)
+    con = sqlite3.connect(path, timeout=30, check_same_thread=not shared)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     con.execute("PRAGMA journal_mode = DELETE")

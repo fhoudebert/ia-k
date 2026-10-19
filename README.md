@@ -16,8 +16,8 @@ answers** (document, page, passage), using local language models only.
 > **Status: early work (branch `init`).** Available: the server configuration,
 > example server launchers, a speed test, a portable Python, and the backend
 > (import, extraction, OCR, hybrid keyword and semantic search, sourced
-> answers, image analysis, summaries, comparisons) driven from the command
-> line. The local API and the Tauri interface come next.
+> answers, image analysis, summaries, comparisons), usable from the command
+> line and through a local HTTP API. The Tauri interface comes next.
 
 ## Architecture
 
@@ -154,6 +154,52 @@ error` on a Windows error screenshot quoted the message and code exactly and
 gave causes and steps (84 s on two CPU cores); `ask` answered with the right
 page cited, and refused a question the documents do not cover without
 calling the model.
+
+### Local API
+
+The desktop interface talks to the backend through a local HTTP API:
+
+```
+./iak.sh serve            # prints: IAK_API {"url": "http://127.0.0.1:PORT", "token": "..."}
+```
+
+- **Access.** It listens on 127.0.0.1 only, on a free port (`--port` to
+  fix one). Every request needs `Authorization: Bearer <token>`; the token is
+  random at each start (`--token` or `IAK_TOKEN` to fix it) and is given to
+  the interface on the first stdout line. Requests whose `Host` is not
+  127.0.0.1 or localhost are refused (DNS rebinding), and only the Tauri
+  origins get CORS answers (`--allow-origin` adds one, e.g. a development
+  server).
+- **Jobs.** Import (with OCR and vectors), embedding, re-extraction, image
+  analysis, summaries and comparisons are jobs, run one at a time: the call
+  returns `{"job": id}` (202) and `GET /api/jobs/<id>` gives the status,
+  progress and result. Questions (`POST /api/ask`) answer directly.
+- **Errors.** JSON `{"error": "..."}` with 400 (bad request), 401 (token),
+  403 (host or origin), 404, 409 (server not configured, wrong embedding
+  model, task not possible), 502 (model server error).
+
+| Method and path | Purpose |
+|---|---|
+| `GET /api/health`, `/api/status`, `/api/servers` | version; counts; model servers and their state |
+| `GET /api/documents[?kind=pdf]`, `GET /api/documents/<id>` | library, one document |
+| `GET /api/documents/<id>/units[?boxes=1]` | pages or sections with their text |
+| `GET /api/documents/<id>/original` | the original file, for the viewer |
+| `DELETE /api/documents/<id>` | remove (database backed up first) |
+| `POST /api/import` `{"paths": [...], "reference": false}` | job |
+| `POST /api/documents/<id>/reindex` `{"extract": true}` | job |
+| `GET /api/units/<id>`, `GET /api/units/<id>/image?max=1600` | text and word boxes; page as PNG |
+| `PUT /api/units/<id>/text` `{"text": "..."}` | OCR correction, reindexed |
+| `GET /api/search?q=&mode=auto|hybrid|sem|kw&n=&doc=&kind=` | passages with citations |
+| `POST /api/ask` `{"question": "...", "doc_ids": [...]}` | sourced answer |
+| `POST /api/look` `{"unit_id": 42, "task": "error"}` or `"question"` | job |
+| `POST /api/summarize` `{"doc_id": 3}`, `POST /api/compare` `{"doc_ids": [3, 7]}` | jobs |
+| `GET /api/analyses[?doc=3]`, `GET /api/jobs`, `GET /api/jobs/<id>` | stored results, jobs |
+| `POST /api/embed` `{"rebuild": false}` | job |
+
+Checked end to end with real models (Gemma 4 E2B with vision and
+EmbeddingGemma 300M on llama.cpp b11696, CPU-only test machine): import of
+a PDF, a screenshot and a Markdown file with OCR and vectors in 5 s, hybrid
+search, a cited answer in 10 s, an image analysis job in 66 s.
 
 Tests: `cd backend && python -m pytest` (the OCR tests are skipped when
 Tesseract is missing).
@@ -296,7 +342,7 @@ licences (Gemma terms of use, Apache 2.0 for Qwen).
 2. Python backend: import, text extraction, OCR, storage, chunking, citations by page *(done, command line)*
 3. Full-text search and sourced answers *(done, command line)*
 4. Embeddings and hybrid search *(done, command line)*
-5. Document chat and image analysis *(done, command line; local API next)*
+5. Document chat and image analysis *(done: command line and local API)*
 6. Tauri interface: library, viewer, search, chat, OCR correction
 7. Windows and Linux builds, portable layout, documentation
 8. Translation of documents (as in [truchement](https://github.com/fhoudebert/transcribe))

@@ -13,6 +13,7 @@
     python -m iak summarize ID            summary of a document, with page labels
     python -m iak compare ID ID...        compare documents (from their summaries)
     python -m iak analyses [ID]           stored analyses
+    python -m iak serve [--port N]        local API for the desktop interface
     python -m iak edit UNIT_ID FILE       replace a page's text (OCR correction)
     python -m iak reindex ID [--extract]  rebuild passages, or extract again
     python -m iak delete ID               remove a document (database backed up)
@@ -99,6 +100,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--question", default="", help="aspect to focus on")
     p = sub.add_parser("analyses")
     p.add_argument("id", type=int, nargs="?")
+    p = sub.add_parser("serve")
+    p.add_argument("--port", type=int, default=int(os.environ.get("IAK_PORT", "0")),
+                   help="port on 127.0.0.1 (default: a free one, announced on stdout)")
+    p.add_argument("--token", default=os.environ.get("IAK_TOKEN"),
+                   help="access token (default: random, announced on stdout)")
+    p.add_argument("--allow-origin", action="append", default=[],
+                   help="extra web origin allowed (e.g. a development server)")
     p = sub.add_parser("edit")
     p.add_argument("unit_id", type=int)
     p.add_argument("file", type=Path, help="UTF-8 text file with the corrected text")
@@ -109,6 +117,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("id", type=int)
     args = ap.parse_args(argv)
     host = servers.load_host(ROOT / "config" / "servers.toml", args.host)
+    if args.server:
+        host.chat = args.server
+    if args.embed_server:
+        host.embedding = args.embed_server
+    if args.vision_server:
+        host.vision = args.vision_server
+
+    if args.cmd == "serve":
+        from . import api
+        app = api.App(args.library, host, args.lang, args.ocr_langs, args.tesseract,
+                      token=args.token, origins=set(args.allow_origin))
+        api.serve(app, args.port)
+        return 0
 
     def embedder(required: bool = False) -> embed.Embedder | None:
         """The embedding server, or None when it does not answer."""
