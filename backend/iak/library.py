@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import chunk, db, extract, ocr
+from . import chunk, db, embed, extract, ocr, search
 
 
 @dataclass
@@ -195,3 +195,38 @@ class Library:
 
     def backup(self) -> Path:
         return db.backup(self.con, self.folder / "backups")
+
+    # ------------------------------------------------------------- semantic
+
+    @property
+    def vectors(self) -> embed.VectorIndex:
+        if not hasattr(self, "_vindex"):
+            self._vindex = embed.VectorIndex(self.con)
+        return self._vindex
+
+    def embed_pending(self, embedder: embed.Embedder, progress=None) -> int:
+        """Check the embedding model, then embed the passages that lack a
+        vector. Raises embed.EmbeddingMismatch for another model."""
+        embed.check_model(self.con, embedder)
+        return embed.embed_pending(self.con, embedder, progress)
+
+    def rebuild_vectors(self, embedder: embed.Embedder, progress=None) -> int:
+        """Drop every vector and embed everything again (model change)."""
+        self.backup()
+        embed.clear(self.con)
+        embedder._checked = None
+        return self.embed_pending(embedder, progress)
+
+    def find(self, query: str, limit: int = 20, filters: search.Filters | None = None,
+             embedder: embed.Embedder | None = None, mode: str = "auto") -> tuple[list, str]:
+        """Search passages. mode: auto (hybrid when possible), hybrid, sem, kw.
+        Returns (hits, mode actually used)."""
+        if mode == "kw" or (mode == "auto" and (embedder is None or not len(self.vectors))):
+            return search.search(self.con, query, limit, filters=filters), "kw"
+        if embedder is None:
+            raise ValueError("semantic search needs an embedding server")
+        embed.check_model(self.con, embedder)
+        qvec = embedder.query(query)
+        if mode == "sem":
+            return search.semantic(self.con, self.vectors, qvec, limit, filters), "sem"
+        return search.hybrid(self.con, query, self.vectors, qvec, limit, filters), "hybrid"

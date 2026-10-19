@@ -2,14 +2,18 @@
 
     python -m iak import FILE...          import documents (copied into the library)
     python -m iak list                    documents, type, state, pages, OCR pages
+    python -m iak status                  counts, semantic index, servers
     python -m iak show ID                 units of a document with their text
-    python -m iak search "words"          keyword search, with citations
+    python -m iak search "words"          hybrid search (keywords + meaning)
     python -m iak ask "question"          sourced answer from the chat server
+    python -m iak embed [--rebuild]       compute missing passage vectors
     python -m iak edit UNIT_ID FILE       replace a page's text (OCR correction)
     python -m iak reindex ID [--extract]  rebuild passages, or extract again
     python -m iak delete ID               remove a document (database backed up)
 
-The library folder is --library, or IAK_LIBRARY, or ./data.
+The library folder is --library, or IAK_LIBRARY, or ./data. Servers come
+from config/servers.toml (--host to pick a section) unless given with
+--server (chat) and --embed-server.
 """
 from __future__ import annotations
 
@@ -19,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import answer, search, servers
+from . import answer, embed, search, servers
 from .library import Library
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,13 +42,22 @@ def main(argv: list[str] | None = None) -> int:
                     help="library folder (default: IAK_LIBRARY or ./data)")
     ap.add_argument("--ocr-langs", default=os.environ.get("IAK_OCR_LANGS", "fra+eng"))
     ap.add_argument("--tesseract", default=os.environ.get("IAK_TESSERACT"))
+    ap.add_argument("--host", help="[host.NAME] section of config/servers.toml")
+    ap.add_argument("--server", help="chat server URL")
+    ap.add_argument("--embed-server", help="embedding server URL")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("import")
     p.add_argument("files", nargs="+", type=Path)
     p.add_argument("--reference", action="store_true",
                    help="do not copy the files, only record where they are")
+    p.add_argument("--no-embed", action="store_true",
+                   help="do not compute vectors now (see the embed command)")
     sub.add_parser("list")
+    sub.add_parser("status")
+    p = sub.add_parser("embed")
+    p.add_argument("--rebuild", action="store_true",
+                   help="drop all vectors and compute them again (new model)")
     p = sub.add_parser("show")
     p.add_argument("id", type=int)
     p = sub.add_parser("search")
@@ -52,11 +65,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-n", type=int, default=10)
     p.add_argument("--doc", type=int, action="append", help="limit to document ID")
     p.add_argument("--kind", action="append", help="limit to a type (pdf, image...)")
+    p.add_argument("--mode", choices=["auto", "hybrid", "sem", "kw"], default="auto")
     p = sub.add_parser("ask")
     p.add_argument("question")
     p.add_argument("--doc", type=int, action="append")
-    p.add_argument("--server", help="chat server URL (default: config/servers.toml)")
-    p.add_argument("--host", help="[host.NAME] section of config/servers.toml")
+    p.add_argument("--kind", action="append")
+    p.add_argument("--mode", choices=["auto", "hybrid", "sem", "kw"], default="auto")
     p.add_argument("--budget", type=int, default=answer.DEFAULT_BUDGET_CHARS,
                    help="characters of passages sent to the model")
     p = sub.add_parser("edit")
@@ -68,6 +82,43 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("delete")
     p.add_argument("id", type=int)
     args = ap.parse_args(argv)
+    host = servers.load_host(ROOT / "config" / "servers.toml", args.host)
+
+    def embedder(required: bool = False) -> embed.Embedder | None:
+        """The embedding server, or None when it does not answer."""
+        url = args.embed_server or host.embedding
+        if not url:
+            if required:
+                raise SystemExit("no embedding server configured "
+                                 "(config/servers.toml or --embed-server)")
+            return None
+        emb = embed.Embedder(servers.Client(url, host.api_key, timeout=300))
+        try:
+            emb.client.model()
+        except servers.ServerError as exc:
+            if required:
+                raise SystemExit(f"embedding server unavailable: {exc}")
+            return None
+        return emb
+
+    def run_embed(lib: Library, emb: embed.Embedder, rebuild: bool = False) -> int:
+        t0 = time.perf_counter()
+
+        def progress(done, total):
+            print(f"\r  vectors {done}/{total}", end="", flush=True)
+        try:
+            n = (lib.rebuild_vectors if rebuild else lib.embed_pending)(emb, progress)
+        except embed.EmbeddingMismatch as exc:
+            _out(f"semantic index not updated: {exc}")
+            _out("  keyword search still works; 'embed --rebuild' recomputes every vector")
+            return 1
+        except servers.ServerError as exc:
+            _out(f"\nembedding server error: {exc}")
+            return 1
+        if n:
+            dt = time.perf_counter() - t0
+            print(f"\r  vectors {n} computed in {dt:.1f} s ({n / max(dt, 1e-6):.1f}/s)")
+        return 0
 
     with Library(args.library, args.ocr_langs, args.tesseract) as lib:
         if args.cmd == "import":
@@ -78,7 +129,30 @@ def main(argv: list[str] | None = None) -> int:
                 dt = time.perf_counter() - t0
                 _out(f"{r.status:9} #{r.doc_id:<4} {r.name}  ({dt:.1f} s) {r.message}")
                 failed += r.status == "error"
+            if not args.no_embed and embed.pending(lib.con):
+                emb = embedder()
+                if emb is None:
+                    _out("no embedding server: run 'embed' later for semantic search")
+                else:
+                    run_embed(lib, emb)
             return 1 if failed else 0
+
+        if args.cmd == "embed":
+            return run_embed(lib, embedder(required=True), args.rebuild)
+
+        if args.cmd == "status":
+            c = lib.con
+            n_docs = c.execute("SELECT count(*) FROM documents").fetchone()[0]
+            n_pass = c.execute("SELECT count(*) FROM passages").fetchone()[0]
+            n_vec = c.execute("SELECT count(*) FROM vectors").fetchone()[0]
+            fp = embed.db.get_setting(c, "embedding")
+            _out(f"library  : {lib.folder}")
+            _out(f"documents: {n_docs}   passages: {n_pass}   vectors: {n_vec}")
+            _out(f"embedding: {fp['model']} ({fp['dim']} dimensions)" if fp
+                 else "embedding: none yet")
+            _out(f"host     : [{host.name}] chat={args.server or host.chat} "
+                 f"embedding={args.embed_server or host.embedding}")
+            return 0
 
         if args.cmd == "list":
             for d in lib.documents():
@@ -104,23 +178,36 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.cmd == "search":
-            hits = search.search(lib.con, args.query, args.n, args.doc, args.kind)
+            filters = search.Filters(args.doc, args.kind)
+            try:
+                hits, used = lib.find(args.query, args.n, filters,
+                                      embedder(args.mode in ("sem", "hybrid")), args.mode)
+            except embed.EmbeddingMismatch as exc:
+                _out(f"semantic search unavailable: {exc}")
+                hits, used = lib.find(args.query, args.n, filters, None, "kw")
             if not hits:
                 _out("no result")
             for h in hits:
-                _out(f"{h.score:7.2f}  {h.doc_name}, {h.label}  (#{h.doc_id}, unit {h.unit_id})")
+                _out(f"{h.score:7.2f} {h.via:6} {h.doc_name}, {h.label}"
+                     f"  (#{h.doc_id}, unit {h.unit_id})")
                 _out("         " + " ".join(h.snippet.split()))
+            _out(f"({used} search)")
             return 0
 
         if args.cmd == "ask":
-            host = servers.load_host(ROOT / "config" / "servers.toml", args.host)
             url = args.server or host.chat
             if not url:
                 _out("no chat server configured (config/servers.toml or --server)")
                 return 1
             if not servers.is_local(url):
                 _out(f"note: passages are sent to {url}, outside this computer")
-            hits = search.search(lib.con, args.question, 20, args.doc)
+            filters = search.Filters(args.doc, args.kind)
+            try:
+                hits, used = lib.find(args.question, 20, filters,
+                                      embedder(args.mode in ("sem", "hybrid")), args.mode)
+            except embed.EmbeddingMismatch as exc:
+                _out(f"semantic search unavailable: {exc}")
+                hits, used = lib.find(args.question, 20, filters, None, "kw")
             client = servers.Client(url, host.api_key)
             t0 = time.perf_counter()
             try:
@@ -138,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
                 _out("\nSources:")
                 for s in res.sources:
                     _out(f"  [{s.ref}] {s.doc_name}, {s.label}")
-            _out(f"\n({len(res.sent)} passages sent, {dt:.1f} s)")
+            _out(f"\n({len(res.sent)} passages sent, {used} search, {dt:.1f} s)")
             return 0
 
         if args.cmd == "edit":

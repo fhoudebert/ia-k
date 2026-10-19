@@ -13,13 +13,14 @@ shared memory files that do not suit that.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE documents (
@@ -83,7 +84,29 @@ CREATE TRIGGER passages_au AFTER UPDATE ON passages BEGIN
     INSERT INTO passages_fts(passages_fts, rowid, text) VALUES ('delete', old.id, old.text);
     INSERT INTO passages_fts(rowid, text) VALUES (new.id, new.text);
 END;
+""" + """
+-- schema 2: semantic search
+CREATE TABLE settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL            -- JSON
+);
+-- one embedding per passage, float32, normalised (cosine = dot product)
+CREATE TABLE vectors (
+    passage_id  INTEGER PRIMARY KEY REFERENCES passages(id) ON DELETE CASCADE,
+    vec         BLOB NOT NULL
+);
 """
+
+# upgrades from each older schema version to the next
+MIGRATIONS = {
+    1: """
+CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE vectors (
+    passage_id  INTEGER PRIMARY KEY REFERENCES passages(id) ON DELETE CASCADE,
+    vec         BLOB NOT NULL
+);
+""",
+}
 
 
 def connect(path: str | os.PathLike) -> sqlite3.Connection:
@@ -100,12 +123,34 @@ def connect(path: str | os.PathLike) -> sqlite3.Connection:
         with con:
             con.executescript(SCHEMA)
             con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    elif version < SCHEMA_VERSION:
+        backup(con, path.parent / "backups")
+        while version < SCHEMA_VERSION:
+            with con:
+                con.executescript(MIGRATIONS[version])
+                version += 1
+                con.execute(f"PRAGMA user_version = {version}")
     elif version > SCHEMA_VERSION:
         con.close()
         raise RuntimeError(
             f"{path} was created by a newer IA-K (schema {version}); "
             f"this version reads schema {SCHEMA_VERSION}")
     return con
+
+
+def get_setting(con: sqlite3.Connection, key: str, default=None):
+    row = con.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    return json.loads(row[0]) if row else default
+
+
+def set_setting(con: sqlite3.Connection, key: str, value) -> None:
+    with con:
+        if value is None:
+            con.execute("DELETE FROM settings WHERE key=?", (key,))
+        else:
+            con.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key)"
+                        " DO UPDATE SET value=excluded.value",
+                        (key, json.dumps(value, ensure_ascii=False)))
 
 
 def backup(con: sqlite3.Connection, backup_dir: str | os.PathLike, keep: int = 5) -> Path:

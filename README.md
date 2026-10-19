@@ -14,9 +14,9 @@ answers** (document, page, passage), using local language models only.
 - Open source, MIT licence.
 
 > **Status: early work (branch `init`).** Available: the server configuration,
-> example server launchers, a speed test, and the Python backend (import,
-> extraction, OCR, keyword search, sourced answers) driven from the command
-> line. Semantic search and the Tauri interface come next.
+> example server launchers, a speed test, a portable Python, and the backend
+> (import, extraction, OCR, hybrid keyword and semantic search, sourced
+> answers) driven from the command line. The Tauri interface comes next.
 
 ## Architecture
 
@@ -37,28 +37,23 @@ by URL (see below).
 
 ## Backend
 
-`backend/` is the Python package `iak` (Python 3.11+). Install its
-dependencies and Tesseract with the French data:
+`backend/` is the Python package `iak`. It runs on a portable Python carried
+with IA-K (next section); a Python 3.11+ with `pip install -r
+backend/requirements.lock` works too, for development.
+
+Until the interface exists, the library is used from the command line,
+`iak.sh` on Linux, `iak.bat` on Windows:
 
 ```
-pip install -r backend/requirements.txt
-# Linux: sudo apt install tesseract-ocr tesseract-ocr-fra
-# Windows: install Tesseract, then set IAK_TESSERACT to tesseract.exe
-```
-
-Until the interface exists, the library is used from the command line
-(run from `backend/`):
-
-```
-python -m iak import ~/docs/*.pdf scans/page12.png     # copied into the library
-python -m iak import --reference big-archive.pdf       # only its path is recorded
-python -m iak list
-python -m iak search "atlas relieur"
-python -m iak ask "Où l'atlas a-t-il été envoyé ?"
-python -m iak show 3                                   # pages with their text
-python -m iak edit 42 corrected.txt                    # correct an OCR page
-python -m iak reindex 3 --extract                      # extract and OCR again
-python -m iak delete 3
+./iak.sh import ~/docs/*.pdf scans/page12.png     # copied into the library
+./iak.sh import --reference big-archive.pdf       # only its path is recorded
+./iak.sh list
+./iak.sh search "atlas relieur"
+./iak.sh ask "Où l'atlas a-t-il été envoyé ?"
+./iak.sh show 3                                   # pages with their text
+./iak.sh edit 42 corrected.txt                    # correct an OCR page
+./iak.sh reindex 3 --extract                      # extract and OCR again
+./iak.sh delete 3
 ```
 
 The library folder is `--library`, or `IAK_LIBRARY`, or `./data`; it holds
@@ -92,8 +87,71 @@ How documents are handled:
   do not allow an answer"; an answer citing nothing is flagged. Thinking is
   turned off and the server's prompt cache is used.
 
+### Semantic search
+
+With an embedding server (EmbeddingGemma 300M, port 8081, see *Model
+servers*), every passage also gets a vector, and searches combine both ways:
+
+```
+./iak.sh import doc.pdf                 # vectors computed right after import
+./iak.sh embed                          # or later, for passages without one
+./iak.sh search "qui a restauré la carte endommagée ?"            # hybrid
+./iak.sh search "..." --mode kw|sem     # one way only
+./iak.sh status                         # counts and the model of the index
+```
+
+- **Hybrid by default.** Keyword and meaning results are fused by
+  reciprocal rank; a passage found both ways comes first. Keywords catch
+  names, numbers and exact terms; meaning catches reformulations and old
+  spellings. Without an embedding server, search falls back to keywords.
+- **Prefixes.** Passages are embedded as `title: <document> | text: ...`,
+  queries as `task: search result | query: ...`, as EmbeddingGemma expects.
+- **Cut-off.** Meaning search always has neighbours, related or not: hits
+  below a cosine of 0.10 or under half the best score are dropped. With the
+  real model, a reformulated question scored 0.43 on the right passage and
+  about 0.05 on unrelated ones.
+- **One model per index.** The index records its embedding model (file
+  name, dimension, vector of a probe sentence). A server with another model
+  is refused — keyword search keeps working — until `embed --rebuild`;
+  another file or quantisation of the same model is accepted.
+- **Storage and speed.** Vectors are float32 BLOBs in SQLite, about 3 KB
+  per passage (100,000 passages ≈ 70,000 pages ≈ 400 MB), searched with
+  numpy: 0.7 s to load 100,000 vectors once, then 14 ms per query. Embedding
+  ran at 12 passages/s on a CPU-only test machine; the iGPU should do
+  several times better.
+
 Tests: `cd backend && python -m pytest` (the OCR tests are skipped when
 Tesseract is missing).
+
+### Portable setup
+
+A virtual environment is not portable: it keeps using the standard library
+of the Python that created it, at that Python's path. IA-K carries instead a
+complete, relocatable Python per system, from
+[python-build-standalone](https://github.com/astral-sh/python-build-standalone)
+(stripped build), with the exact packages of `backend/requirements.lock`:
+
+```
+./setup_python.sh        # Linux   -> build/python/linux    (~260 MB)
+setup_python.bat         # Windows -> build\python\windows
+```
+
+Both copies can sit on the same key; each script checks the download against
+its SHA-256 and can be run again safely (`--force` reinstalls Python). On
+Linux, symbolic links are left out so the key can be exFAT; a key mounted
+`noexec` must be remounted with `exec`.
+
+Tesseract:
+
+- Linux: the system package (`tesseract-ocr`, `tesseract-ocr-fra`, and
+  `tesseract-ocr-frm` for older French).
+- Windows: install it (e.g. the UB Mannheim build), or copy its folder
+  (`tesseract.exe`, its DLLs and `tessdata\`) to `build\tesseract\` on the
+  key; `iak.bat` uses that copy first. `IAK_TESSERACT` points to any other.
+
+The desktop application (step 7) will ship the backend frozen into one
+executable per system instead; until then these scripts are the way to run
+IA-K from the key.
 
 ## Model servers
 
@@ -202,7 +260,7 @@ licences (Gemma terms of use, Apache 2.0 for Qwen).
 1. Feasibility study, model servers and their configuration *(done)*
 2. Python backend: import, text extraction, OCR, storage, chunking, citations by page *(done, command line)*
 3. Full-text search and sourced answers *(done, command line)*
-4. Embeddings and hybrid search
+4. Embeddings and hybrid search *(done, command line)*
 5. Document chat and image analysis
 6. Tauri interface: library, viewer, search, chat, OCR correction
 7. Windows and Linux builds, portable layout, documentation

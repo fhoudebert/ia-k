@@ -29,7 +29,11 @@ class OcrResult:
 
 
 def find_tesseract(explicit: str | None = None) -> str:
-    candidates = [explicit, os.environ.get("IAK_TESSERACT"), shutil.which("tesseract")]
+    # a copy carried on the key (build/tesseract) comes first after explicit choices
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    exe = "tesseract.exe" if os.name == "nt" else "tesseract"
+    candidates = [explicit, os.environ.get("IAK_TESSERACT"),
+                  os.path.join(root, "build", "tesseract", exe), shutil.which("tesseract")]
     if os.name == "nt":
         candidates += [r"C:\Program Files\Tesseract-OCR\tesseract.exe"]
     for c in candidates:
