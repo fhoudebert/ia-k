@@ -10,7 +10,8 @@ MODELS_DIR="${MODELS_DIR:-$HOME/ia/models}"
 # KV_Q8="${KV_Q8:-1}"
 # VISION="${VISION:-0}"
 # N_CPU_MOE="${N_CPU_MOE:-8}"
-# UBATCH="${UBATCH:-1024}"
+# UBATCH="${UBATCH:-2048}"
+# MMPROJ_CPU="${MMPROJ_CPU:-0}"
 
 # --- explicit paths ---
 # QWENVL_MODEL="$HOME/ia/models/Qwen3-VL-8B-Instruct-Q4_K_M.gguf"

@@ -27,10 +27,11 @@ EMBED_PORT="${EMBED_PORT:-8081}"
 VISION_PORT="${VISION_PORT:-8082}"
 CTX="${CTX:-16384}"          # chat context (prompt + answer)
 NGL="${NGL:-99}"             # layers on the iGPU (99 = all)
-N_CPU_MOE="${N_CPU_MOE:-}"   # 26B-A4B: experts of N layers kept on the CPU
+N_CPU_MOE="${N_CPU_MOE:-}"   # MoE: experts of N layers on the CPU (gemma26 default 99, 0 = none)
+MMPROJ_CPU="${MMPROJ_CPU:-}" # 1 = vision projector on the CPU (gemma26 default 1)
 KV_Q8="${KV_Q8:-0}"          # 1 = KV cache in q8_0
 VISION="${VISION:-1}"        # 0 = no vision projector (saves ~1 GB)
-UBATCH="${UBATCH:-}"         # prompt micro-batch, e.g. 1024 (empty = default)
+UBATCH="${UBATCH:-}"         # prompt micro-batch (empty: 1280 with vision, else 512)
 
 GEMMA12_MODEL="${GEMMA12_MODEL:-$MODELS_DIR/lmstudio-community/gemma-4-12B-it-QAT-GGUF/gemma-4-12B-it-QAT-Q4_0.gguf}"
 GEMMA26_MODEL="${GEMMA26_MODEL:-$MODELS_DIR/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf}"
@@ -62,7 +63,8 @@ need_file() {
 
 case "$PROFILE" in
     gemma12) MODEL="$GEMMA12_MODEL"; MMPROJ="${GEMMA12_MMPROJ:-}"; ALIAS=gemma-4-12b; PORT="$CHAT_PORT" ;;
-    gemma26) MODEL="$GEMMA26_MODEL"; MMPROJ="${GEMMA26_MMPROJ:-}"; ALIAS=gemma-4-26b-a4b; PORT="$CHAT_PORT" ;;
+    gemma26) MODEL="$GEMMA26_MODEL"; MMPROJ="${GEMMA26_MMPROJ:-}"; ALIAS=gemma-4-26b-a4b; PORT="$CHAT_PORT"
+             N_CPU_MOE="${N_CPU_MOE:-99}"; MMPROJ_CPU="${MMPROJ_CPU:-1}" ;;
     qwenvl)  MODEL="$QWENVL_MODEL";  MMPROJ="${QWENVL_MMPROJ:-}";  ALIAS=vision; PORT="$VISION_PORT"; VISION=1 ;;
     embed)
         need_file "$EMBED_MODEL"
@@ -91,6 +93,9 @@ if [ "$VISION" != "0" ]; then
         exit 1
     fi
     ARGS+=(--mmproj "$MMPROJ")
+    [ "$MMPROJ_CPU" = "1" ] && ARGS+=(--no-mmproj-offload)
+    # an image may use up to 1120 tokens; llama.cpp caps it to the micro-batch
+    UBATCH="${UBATCH:-1280}"
 fi
 [ "$KV_Q8" = "1" ] && ARGS+=(-ctk q8_0 -ctv q8_0)
 [ -n "$N_CPU_MOE" ] && ARGS+=(--n-cpu-moe "$N_CPU_MOE")
@@ -98,6 +103,6 @@ fi
 echo "[ia-k] profile $PROFILE on http://$HOST:$PORT/v1  (alias $ALIAS)"
 echo "       model  : $MODEL"
 [ "$VISION" != "0" ] && echo "       mmproj : $MMPROJ"
-echo "       ctx=$CTX ngl=$NGL kv_q8=$KV_Q8 n_cpu_moe=${N_CPU_MOE:-} ubatch=${UBATCH:-}"
+echo "       ctx=$CTX ngl=$NGL kv_q8=$KV_Q8 n_cpu_moe=${N_CPU_MOE:-} mmproj_cpu=${MMPROJ_CPU:-0} ubatch=${UBATCH:-}"
 exec "$SERVER" "${ARGS[@]}" --alias "$ALIAS" --host "$HOST" --port "$PORT" \
-    -c "$CTX" -ngl "$NGL" -np 1 --jinja ${UBATCH:+-ub "$UBATCH" -b "$UBATCH"} "${EXTRA[@]}"
+    -c "$CTX" -ngl "$NGL" -np 1 --jinja ${UBATCH:+-ub "$UBATCH"} "${EXTRA[@]}"

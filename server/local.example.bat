@@ -13,7 +13,8 @@ rem set "CTX=8192"
 rem set "KV_Q8=1"
 rem set "VISION=0"
 rem set "N_CPU_MOE=8"
-rem set "UBATCH=1024"
+rem set "UBATCH=2048"
+rem set "MMPROJ_CPU=0"
 
 rem --- explicit paths, when the default layout under MODELS_DIR does not fit ---
 rem set "GEMMA26_MODEL=E:\models\gemma-4-26B-A4B-it-QAT-Q4_0.gguf"

@@ -30,15 +30,21 @@ rem ~8000 tokens of retrieved passages; lower it to save memory.
 set "CTX=16384"
 rem layers offloaded to the iGPU (99 = all)
 set "NGL=99"
-rem 26B-A4B only: keep the experts of N layers on the CPU if the iGPU heap
-rem is too small (try 8, 16, ...). Empty = everything on the iGPU.
+rem MoE models: keep the experts of N layers in system RAM, computed by the
+rem CPU. Empty = profile default: 99 (all) for gemma26, which does not fit
+rem in the iGPU memory otherwise; 0 = everything on the iGPU. Lower values
+rem are faster as long as the model still loads.
 set "N_CPU_MOE="
+rem 1 = run the vision projector on the CPU (saves ~1 GB of iGPU memory,
+rem images ~4x slower). Empty = profile default: 1 for gemma26, else 0.
+set "MMPROJ_CPU="
 rem 1 = quantize the KV cache to q8_0 (about half the cache memory)
 set "KV_Q8=0"
 rem 0 = do not load the vision projector (saves ~1 GB, text chat only)
 set "VISION=1"
-rem micro-batch for prompt processing (empty = llama.cpp default 512);
-rem try 1024 or 2048: may speed up long prompts on the iGPU
+rem micro-batch for prompt processing. Empty = 1280 when vision is on (an
+rem image may use up to 1120 tokens, llama.cpp caps it to the micro-batch),
+rem else the llama.cpp default (512). Above 2048, add -b in the arguments.
 set "UBATCH="
 
 if exist "%HERE%local.bat" call "%HERE%local.bat"
@@ -92,6 +98,8 @@ set "MODEL=%GEMMA26_MODEL%"
 set "MMPROJ=%GEMMA26_MMPROJ%"
 set "ALIAS=gemma-4-26b-a4b"
 set "PORT=%CHAT_PORT%"
+if not defined N_CPU_MOE set "N_CPU_MOE=99"
+if not defined MMPROJ_CPU set "MMPROJ_CPU=1"
 goto chat
 
 :p_qwenvl
@@ -115,18 +123,20 @@ for %%F in ("%MDIR%mmproj*.gguf") do if not defined MMPROJ set "MMPROJ=%%~fF"
 if not defined MMPROJ goto mmproj_missing
 if not exist "%MMPROJ%" goto mmproj_missing
 set MMOPT=--mmproj "%MMPROJ%"
+if "%MMPROJ_CPU%"=="1" set MMOPT=%MMOPT% --no-mmproj-offload
+if not defined UBATCH set "UBATCH=1280"
 :no_vision
 set "KVOPT="
 if "%KV_Q8%"=="1" set "KVOPT=-ctk q8_0 -ctv q8_0"
 set "UBOPT="
-if defined UBATCH set "UBOPT=-ub %UBATCH% -b %UBATCH%"
+if defined UBATCH set "UBOPT=-ub %UBATCH%"
 set "MOEOPT="
 if defined N_CPU_MOE set "MOEOPT=--n-cpu-moe %N_CPU_MOE%"
 
 echo [ia-k] profile %PROFILE% on http://%HOST%:%PORT%/v1  (alias %ALIAS%)
 echo        model  : %MODEL%
 if defined MMOPT echo        mmproj : %MMPROJ%
-echo        ctx=%CTX% ngl=%NGL% kv_q8=%KV_Q8% n_cpu_moe=%N_CPU_MOE% ubatch=%UBATCH%
+echo        ctx=%CTX% ngl=%NGL% kv_q8=%KV_Q8% n_cpu_moe=%N_CPU_MOE% mmproj_cpu=%MMPROJ_CPU% ubatch=%UBATCH%
 echo.
 "%SERVER%" -m "%MODEL%" %MMOPT% --alias %ALIAS% --host %HOST% --port %PORT% ^
     -c %CTX% -ngl %NGL% -np 1 --jinja %UBOPT% %KVOPT% %MOEOPT% %EXTRA%
