@@ -5,7 +5,7 @@ rem
 rem  Usage : server\llama-server.bat [profile] [extra llama-server options]
 rem    gemma12  Gemma 4 12B QAT + vision projector   (default, port CHAT_PORT)
 rem    gemma26  Gemma 4 26B-A4B QAT + vision          (port CHAT_PORT)
-rem    qwenvl   optional dedicated vision model       (port CHAT_PORT)
+rem    qwenvl   optional dedicated vision model       (port VISION_PORT)
 rem    embed    EmbeddingGemma 300M, embeddings only  (port EMBED_PORT)
 rem
 rem  Personal settings (model paths, ports, memory options) go in
@@ -24,6 +24,7 @@ set "LLAMA_DIR=%ROOT%\build\llama"
 set "HOST=127.0.0.1"
 set "CHAT_PORT=8080"
 set "EMBED_PORT=8081"
+set "VISION_PORT=8082"
 rem context of the chat server (prompt + answer). 16384 leaves room for
 rem ~8000 tokens of retrieved passages; lower it to save memory.
 set "CTX=16384"
@@ -80,18 +81,21 @@ exit /b 1
 set "MODEL=%GEMMA12_MODEL%"
 set "MMPROJ=%GEMMA12_MMPROJ%"
 set "ALIAS=gemma-4-12b"
+set "PORT=%CHAT_PORT%"
 goto chat
 
 :p_gemma26
 set "MODEL=%GEMMA26_MODEL%"
 set "MMPROJ=%GEMMA26_MMPROJ%"
 set "ALIAS=gemma-4-26b-a4b"
+set "PORT=%CHAT_PORT%"
 goto chat
 
 :p_qwenvl
 set "MODEL=%QWENVL_MODEL%"
 set "MMPROJ=%QWENVL_MMPROJ%"
 set "ALIAS=vision"
+set "PORT=%VISION_PORT%"
 set "VISION=1"
 goto chat
 
@@ -114,12 +118,12 @@ if "%KV_Q8%"=="1" set "KVOPT=-ctk q8_0 -ctv q8_0"
 set "MOEOPT="
 if defined N_CPU_MOE set "MOEOPT=--n-cpu-moe %N_CPU_MOE%"
 
-echo [ia-k] profile %PROFILE% on http://%HOST%:%CHAT_PORT%/v1  (alias %ALIAS%)
+echo [ia-k] profile %PROFILE% on http://%HOST%:%PORT%/v1  (alias %ALIAS%)
 echo        model  : %MODEL%
 if defined MMOPT echo        mmproj : %MMPROJ%
 echo        ctx=%CTX% ngl=%NGL% kv_q8=%KV_Q8% n_cpu_moe=%N_CPU_MOE%
 echo.
-"%SERVER%" -m "%MODEL%" %MMOPT% --alias %ALIAS% --host %HOST% --port %CHAT_PORT% ^
+"%SERVER%" -m "%MODEL%" %MMOPT% --alias %ALIAS% --host %HOST% --port %PORT% ^
     -c %CTX% -ngl %NGL% -np 1 --jinja --no-mmap %KVOPT% %MOEOPT% %EXTRA%
 exit /b %ERRORLEVEL%
 

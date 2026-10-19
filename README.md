@@ -13,10 +13,9 @@ answers** (document, page, passage), using local language models only.
 - Windows and Linux, English and French interface.
 - Open source, MIT licence.
 
-> **Status: early work (branch `init`).** This first step only provides the
-> scripts that start the local model servers and a test to measure memory and
-> speed on the target machine. The Python backend and the Tauri interface come
-> next.
+> **Status: early work (branch `init`).** For now: the server configuration
+> format, example server launchers and a test to measure memory and speed.
+> The Python backend and the Tauri interface come next.
 
 ## Architecture
 
@@ -32,79 +31,67 @@ answers** (document, page, passage), using local language models only.
 | DOCX | python-docx |
 | Storage | SQLite: documents, pages, passages, FTS5 full-text index, vectors as BLOBs searched with numpy |
 
-The application starts and stops the model servers itself; only one large
-model is loaded at a time, the embedding model stays loaded.
+The model servers run on each computer, outside IA-K, which connects to them
+by URL (see below).
 
 ## Model servers
 
-`server/llama-server.bat` (Windows) and `server/llama-server.sh` (Linux) start
-`llama-server` with settings tuned for an integrated GPU sharing system memory
-(tested target: Ryzen AI 9 HX 370, Radeon 890M, 32 GB).
+The model servers belong to each computer, next to its models: IA-K does not
+start them, it **connects** to them. The same IA-K key can therefore be used on
+several computers, each with its own servers, ports and models, local or on
+the network.
 
-```
-server\llama-server.bat gemma12      Gemma 4 12B + vision        port 8080
-server\llama-server.bat gemma26      Gemma 4 26B-A4B + vision    port 8080
-server\llama-server.bat qwenvl       dedicated vision model      port 8080
-server\llama-server.bat embed        EmbeddingGemma 300M         port 8081
-```
+Each computer runs up to three `llama-server` instances (OpenAI-compatible
+API):
 
-Extra arguments are passed to `llama-server`, for example
-`server\llama-server.bat gemma26 --verbose`.
-
-### Setup
-
-1. Get a **Vulkan** build of llama.cpp:
-   - Windows: unzip `llama-bXXXX-bin-win-vulkan-x64.zip` from the
-     [releases](https://github.com/ggml-org/llama.cpp/releases) into
-     `build\llama\` (or anywhere, then set `LLAMA_DIR`);
-   - Linux: build with `cmake -B build -DGGML_VULKAN=ON` and copy
-     `llama-server` into `build/llama/`, or have it in the `PATH`.
-   Use a recent build: Gemma 4 needs it.
-2. Copy `server/local.example.bat` to `server/local.bat` (or the `.sh`
-   pair on Linux) and set `MODELS_DIR`. The default layout below it is the
-   LM Studio one (`lmstudio-community/gemma-4-12B-it-QAT-GGUF/...`); any model
-   can be given explicitly with `GEMMA12_MODEL`, `GEMMA26_MODEL`,
-   `QWENVL_MODEL`, `EMBED_MODEL`.
-3. The vision projector is the first `mmproj*.gguf` found next to the model,
-   unless `*_MMPROJ` is set.
-
-Settings (in `local.bat` / `local.sh`, or in the environment on Linux):
-
-| Variable | Default | Effect |
+| Role | Usual port | Purpose |
 |---|---|---|
-| `CTX` | 16384 | chat context, prompt + answer |
-| `NGL` | 99 | layers on the iGPU |
-| `VISION` | 1 | 0 = do not load the vision projector (saves ~1 GB) |
-| `KV_Q8` | 0 | 1 = KV cache in q8_0 (about half the cache memory) |
-| `N_CPU_MOE` | empty | 26B-A4B: keep the experts of N layers on the CPU |
-| `CHAT_PORT`, `EMBED_PORT` | 8080, 8081 | ports, always bound to 127.0.0.1 |
+| chat | 8080 | document chat, summaries; image questions too when started with a vision projector |
+| embedding | 8081 | semantic search (EmbeddingGemma 300M) |
+| vision | 8082 | optional dedicated vision model |
 
-The chat server uses one slot (`-np 1`), `--jinja` for the model's chat
-template and `--no-mmap` so the weights are read once into GPU memory instead
-of staying mapped from the disk as well.
+### Connecting IA-K
 
-### Memory test
+Copy `config/servers.example.toml` to `config/servers.toml` and describe each
+computer. IA-K picks the section whose `match` list contains the computer name,
+otherwise `[host.default]`. Context size and vision support are read from each
+server (`/props`), not configured.
 
-Run these in order and keep the numbers; they decide which model becomes the
-default. Start a server in one terminal, the test in another.
+The semantic index only works with the embedding model that built it: IA-K
+records that model in the index and turns semantic search off (keyword search
+keeps working) when a computer serves a different one. Serve the same
+EmbeddingGemma file everywhere.
+
+A server that is not on `127.0.0.1` receives the passages of your documents;
+IA-K shows it in the interface. Use `--api-key` on such servers.
+
+### Starting the servers on a computer
+
+`server/` holds examples for the target laptop (Ryzen AI 9 HX 370, Radeon 890M,
+32 GB, Windows, llama.cpp Vulkan build): one `.bat` per model, tested, plus
+`llama-server.bat` / `llama-server.sh`, a single launcher with profiles
+(`gemma12`, `gemma26`, `qwenvl`, `embed`) and settings in `server/local.*`.
+They are conveniences for the computer, not part of IA-K.
+
+Gemma 4 26B-A4B does not fit entirely in the iGPU memory: its `.bat` keeps
+the experts of N layers in system RAM (`--n-cpu-moe N`). Start with the
+default (all of them), then lower N until loading fails and keep the last
+value that worked.
+
+### Testing a server
+
+`scripts/smoke_test.py` (Python standard library only) measures what matters
+for document chat on any server:
 
 ```
-server\llama-server.bat gemma12
-python scripts\smoke_test.py --image assets\ia-k.png --prefill 6000
+python scripts\smoke_test.py --url http://127.0.0.1:8080 --image assets\ia-k.png --prefill 6000
+python scripts\smoke_test.py --url http://127.0.0.1:8080 --embed-url http://127.0.0.1:8081
 ```
 
-Then the same with `gemma26`, then `gemma26` while `embed` runs in a third
-terminal (with `--embed-url http://127.0.0.1:8081` added to the test). The
-test reports prompt speed (the wait before an answer starts), generation
-speed, the image answer and, on Linux, the iGPU memory in use.
-
-If the 26B model fails to load, or the system starts swapping, try in this
-order: `KV_Q8=1`, `CTX=8192`, `VISION=0` (to see whether vision is the
-difference), then `N_CPU_MOE=8` and higher. In the server log, the lines
-`model buffer size` and `KV buffer size` give the memory used per device.
-
-On Windows the iGPU can usually use about half of the system memory; on
-Linux the limit is the amdgpu GTT size (see `dmesg | grep -i gtt`).
+It reports the server's context and vision support, prompt speed on a long
+prompt (the wait before an answer starts), generation speed, an image
+answer, embedding similarity and, on Linux, the iGPU memory in use.
+`--api-key` (or `IAK_API_KEY`) is passed as a bearer token.
 
 ## Licences
 
@@ -115,7 +102,7 @@ licences (Gemma terms of use, Apache 2.0 for Qwen).
 
 ## Roadmap
 
-1. Feasibility study and model servers *(this step)*
+1. Feasibility study, model servers and their configuration *(this step)*
 2. Python backend: import, text extraction, OCR, storage, chunking, citations by page
 3. Full-text search and sourced answers
 4. Embeddings and hybrid search

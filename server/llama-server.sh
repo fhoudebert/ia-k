@@ -5,7 +5,7 @@
 #  Usage : server/llama-server.sh [profile] [extra llama-server options]
 #    gemma12  Gemma 4 12B QAT + vision projector   (default, port CHAT_PORT)
 #    gemma26  Gemma 4 26B-A4B QAT + vision          (port CHAT_PORT)
-#    qwenvl   optional dedicated vision model       (port CHAT_PORT)
+#    qwenvl   optional dedicated vision model       (port VISION_PORT)
 #    embed    EmbeddingGemma 300M, embeddings only  (port EMBED_PORT)
 #
 #  Personal settings go in server/local.sh (copy local.example.sh); any
@@ -24,6 +24,7 @@ LLAMA_DIR="${LLAMA_DIR:-$ROOT/build/llama}"
 HOST="${HOST:-127.0.0.1}"
 CHAT_PORT="${CHAT_PORT:-8080}"
 EMBED_PORT="${EMBED_PORT:-8081}"
+VISION_PORT="${VISION_PORT:-8082}"
 CTX="${CTX:-16384}"          # chat context (prompt + answer)
 NGL="${NGL:-99}"             # layers on the iGPU (99 = all)
 N_CPU_MOE="${N_CPU_MOE:-}"   # 26B-A4B: experts of N layers kept on the CPU
@@ -59,9 +60,9 @@ need_file() {
 }
 
 case "$PROFILE" in
-    gemma12) MODEL="$GEMMA12_MODEL"; MMPROJ="${GEMMA12_MMPROJ:-}"; ALIAS=gemma-4-12b ;;
-    gemma26) MODEL="$GEMMA26_MODEL"; MMPROJ="${GEMMA26_MMPROJ:-}"; ALIAS=gemma-4-26b-a4b ;;
-    qwenvl)  MODEL="$QWENVL_MODEL";  MMPROJ="${QWENVL_MMPROJ:-}";  ALIAS=vision; VISION=1 ;;
+    gemma12) MODEL="$GEMMA12_MODEL"; MMPROJ="${GEMMA12_MMPROJ:-}"; ALIAS=gemma-4-12b; PORT="$CHAT_PORT" ;;
+    gemma26) MODEL="$GEMMA26_MODEL"; MMPROJ="${GEMMA26_MMPROJ:-}"; ALIAS=gemma-4-26b-a4b; PORT="$CHAT_PORT" ;;
+    qwenvl)  MODEL="$QWENVL_MODEL";  MMPROJ="${QWENVL_MMPROJ:-}";  ALIAS=vision; PORT="$VISION_PORT"; VISION=1 ;;
     embed)
         need_file "$EMBED_MODEL"
         echo "[ia-k] embeddings on http://$HOST:$EMBED_PORT/v1  (alias embeddinggemma)"
@@ -93,9 +94,9 @@ fi
 [ "$KV_Q8" = "1" ] && ARGS+=(-ctk q8_0 -ctv q8_0)
 [ -n "$N_CPU_MOE" ] && ARGS+=(--n-cpu-moe "$N_CPU_MOE")
 
-echo "[ia-k] profile $PROFILE on http://$HOST:$CHAT_PORT/v1  (alias $ALIAS)"
+echo "[ia-k] profile $PROFILE on http://$HOST:$PORT/v1  (alias $ALIAS)"
 echo "       model  : $MODEL"
 [ "$VISION" != "0" ] && echo "       mmproj : $MMPROJ"
 echo "       ctx=$CTX ngl=$NGL kv_q8=$KV_Q8 n_cpu_moe=${N_CPU_MOE:-}"
-exec "$SERVER" "${ARGS[@]}" --alias "$ALIAS" --host "$HOST" --port "$CHAT_PORT" \
+exec "$SERVER" "${ARGS[@]}" --alias "$ALIAS" --host "$HOST" --port "$PORT" \
     -c "$CTX" -ngl "$NGL" -np 1 --jinja --no-mmap "${EXTRA[@]}"

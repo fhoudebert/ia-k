@@ -39,10 +39,16 @@ FILLER = (
 )
 
 
+API_KEY = ""
+
+
 def call(url: str, payload: dict | None = None, timeout: float = 900.0) -> dict:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["Authorization"] = f"Bearer {API_KEY}"
     req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"},
+        url, data=data, headers=headers,
         method="GET" if data is None else "POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
@@ -105,8 +111,13 @@ def main() -> int:
     ap.add_argument("--image", help="image file for the vision test")
     ap.add_argument("--embed-url", help="embedding server, e.g. http://127.0.0.1:8081")
     ap.add_argument("--max-tokens", type=int, default=200)
+    ap.add_argument("--api-key", default=os.environ.get("IAK_API_KEY", ""),
+                    help="for servers started with --api-key (or IAK_API_KEY)")
     args = ap.parse_args()
-    base = args.url.rstrip("/")
+    global API_KEY
+    API_KEY = args.api_key
+    # accept both http://host:port and http://host:port/v1
+    base = args.url.rstrip("/").removesuffix("/v1")
     failures = 0
 
     mem = gpu_memory()
@@ -121,6 +132,17 @@ def main() -> int:
         return 2
     model = (models.get("data") or [{}])[0].get("id", "")
     print(f"server {base}: health={health.get('status', health)} model={model}")
+    try:
+        props = call(f"{base}/props", timeout=10)
+        n_ctx = (props.get("default_generation_settings") or {}).get("n_ctx", "?")
+        vision = (props.get("modalities") or {}).get("vision", "?")
+        print(f"  context: {n_ctx} tokens   vision: {vision}")
+        if isinstance(n_ctx, int) and args.prefill + 200 > n_ctx:
+            print(f"  -> --prefill {args.prefill} exceeds the context, "
+                  f"lowered to {max(0, n_ctx - 600)}")
+            args.prefill = max(0, n_ctx - 600)
+    except (urllib.error.URLError, OSError, ValueError):
+        print("  (no /props: not a llama-server, or an old build)")
 
     try:
         resp, wall = chat(base, model,
@@ -168,7 +190,7 @@ def main() -> int:
             failures += 1
 
     if args.embed_url:
-        ebase = args.embed_url.rstrip("/")
+        ebase = args.embed_url.rstrip("/").removesuffix("/v1")
         texts = [
             "task: search result | query: achat de livres reliés",
             "title: none | text: " + FILLER,
