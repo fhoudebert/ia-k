@@ -21,10 +21,19 @@ set "ROOT=%~dp0"
 set "DEST=%ROOT%build\python\windows"
 set "PY=%DEST%\python.exe"
 
+rem A Python is only kept when the ".complete" marker of a finished install
+rem is there: an interrupted install (missing files) is redone.
 if /i "%~1"=="--force" if exist "%DEST%" rmdir /s /q "%DEST%"
-if exist "%PY%" goto have_python
+if exist "%DEST%\.complete" goto have_python
+if exist "%DEST%" (
+    echo [1/3] Incomplete Python found, installing again
+    rmdir /s /q "%DEST%"
+)
 
-set "TMPD=%TEMP%\iak-python-%RANDOM%"
+rem Download and extract on the key itself (not in %%TEMP%%, usually on C:),
+rem so that the final step is a rename on the same drive, not a copy.
+if not exist "%ROOT%build\python" mkdir "%ROOT%build\python"
+set "TMPD=%ROOT%build\python\tmp-%RANDOM%"
 mkdir "%TMPD%" || goto fail
 echo [1/3] Downloading Python %PY_VERSION%
 curl.exe -fL --retry 3 -o "%TMPD%\py.tar.gz" "%URL%" || goto fail_dl
@@ -35,10 +44,13 @@ if /i not "%GOT%"=="%SHA256%" (
     echo checksum mismatch, download refused
     goto fail_dl
 )
+echo        extracting...
 tar.exe -xzf "%TMPD%\py.tar.gz" -C "%TMPD%" || goto fail_dl
-if not exist "%ROOT%build\python" mkdir "%ROOT%build\python"
-move "%TMPD%\python" "%DEST%" >nul || xcopy /e /i /q /y "%TMPD%\python" "%DEST%" >nul || goto fail_dl
+move "%TMPD%\python" "%DEST%" >nul || goto fail_dl
 rmdir /s /q "%TMPD%" 2>nul
+rem the standard library and pip must be whole before going on
+"%PY%" -c "import encodings, sqlite3, ssl, pip._vendor.rich, pip._internal.cli.main" || goto fail_broken
+echo ok> "%DEST%\.complete"
 goto installed
 
 :have_python
@@ -62,6 +74,11 @@ echo Done. Run IA-K with: iak.bat --help
 endlocal
 exit /b 0
 
+:fail_broken
+echo The extracted Python is incomplete (files missing on the key?).
+echo An antivirus or a full key are the usual causes; run setup_python.bat again.
+if exist "%DEST%" rmdir /s /q "%DEST%"
+goto fail
 :fail_dl
 rmdir /s /q "%TMPD%" 2>nul
 :fail

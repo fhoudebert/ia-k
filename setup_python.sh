@@ -27,6 +27,12 @@ PY="$DEST/bin/python3.12"
 if [ "${1:-}" = "--force" ]; then
     rm -rf "$DEST"
 fi
+# A Python is kept only with the marker of a finished install: an
+# interrupted one (files missing) is installed again.
+if [ -d "$DEST" ] && [ ! -f "$DEST/.complete" ]; then
+    echo "[1/3] Incomplete Python found, installing again"
+    rm -rf "$DEST"
+fi
 
 if [ ! -x "$PY" ]; then
     command -v curl >/dev/null || { echo "curl is needed" >&2; exit 1; }
@@ -43,6 +49,9 @@ if [ ! -x "$PY" ]; then
     find "$TMP/python" -type l -delete
     mkdir -p "$DEST"
     cp -r "$TMP/python/." "$DEST/"
+    "$PY" -c "import encodings, sqlite3, ssl, pip._vendor.rich, pip._internal.cli.main" \
+        || { echo "the copied Python is incomplete (key full?); run again" >&2; rm -rf "$DEST"; exit 1; }
+    echo ok > "$DEST/.complete"
 else
     echo "[1/3] Python already present: $("$PY" --version)"
 fi

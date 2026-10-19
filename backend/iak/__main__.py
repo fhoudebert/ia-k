@@ -7,23 +7,31 @@
     python -m iak search "words"          hybrid search (keywords + meaning)
     python -m iak ask "question"          sourced answer from the chat server
     python -m iak embed [--rebuild]       compute missing passage vectors
+    python -m iak look UNIT_ID [--task T] read a page or image with the vision model
+                                          (describe, transcribe, error, extract,
+                                          or --ask "question")
+    python -m iak summarize ID            summary of a document, with page labels
+    python -m iak compare ID ID...        compare documents (from their summaries)
+    python -m iak analyses [ID]           stored analyses
     python -m iak edit UNIT_ID FILE       replace a page's text (OCR correction)
     python -m iak reindex ID [--extract]  rebuild passages, or extract again
     python -m iak delete ID               remove a document (database backed up)
 
 The library folder is --library, or IAK_LIBRARY, or ./data. Servers come
 from config/servers.toml (--host to pick a section) unless given with
---server (chat) and --embed-server.
+--server (chat), --embed-server and --vision-server. Answers are in --lang
+(IAK_LANG, default fr).
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
 from pathlib import Path
 
-from . import answer, embed, search, servers
+from . import analyze, answer, embed, search, servers
 from .library import Library
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--host", help="[host.NAME] section of config/servers.toml")
     ap.add_argument("--server", help="chat server URL")
     ap.add_argument("--embed-server", help="embedding server URL")
+    ap.add_argument("--vision-server", help="vision server URL (default: the chat "
+                    "server when it has vision)")
+    ap.add_argument("--lang", default=os.environ.get("IAK_LANG", "fr"),
+                    help="language of summaries and analyses (fr, en)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("import")
@@ -73,6 +85,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--mode", choices=["auto", "hybrid", "sem", "kw"], default="auto")
     p.add_argument("--budget", type=int, default=answer.DEFAULT_BUDGET_CHARS,
                    help="characters of passages sent to the model")
+    p = sub.add_parser("look")
+    p.add_argument("unit_id", type=int, help="unit (page) id, see the show command")
+    p.add_argument("--task", default="describe",
+                   choices=[*analyze.TASKS, "ask"])
+    p.add_argument("--ask", default="", help="free question about the page (task ask)")
+    p.add_argument("--no-ocr", action="store_true", help="do not give the OCR text")
+    p = sub.add_parser("summarize")
+    p.add_argument("id", type=int)
+    p.add_argument("--refresh", action="store_true", help="ignore a stored summary")
+    p = sub.add_parser("compare")
+    p.add_argument("ids", type=int, nargs="+")
+    p.add_argument("--question", default="", help="aspect to focus on")
+    p = sub.add_parser("analyses")
+    p.add_argument("id", type=int, nargs="?")
     p = sub.add_parser("edit")
     p.add_argument("unit_id", type=int)
     p.add_argument("file", type=Path, help="UTF-8 text file with the corrected text")
@@ -226,6 +252,51 @@ def main(argv: list[str] | None = None) -> int:
                 for s in res.sources:
                     _out(f"  [{s.ref}] {s.doc_name}, {s.label}")
             _out(f"\n({len(res.sent)} passages sent, {used} search, {dt:.1f} s)")
+            return 0
+
+        if args.cmd in ("look", "summarize", "compare"):
+            shown = []
+
+            def progress(i, n):
+                print(f"\r  part {i}/{n}", end="", flush=True)
+                shown.append(i)
+            try:
+                if args.cmd == "look":
+                    client = analyze.vision_client(host, host.api_key, args.vision_server,
+                                                   args.server)
+                    task = "ask" if args.ask else args.task
+                    res = analyze.look(lib, client, args.unit_id, task, args.ask,
+                                       args.lang, use_ocr=not args.no_ocr)
+                else:
+                    url = args.server or host.chat
+                    if not url:
+                        _out("no chat server configured (config/servers.toml or --server)")
+                        return 1
+                    client = servers.Client(url, host.api_key)
+                    if args.cmd == "summarize":
+                        res = analyze.summarize(lib, client, args.id, args.lang,
+                                                args.refresh, progress)
+                    else:
+                        res = analyze.compare(lib, client, args.ids, args.question,
+                                              args.lang, progress)
+            except (analyze.AnalysisError, servers.ServerError) as exc:
+                _out(f"\n{exc}")
+                return 1
+            if shown:
+                print()
+            _out(res.text)
+            took = f"{res.seconds:.1f} s" if res.seconds else "stored earlier"
+            _out(f"\n(analysis #{res.id}, {res.task}, {took})")
+            return 0
+
+        if args.cmd == "analyses":
+            for a in analyze.analyses(lib.con, args.id):
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(a["created_at"]))
+                where = (f"doc #{a['doc_id']}" if a["doc_id"] else
+                         "docs " + ",".join(f"#{d}" for d in json.loads(a["sources"])))
+                where += f" unit {a['unit_id']}" if a["unit_id"] else ""
+                _out(f"--- #{a['id']} {a['task']} {where} [{a['lang']}] {when}")
+                _out(a["text"])
             return 0
 
         if args.cmd == "edit":

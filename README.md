@@ -16,7 +16,8 @@ answers** (document, page, passage), using local language models only.
 > **Status: early work (branch `init`).** Available: the server configuration,
 > example server launchers, a speed test, a portable Python, and the backend
 > (import, extraction, OCR, hybrid keyword and semantic search, sourced
-> answers) driven from the command line. The Tauri interface comes next.
+> answers, image analysis, summaries, comparisons) driven from the command
+> line. The local API and the Tauri interface come next.
 
 ## Architecture
 
@@ -119,6 +120,40 @@ servers*), every passage also gets a vector, and searches combine both ways:
   numpy: 0.7 s to load 100,000 vectors once, then 14 ms per query. Embedding
   ran at 12 passages/s on a CPU-only test machine; the iGPU should do
   several times better.
+
+### Images, summaries, comparisons
+
+These use the chat server; images need vision (Gemma 4 started with its
+`mmproj`, or a dedicated vision server in `config/servers.toml`):
+
+```
+./iak.sh look 42 --task describe        # what the page or image shows
+./iak.sh look 42 --task transcribe      # read the text (alternative to OCR)
+./iak.sh look 42 --task error           # screenshot: quote the error, cause, fix
+./iak.sh look 42 --task extract         # names, dates, amounts, references
+./iak.sh look 42 --ask "Quel est le montant total ?"
+./iak.sh summarize 3                    # summary with [p. N] labels
+./iak.sh compare 3 7 --question "dates" # common points, differences, contradictions
+./iak.sh analyses 3                     # stored results
+```
+
+- `look` sends the page (PDF) or image rendered at up to 1,600 pixels, with
+  the page's OCR text as a reading aid (except for `transcribe`).
+- `summarize` works part by part (about 9,000 characters each) and merges
+  the partial summaries; the page or section labels are kept as citations.
+  A summary is stored and reused (`--refresh` to redo it), per language
+  (`--lang fr|en`, or `IAK_LANG`).
+- `compare` works from the documents' summaries (made first when missing);
+  documents are named D1, D2… in the result.
+- Document text inside prompts is wrapped in tags and declared as data, as
+  for answers. Results are stored with the task, language and model, and
+  deleted with their document.
+
+Checked with a real Gemma 4 (E2B, CPU-only test machine): `look --task
+error` on a Windows error screenshot quoted the message and code exactly and
+gave causes and steps (84 s on two CPU cores); `ask` answered with the right
+page cited, and refused a question the documents do not cover without
+calling the model.
 
 Tests: `cd backend && python -m pytest` (the OCR tests are skipped when
 Tesseract is missing).
@@ -261,7 +296,7 @@ licences (Gemma terms of use, Apache 2.0 for Qwen).
 2. Python backend: import, text extraction, OCR, storage, chunking, citations by page *(done, command line)*
 3. Full-text search and sourced answers *(done, command line)*
 4. Embeddings and hybrid search *(done, command line)*
-5. Document chat and image analysis
+5. Document chat and image analysis *(done, command line; local API next)*
 6. Tauri interface: library, viewer, search, chat, OCR correction
 7. Windows and Linux builds, portable layout, documentation
 8. Translation of documents (as in [truchement](https://github.com/fhoudebert/transcribe))

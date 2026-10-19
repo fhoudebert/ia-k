@@ -20,7 +20,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE documents (
@@ -95,6 +95,21 @@ CREATE TABLE vectors (
     passage_id  INTEGER PRIMARY KEY REFERENCES passages(id) ON DELETE CASCADE,
     vec         BLOB NOT NULL
 );
+
+-- schema 3: results of model analyses (image readings, summaries, comparisons)
+CREATE TABLE analyses (
+    id          INTEGER PRIMARY KEY,
+    doc_id      INTEGER REFERENCES documents(id) ON DELETE CASCADE,  -- NULL for comparisons
+    unit_id     INTEGER REFERENCES units(id) ON DELETE CASCADE,      -- NULL for whole documents
+    task        TEXT NOT NULL,           -- describe, transcribe, error, extract, ask, summary, compare
+    question    TEXT NOT NULL DEFAULT '',
+    lang        TEXT NOT NULL DEFAULT '',
+    model       TEXT NOT NULL DEFAULT '',
+    text        TEXT NOT NULL,
+    sources     TEXT NOT NULL DEFAULT '[]',  -- JSON: documents a comparison is about
+    created_at  REAL NOT NULL
+);
+CREATE INDEX analyses_doc ON analyses(doc_id);
 """
 
 # upgrades from each older schema version to the next
@@ -105,6 +120,22 @@ CREATE TABLE vectors (
     passage_id  INTEGER PRIMARY KEY REFERENCES passages(id) ON DELETE CASCADE,
     vec         BLOB NOT NULL
 );
+""",
+    2: """
+-- schema 3: results of model analyses (image readings, summaries, comparisons)
+CREATE TABLE analyses (
+    id          INTEGER PRIMARY KEY,
+    doc_id      INTEGER REFERENCES documents(id) ON DELETE CASCADE,  -- NULL for comparisons
+    unit_id     INTEGER REFERENCES units(id) ON DELETE CASCADE,      -- NULL for whole documents
+    task        TEXT NOT NULL,           -- describe, transcribe, error, extract, ask, summary, compare
+    question    TEXT NOT NULL DEFAULT '',
+    lang        TEXT NOT NULL DEFAULT '',
+    model       TEXT NOT NULL DEFAULT '',
+    text        TEXT NOT NULL,
+    sources     TEXT NOT NULL DEFAULT '[]',  -- JSON: documents a comparison is about
+    created_at  REAL NOT NULL
+);
+CREATE INDEX analyses_doc ON analyses(doc_id);
 """,
 }
 
