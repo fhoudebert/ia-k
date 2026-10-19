@@ -35,7 +35,19 @@ class FakeChat:
             def do_POST(self):
                 req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 outer.requests.append(req)
-                self._send({"choices": [{"message": {"content": outer.reply(req)}}]})
+                text = outer.reply(req)
+                if not req.get("stream"):
+                    self._send({"choices": [{"message": {"content": text}}]})
+                    return
+                # server-sent events, a few characters at a time, like llama-server
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                for i in range(0, len(text), 7):
+                    chunk = {"choices": [{"delta": {"content": text[i:i + 7]}}]}
+                    self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.close_connection = True
 
             def log_message(self, *a):
                 pass

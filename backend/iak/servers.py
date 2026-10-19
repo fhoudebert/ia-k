@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import tomllib
 import urllib.error
@@ -46,8 +47,68 @@ def load_host(config: str | Path, name: str | None = None) -> Host:
         name = next((k for k, v in hosts.items()
                      if me in [str(m).lower() for m in v.get("match", [])]), "default")
     h = hosts.get(name, {})
-    return Host(name, chat=h.get("chat"), embedding=h.get("embedding"),
-                vision=h.get("vision"), api_key=h.get("api_key", ""))
+    return Host(name, chat=h.get("chat") or None, embedding=h.get("embedding") or None,
+                vision=h.get("vision") or None, api_key=h.get("api_key", ""))
+
+
+HEADER = """# IA-K - where to find the llama.cpp servers on each computer.
+# Written by IA-K's settings screen; see config/servers.example.toml for the
+# format. A [host.*] section applies when `match` contains the computer name.
+"""
+
+
+def _toml_value(v) -> str:
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_value(x) for x in v) + "]"
+    s = str(v).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{s}"'
+
+
+def dump_hosts(hosts: dict) -> str:
+    out = [HEADER]
+    for name, h in hosts.items():
+        out.append(f"\n[host.{name}]")
+        for key in ("match", "chat", "embedding", "vision", "api_key"):
+            if h.get(key) not in (None, "", []):
+                out.append(f"{key} = {_toml_value(h[key])}")
+    return "\n".join(out) + "\n"
+
+
+def save_host(config: str | Path, chat: str | None, embedding: str | None,
+              vision: str | None, api_key: str | None = None,
+              name: str | None = None) -> Host:
+    """Write the servers of this computer into config (other computers'
+    sections are kept; the previous file is saved as .bak). api_key None
+    keeps the stored key, "" removes it."""
+    path = Path(config)
+    hosts: dict = {}
+    if path.exists():
+        with open(path, "rb") as fh:
+            hosts = tomllib.load(fh).get("host", {})
+    me = computer_name()
+    if not name:
+        name = next((k for k, v in hosts.items()
+                     if me.lower() in [str(m).lower() for m in v.get("match", [])]), None)
+    if not name:
+        name = re.sub(r"[^A-Za-z0-9_-]+", "-", me).strip("-").lower() or "this-computer"
+    section = dict(hosts.get(name, {}))
+    if name != "default":
+        match = list(section.get("match", []))
+        if me.lower() not in [m.lower() for m in match]:
+            match.append(me)
+        section["match"] = match
+    for key, value in (("chat", chat), ("embedding", embedding), ("vision", vision)):
+        section[key] = (value or "").strip()
+    if api_key is not None:
+        section["api_key"] = api_key
+    hosts[name] = section
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        path.with_suffix(path.suffix + ".bak").write_bytes(path.read_bytes())
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(dump_hosts(hosts), encoding="utf-8")
+    os.replace(tmp, path)
+    return load_host(path, name)
 
 
 def is_local(url: str) -> bool:
@@ -94,6 +155,41 @@ class Client:
     def model(self) -> str:
         data = self._call(self.v1 + "/models", timeout=10).get("data") or [{}]
         return data[0].get("id", "")
+
+    def chat_stream(self, messages: list[dict], max_tokens: int = 700,
+                    temperature: float = 0.2, thinking: bool = False):
+        """Yield the answer piece by piece (server-sent events)."""
+        payload = {"model": "", "messages": messages, "max_tokens": max_tokens,
+                   "temperature": temperature, "cache_prompt": True, "stream": True,
+                   "chat_template_kwargs": {"enable_thinking": thinking}}
+        headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        req = urllib.request.Request(self.v1 + "/chat/completions",
+                                     data=json.dumps(payload).encode("utf-8"),
+                                     headers=headers, method="POST")
+        try:
+            resp = urllib.request.urlopen(req, timeout=self.timeout)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace")[:300]
+            raise ServerError(f"chat: HTTP {exc.code} {body}") from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise ServerError(f"chat: unreachable ({exc})") from exc
+        with resp:
+            for raw in resp:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    return
+                try:
+                    choice = (json.loads(data).get("choices") or [{}])[0]
+                except ValueError:
+                    continue
+                piece = (choice.get("delta") or {}).get("content")
+                if piece:
+                    yield piece
 
     def chat(self, messages: list[dict], max_tokens: int = 700, temperature: float = 0.2,
              thinking: bool = False) -> str:

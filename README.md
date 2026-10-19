@@ -52,10 +52,16 @@ Screens, in French or English:
 - **Document**: pages or sections, the page image beside its text; the text
   can be corrected (OCR confidence shown); page analysis (describe,
   transcribe, explain an error, extract, free question) and the stored
-  analyses.
+  analyses. Opened from a search result or a citation, the passage is
+  highlighted on the page image (from the word boxes kept at extraction).
 - **Search**: hybrid, keyword or meaning search; each result opens its page.
-- **Questions**: answers with clickable citations `[S1]` and their sources;
-  a warning shows when the chat server is not on this computer.
+- **Questions**: the answer appears as it is written, then its citations
+  `[S1]` become clickable and the sources are listed; a warning shows when
+  the chat server is not on this computer.
+- **Settings**: the model servers of this computer (written to
+  `config/servers.toml`, in a section matched to the computer name; other
+  computers' sections are kept, the previous file saved as `.bak`), an API
+  key, the OCR languages (with those installed), and the library folder.
 
 ### Portable layout
 
@@ -70,7 +76,9 @@ ia-k/                      the folder from this repository
 ```
 
 It finds that folder from its own location (or `IAK_ROOT`); the library is
-`data/` unless `IAK_LIBRARY` says otherwise. An AppImage counts from where the
+`data/` unless another folder was chosen in the settings (`config/app.json`,
+stored relative to the IA-K folder when it is inside it, so that it follows
+the key) or `IAK_LIBRARY` says otherwise. An AppImage counts from where the
 `.AppImage` file is.
 
 ### Building
@@ -250,6 +258,9 @@ The desktop interface talks to the backend through a local HTTP API:
 | `PUT /api/units/<id>/text` `{"text": "..."}` | OCR correction, reindexed |
 | `GET /api/search?q=&mode=auto|hybrid|sem|kw&n=&doc=&kind=` | passages with citations |
 | `POST /api/ask` `{"question": "...", "doc_ids": [...]}` | sourced answer |
+| `POST /api/ask/stream` (same body) | the same as server-sent events: `sources`, `token`…, `done` (or `error`) |
+| `GET /api/passages/<id>/boxes` | rectangles of a passage's lines on its page, in page units |
+| `GET /api/settings`, `PUT /api/settings` `{"servers": {...}, "ocr_langs": "fra+eng"}` | servers of this computer, OCR languages |
 | `POST /api/look` `{"unit_id": 42, "task": "error"}` or `"question"` | job |
 | `POST /api/summarize` `{"doc_id": 3}`, `POST /api/compare` `{"doc_ids": [3, 7]}` | jobs |
 | `GET /api/analyses[?doc=3]`, `GET /api/jobs`, `GET /api/jobs/<id>` | stored results, jobs |
@@ -402,6 +413,6 @@ licences (Gemma terms of use, Apache 2.0 for Qwen).
 3. Full-text search and sourced answers *(done, command line)*
 4. Embeddings and hybrid search *(done, command line)*
 5. Document chat and image analysis *(done: command line and local API)*
-6. Tauri interface: library, viewer, search, chat, OCR correction *(first version)*
+6. Tauri interface: library, viewer, search, chat, OCR correction, settings *(first version)*
 7. Windows and Linux builds, portable layout, documentation
 8. Translation of documents (as in [truchement](https://github.com/fhoudebert/transcribe))

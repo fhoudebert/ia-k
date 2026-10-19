@@ -24,6 +24,7 @@
         <button data-view="search" data-i18n="nav.search"></button>
         <button data-view="ask" data-i18n="nav.ask"></button>
         <button data-view="viewer" data-i18n="nav.viewer" hidden id="tab-viewer"></button>
+        <button data-view="settings" data-i18n="nav.settings"></button>
       </nav>
       <div class="servers" id="servers"></div>
       <button class="link" id="lang-switch" data-i18n="lang.switch"></button>
@@ -98,6 +99,49 @@
       </form>
     </main>
 
+    <!-- settings -->
+    <main id="view-settings" class="view settings" hidden>
+      <section class="panel">
+        <h3 data-i18n="settings.servers"></h3>
+        <p class="muted" id="settings-computer"></p>
+        <form id="servers-form" class="form">
+          <label><span data-i18n="settings.chat"></span>
+            <input name="chat" placeholder="http://127.0.0.1:8080/v1" spellcheck="false"></label>
+          <label><span data-i18n="settings.embedding"></span>
+            <input name="embedding" placeholder="http://127.0.0.1:8081/v1" spellcheck="false"></label>
+          <label><span data-i18n="settings.vision"></span>
+            <input name="vision" placeholder="http://127.0.0.1:8082/v1" spellcheck="false"></label>
+          <label><span data-i18n="settings.api_key"></span>
+            <input name="api_key" type="password" autocomplete="off"></label>
+          <div class="row">
+            <button class="primary" data-i18n="settings.save_servers"></button>
+            <button type="button" class="link" id="api-key-clear" data-i18n="settings.api_key_clear" hidden></button>
+          </div>
+        </form>
+        <div id="servers-status" class="status-list"></div>
+      </section>
+      <section class="panel">
+        <h3 data-i18n="settings.ocr"></h3>
+        <form id="ocr-form" class="form">
+          <label><span data-i18n="settings.ocr_langs"></span>
+            <input name="ocr_langs" spellcheck="false"></label>
+          <p class="muted"><span data-i18n="settings.ocr_available"></span> <span id="ocr-available"></span></p>
+          <p class="muted" data-i18n="settings.ocr_note"></p>
+          <div class="row"><button class="primary" data-i18n="settings.save_ocr"></button></div>
+        </form>
+      </section>
+      <section class="panel">
+        <h3 data-i18n="settings.library"></h3>
+        <p id="settings-library"></p>
+        <p class="muted" data-i18n="settings.library_note"></p>
+        <div class="row">
+          <button id="library-choose" data-i18n="settings.library_choose"></button>
+          <button id="library-default" class="link" data-i18n="settings.library_default"></button>
+        </div>
+      </section>
+      <p class="muted" id="settings-about"></p>
+    </main>
+
     <!-- document viewer -->
     <main id="view-viewer" class="view viewer" hidden>
       <div class="viewer-head">
@@ -113,7 +157,10 @@
           <ul id="unit-list"></ul>
         </aside>
         <section class="page">
-          <img id="page-image" alt="">
+          <div class="page-wrap">
+            <img id="page-image" alt="">
+            <div id="page-marks" class="page-marks"></div>
+          </div>
           <p id="page-no-image" class="muted" data-i18n="viewer.no_image" hidden></p>
         </section>
         <section class="side">

@@ -101,3 +101,19 @@ def ask(question: str, hits: list[Hit], client, budget_chars: int = DEFAULT_BUDG
         return Answer("", "no_answer", [], [])
     raw = client.chat(build_messages(question, sent), max_tokens=max_tokens)
     return check(raw, sent)
+
+
+def ask_stream(question: str, hits: list[Hit], client, budget_chars: int = DEFAULT_BUDGET_CHARS,
+               max_passages: int = 8, max_tokens: int = 700):
+    """Like ask(), as events for a live display: ("sources", sent passages),
+    then ("token", text) pieces, then ("done", Answer) with checked citations."""
+    sent = select(hits, budget_chars, max_passages)
+    if not sent:
+        yield "done", Answer("", "no_answer", [], [])
+        return
+    yield "sources", sent
+    parts = []
+    for piece in client.chat_stream(build_messages(question, sent), max_tokens=max_tokens):
+        parts.append(piece)
+        yield "token", piece
+    yield "done", check("".join(parts), sent)

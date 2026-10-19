@@ -127,13 +127,14 @@ const kindLabel = (k) => ({ pdf: "PDF", image: "Image", docx: "DOCX", txt: "TXT"
 
 function show(view) {
   state.view = view;
-  for (const name of ["library", "search", "ask", "viewer"]) {
+  for (const name of ["library", "search", "ask", "viewer", "settings"]) {
     $(`#view-${name}`).hidden = name !== view;
   }
   document.querySelectorAll(".tabs button").forEach((b) =>
     b.classList.toggle("active", b.dataset.view === view));
   if (view === "search") $("#search-input").focus();
   if (view === "ask") $("#ask-input").focus();
+  if (view === "settings") loadSettings().catch(fail);
 }
 
 // ------------------------------------------------------------------ jobs
@@ -313,7 +314,7 @@ async function compareSelected() {
 
 // ------------------------------------------------------------------ viewer
 
-async function openDoc(docId, unitId = null) {
+async function openDoc(docId, unitId = null, passageId = null) {
   try {
     const [doc, units] = await Promise.all([get(`/api/documents/${docId}`),
                                             get(`/api/documents/${docId}/units`)]);
@@ -328,12 +329,12 @@ async function openDoc(docId, unitId = null) {
     const hasPages = doc.kind === "pdf" || doc.kind === "image";
     $("#analyse-box").hidden = !hasPages;
     show("viewer");
-    await selectUnit(unitId || (units[0] && units[0].id));
+    await selectUnit(unitId || (units[0] && units[0].id), passageId);
     await loadAnalyses();
   } catch (e) { fail(e); }
 }
 
-async function selectUnit(unitId) {
+async function selectUnit(unitId, passageId = null) {
   const u = state.units.find((x) => x.id === unitId);
   if (!u) return;
   state.unit = u;
@@ -350,6 +351,7 @@ async function selectUnit(unitId) {
   if (u.edited) badges.push(el("span", { class: "badge" }, t("viewer.edited")));
   $("#unit-badges").replaceChildren(...badges);
   const img = $("#page-image");
+  $("#page-marks").replaceChildren();
   if (state.imageUrl) { URL.revokeObjectURL(state.imageUrl); state.imageUrl = null; }
   const hasPages = state.doc.kind === "pdf" || state.doc.kind === "image";
   $("#page-no-image").hidden = hasPages;
@@ -360,6 +362,24 @@ async function selectUnit(unitId) {
       state.imageUrl = await blobUrl(`/api/units/${unitId}/image?max=1400`);
       if (state.unit && state.unit.id === unitId) img.src = state.imageUrl;
     } catch (e) { fail(e); }
+    if (passageId) markPassage(passageId, unitId).catch(() => {});
+  }
+}
+
+/** Yellow rectangles over the lines of a passage on the page image. */
+async function markPassage(passageId, unitId) {
+  const box = await get(`/api/passages/${passageId}/boxes`);
+  if (!state.unit || state.unit.id !== unitId || box.unit_id !== unitId || !box.width) return;
+  const marks = box.rects.map(([x0, y0, x1, y1]) => el("div", {
+    style: `left:${(x0 / box.width) * 100}%;top:${(y0 / box.height) * 100}%;` +
+           `width:${((x1 - x0) / box.width) * 100}%;height:${((y1 - y0) / box.height) * 100}%`,
+  }));
+  $("#page-marks").replaceChildren(...marks);
+  if (marks.length) {
+    // bring the first line into view once the image has its size
+    const img = $("#page-image");
+    const scroll = () => marks[0].scrollIntoView({ block: "center", behavior: "smooth" });
+    if (img.complete) scroll(); else img.addEventListener("load", scroll, { once: true });
   }
 }
 
@@ -435,7 +455,7 @@ async function runSearch(ev) {
     $("#search-count").textContent = res.hits.length
       ? t("search.count", { n: res.hits.length, mode: modeName }) : t("search.none");
     $("#search-results").replaceChildren(...res.hits.map((h) => el("li", {
-      onclick: () => openDoc(h.doc_id, h.unit_id) },
+      onclick: () => openDoc(h.doc_id, h.unit_id, h.passage_id) },
       el("div", { class: "cite-head" },
         el("span", { class: "doc" }, h.doc_name), el("span", {}, h.label),
         el("span", { class: "badge" }, t(`via.${h.via}`))),
@@ -454,16 +474,63 @@ async function runAsk(ev) {
   const chat = $("#chat");
   $("#chat-empty").hidden = true;
   chat.append(el("div", { class: "msg user" }, question));
-  const pending = el("div", { class: "msg bot thinking" }, t("ask.thinking"));
-  chat.append(pending);
-  pending.scrollIntoView({ block: "end" });
+  const live = el("div", { class: "msg bot thinking" }, t("ask.thinking"));
+  chat.append(live);
+  live.scrollIntoView({ block: "end" });
+  let text = "";
+  let frame = 0;
+  const paint = () => {
+    frame = 0;
+    live.className = "msg bot streaming";
+    live.replaceChildren(markdown(text));
+    live.scrollIntoView({ block: "end" });
+  };
   try {
-    const res = await post("/api/ask", { question });
-    pending.replaceWith(answerMessage(res));
+    await streamAsk(question, {
+      sources: (d) => { live.textContent = t("ask.found", { n: d.sent.length }); },
+      token: (d) => { text += d.text; if (!frame) frame = requestAnimationFrame(paint); },
+      done: (d) => { if (frame) cancelAnimationFrame(frame); live.replaceWith(answerMessage(d)); },
+      error: (d) => { throw new Error(d.error); },
+    });
   } catch (e) {
-    pending.replaceWith(el("div", { class: "msg bot" }, t("error.generic", { msg: e.message })));
+    if (live.isConnected) live.replaceWith(el("div", { class: "msg bot" }, t("error.generic", { msg: e.message })));
   }
   chat.lastElementChild.scrollIntoView({ block: "end" });
+}
+
+/** POST /api/ask/stream and dispatch its server-sent events. */
+async function streamAsk(question, handlers) {
+  const r = await fetch(`${backend.url}/api/ask/stream`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${backend.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  });
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`;
+    try { msg = (await r.json()).error || msg; } catch (_) { /* not JSON */ }
+    throw new Error(msg);
+  }
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finished = false;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (value) buffer += decoder.decode(value, { stream: true });
+    let cut;
+    while ((cut = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      const event = (block.match(/^event: (.*)$/m) || [])[1];
+      const data = (block.match(/^data: (.*)$/m) || [])[1];
+      if (event && data && handlers[event]) {
+        handlers[event](JSON.parse(data));
+        if (event === "done") finished = true;
+      }
+    }
+    if (done) break;
+  }
+  if (!finished) throw new Error("the answer was interrupted");
 }
 
 function answerMessage(res) {
@@ -478,14 +545,14 @@ function answerMessage(res) {
       const s = byRef[b.dataset.ref];
       if (s) {
         b.title = `${s.doc_name}, ${s.label}`;
-        b.addEventListener("click", () => openDoc(s.doc_id, s.unit_id));
+        b.addEventListener("click", () => openDoc(s.doc_id, s.unit_id, s.passage_id));
       }
     });
     msg.append(body);
     if (res.sources.length) {
       msg.append(el("h4", {}, t("ask.sources")));
       msg.append(el("ul", { class: "sources" }, res.sources.map((s) => el("li", {
-        onclick: () => openDoc(s.doc_id, s.unit_id), title: s.text },
+        onclick: () => openDoc(s.doc_id, s.unit_id, s.passage_id), title: s.text },
         el("button", { class: "cite" }, s.ref), " ",
         el("span", { class: "doc" }, s.doc_name), `, ${s.label}`))));
     }
@@ -494,6 +561,87 @@ function answerMessage(res) {
   msg.append(el("div", { class: "meta" },
     t("ask.meta", { n: res.sent.length, mode: modeName, s: res.seconds })));
   return msg;
+}
+
+// ------------------------------------------------------------------ settings
+
+async function loadSettings() {
+  const cfg = await get("/api/settings");
+  state.settings = cfg;
+  $("#settings-computer").textContent = t("settings.computer", {
+    name: cfg.computer, section: cfg.host.name, file: cfg.config || "—" });
+  const f = $("#servers-form");
+  f.chat.value = cfg.host.chat;
+  f.embedding.value = cfg.host.embedding;
+  f.vision.value = cfg.host.vision;
+  f.api_key.value = "";
+  f.api_key.placeholder = cfg.host.api_key_set ? t("settings.api_key_set") : "";
+  $("#api-key-clear").hidden = !cfg.host.api_key_set;
+  const o = $("#ocr-form");
+  o.ocr_langs.value = cfg.ocr.langs;
+  const avail = $("#ocr-available");
+  if (cfg.ocr.available.length) {
+    avail.replaceChildren(...cfg.ocr.available.filter((l) => l !== "osd").map((l) =>
+      el("button", { type: "button", class: "chip", onclick: () => {
+        const cur = o.ocr_langs.value.split("+").filter(Boolean);
+        if (!cur.includes(l)) o.ocr_langs.value = [...cur, l].join("+");
+      } }, l)));
+  } else {
+    avail.textContent = t("settings.ocr_missing", { detail: cfg.ocr.tesseract });
+  }
+  $("#settings-library").textContent = t("settings.library_now", { path: cfg.library });
+  $("#library-choose").hidden = !TAURI;
+  $("#library-default").hidden = !TAURI;
+  $("#settings-about").textContent = t("settings.about", {
+    version: backend.version || "", log: backend.log || "—" });
+  renderServerStatus();
+}
+
+function renderServerStatus() {
+  $("#servers-status").replaceChildren(...[...$("#servers").children].map((p) => p.cloneNode(true)));
+}
+
+async function saveServers(ev, clearKey = false) {
+  if (ev) ev.preventDefault();
+  const f = $("#servers-form");
+  const servers = { chat: f.chat.value.trim(), embedding: f.embedding.value.trim(),
+                    vision: f.vision.value.trim() };
+  if (clearKey) servers.api_key = "";
+  else if (f.api_key.value) servers.api_key = f.api_key.value;
+  try {
+    await request("PUT", "/api/settings", { servers });
+    toast(t("settings.saved"));
+    await loadServers();
+    await loadSettings();
+  } catch (e) { fail(e); }
+}
+
+async function saveOcr(ev) {
+  ev.preventDefault();
+  try {
+    await request("PUT", "/api/settings", { ocr_langs: $("#ocr-form").ocr_langs.value.trim() });
+    toast(t("settings.saved"));
+    await loadSettings();
+  } catch (e) { fail(e); }
+}
+
+async function chooseLibrary(useDefault) {
+  let library = null;
+  if (!useDefault) {
+    library = await TAURI.dialog.open({ directory: true, multiple: false });
+    if (!library) return;
+  }
+  try {
+    await TAURI.core.invoke("set_library", { library, lang: getLang() });
+  } catch (e) { fail(e); return; }
+  // the engine restarts on the new folder: reconnect from scratch
+  state.doc = null;
+  state.selected.clear();
+  $("#tab-viewer").hidden = true;
+  $("#app").hidden = true;
+  $("#boot").hidden = false;
+  await boot();
+  show("settings");
 }
 
 // ------------------------------------------------------------------ servers
@@ -512,6 +660,7 @@ async function loadServers() {
     }
     $("#servers").replaceChildren(...pills);
     $("#remote-warning").hidden = !(info.chat && info.chat.url && info.chat.local === false);
+    if (state.view === "settings") renderServerStatus();
   } catch (_) { /* shown at next refresh */ }
   clearTimeout(loadServers.timer);
   loadServers.timer = setTimeout(loadServers, 30000);
@@ -548,6 +697,8 @@ async function boot() {
   $("#boot-detail").textContent = "";
   try {
     backend = await connect();
+    state.jobs = [];
+    state.waiters.clear();
   } catch (e) {
     $("#boot-message").textContent = t("app.error");
     $("#boot-message").className = "error";
@@ -572,6 +723,7 @@ function wire() {
     renderJobs();
     loadServers();
     if (state.doc) { loadAnalyses().catch(fail); if (state.unit) selectUnit(state.unit.id); }
+    if (state.view === "settings") loadSettings().catch(fail);
   });
   $("#boot-retry").addEventListener("click", async () => {
     await TAURI.core.invoke("restart_backend", { lang: getLang() });
@@ -587,6 +739,11 @@ function wire() {
   $("#viewer-reextract").addEventListener("click", reextract);
   $("#unit-save").addEventListener("click", saveUnit);
   $("#look-run").addEventListener("click", runLook);
+  $("#servers-form").addEventListener("submit", saveServers);
+  $("#api-key-clear").addEventListener("click", () => saveServers(null, true));
+  $("#ocr-form").addEventListener("submit", saveOcr);
+  $("#library-choose").addEventListener("click", () => chooseLibrary(false));
+  $("#library-default").addEventListener("click", () => chooseLibrary(true));
   $("#look-task").addEventListener("change", () => {
     $("#look-question").hidden = $("#look-task").value !== "ask";
   });

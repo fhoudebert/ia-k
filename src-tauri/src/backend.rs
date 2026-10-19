@@ -60,6 +60,52 @@ pub fn find_root() -> Option<PathBuf> {
     std::env::current_dir().ok().filter(|p| is_root(p))
 }
 
+/// Library folder chosen in the settings (config/app.json, "library"):
+/// absolute, or relative to the IA-K folder so that it follows the key.
+fn configured_library(root: &Path) -> Option<PathBuf> {
+    let text = fs::read_to_string(root.join("config").join("app.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let lib = value.get("library")?.as_str()?.trim();
+    if lib.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(lib);
+    Some(if p.is_absolute() { p } else { root.join(p) })
+}
+
+/// Save the library folder in config/app.json (None: back to data/). A path
+/// inside the IA-K folder is stored relative to it.
+pub fn save_library(library: Option<&str>) -> Result<(), String> {
+    let root = find_root().ok_or("IA-K folder not found")?;
+    let path = root.join("config").join("app.json");
+    let mut value: serde_json::Value = fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    match library.map(str::trim).filter(|l| !l.is_empty()) {
+        Some(l) => {
+            let p = PathBuf::from(l);
+            if !p.is_absolute() {
+                return Err(format!("not an absolute path: {l}"));
+            }
+            fs::create_dir_all(&p).map_err(|e| format!("cannot create {l}: {e}"))?;
+            let stored = p
+                .strip_prefix(&root)
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| p.to_string_lossy().into_owned());
+            value["library"] = serde_json::Value::String(stored);
+        }
+        None => {
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("library");
+            }
+        }
+    }
+    fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    fs::write(&path, text + "\n").map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
 /// Portable Python of the key, else a Python of the computer (development).
 fn find_python(root: &Path) -> PathBuf {
     let portable = if cfg!(windows) {
@@ -93,7 +139,9 @@ impl Backend {
         };
         let library = std::env::var("IAK_LIBRARY")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| root.join("data"));
+            .ok()
+            .or_else(|| configured_library(&root))
+            .unwrap_or_else(|| root.join("data"));
         if let Err(e) = fs::create_dir_all(&library) {
             fail(format!("cannot create the library folder {}: {e}", library.display()));
             return;
@@ -218,5 +266,41 @@ impl Backend {
         if i.status == "ready" || i.status == "starting" {
             i.status = "stopped".into();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_setting_round_trip() {
+        let root = std::env::temp_dir().join(format!("iak-root-{}", std::process::id()));
+        fs::create_dir_all(root.join("backend").join("iak")).unwrap();
+        fs::write(root.join("backend").join("iak").join("__main__.py"), "").unwrap();
+        std::env::set_var("IAK_ROOT", &root);
+        assert_eq!(find_root().unwrap(), root);
+        assert_eq!(configured_library(&root), None);
+
+        // inside the IA-K folder: stored relative, so it follows the key
+        let inside = root.join("bibliotheque");
+        save_library(Some(inside.to_str().unwrap())).unwrap();
+        let text = fs::read_to_string(root.join("config").join("app.json")).unwrap();
+        assert!(text.contains("\"library\": \"bibliotheque\""), "{text}");
+        assert_eq!(configured_library(&root).unwrap(), inside);
+        assert!(inside.is_dir());
+
+        // elsewhere: stored absolute
+        let outside = std::env::temp_dir().join(format!("iak-lib-{}", std::process::id()));
+        save_library(Some(outside.to_str().unwrap())).unwrap();
+        assert_eq!(configured_library(&root).unwrap(), outside);
+
+        // relative input refused; None goes back to data/
+        assert!(save_library(Some("relative/path")).is_err());
+        save_library(None).unwrap();
+        assert_eq!(configured_library(&root), None);
+
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&outside);
     }
 }

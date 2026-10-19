@@ -232,3 +232,40 @@ class Library:
         if mode == "sem":
             return search.semantic(self.con, self.vectors, qvec, limit, filters), "sem"
         return search.hybrid(self.con, query, self.vectors, qvec, limit, filters), "hybrid"
+
+    # ------------------------------------------------------------- highlights
+
+    def passage_boxes(self, passage_id: int) -> dict:
+        """Where a passage is on its page: the word boxes of the unit that fall
+        inside the passage, merged into one rectangle per line. Words are
+        matched in order against the unit text; words the user corrected
+        away are simply not highlighted."""
+        p = self.con.execute("SELECT unit_id, start, end FROM passages WHERE id=?",
+                             (passage_id,)).fetchone()
+        if p is None:
+            raise KeyError(f"no passage {passage_id}")
+        u = self.con.execute("SELECT text, boxes, width, height FROM units WHERE id=?",
+                             (p["unit_id"],)).fetchone()
+        out = {"unit_id": p["unit_id"], "width": u["width"], "height": u["height"],
+               "rects": []}
+        if not u["boxes"]:
+            return out
+        text, cursor, words = u["text"], 0, []
+        for b in json.loads(u["boxes"]):
+            w = str(b[4])
+            i = text.find(w, cursor)
+            if i < 0 or i - cursor > 300:      # not found nearby: skip this word
+                continue
+            cursor = i + len(w)
+            if cursor > p["start"] and i < p["end"]:
+                words.append(b[:4])
+        lines: list[list[float]] = []
+        for x0, y0, x1, y1 in words:
+            last = lines[-1] if lines else None
+            if last and abs(y0 - last[1]) < (y1 - y0) / 2 and x0 >= last[0] - 2:
+                last[2], last[3] = max(last[2], x1), max(last[3], y1)
+                last[1] = min(last[1], y0)
+            else:
+                lines.append([x0, y0, x1, y1])
+        out["rects"] = [[round(v, 1) for v in r] for r in lines]
+        return out

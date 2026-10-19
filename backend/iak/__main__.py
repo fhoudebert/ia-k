@@ -129,7 +129,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "serve":
         from . import api
         app = api.App(args.library, host, args.lang, args.ocr_langs, args.tesseract,
-                      token=args.token, origins=set(args.allow_origin))
+                      token=args.token, origins=set(args.allow_origin),
+                      config=ROOT / "config" / "servers.toml")
         api.serve(app, args.port, watch_stdin=args.watch_stdin)
         return 0
 

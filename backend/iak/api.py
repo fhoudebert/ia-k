@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, analyze, answer, db, embed, search, servers
+from . import __version__, analyze, answer, db, embed, ocr, search, servers
 from .library import Library
 
 TAURI_ORIGINS = {"tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"}
@@ -67,14 +67,19 @@ class Job:
 class App:
     def __init__(self, library: str | Path, host: servers.Host, lang: str = "fr",
                  ocr_langs: str = "fra+eng", tesseract: str | None = None,
-                 token: str | None = None, origins: set[str] | None = None):
+                 token: str | None = None, origins: set[str] | None = None,
+                 config: str | Path | None = None):
         self.folder = Path(library)
         self.host = host
+        self.config = Path(config) if config else None    # servers.toml written by settings
         self.lang = lang
         self.ocr_langs, self.tesseract = ocr_langs, tesseract
         self.token = token or secrets.token_urlsafe(24)
         self.origins = TAURI_ORIGINS | (origins or set())
-        Library(self.folder).close()                         # create or upgrade
+        with Library(self.folder) as lib:                    # create or upgrade
+            # preferences saved by the settings screen win over the defaults
+            self.ocr_langs = db.get_setting(lib.con, "ocr_langs") or self.ocr_langs
+            self.lang = db.get_setting(lib.con, "lang") or self.lang
         self.vectors = embed.VectorIndex(db.connect(self.folder / "iak.sqlite", shared=True))
         self.jobs: dict[int, Job] = {}
         self._ids = itertools.count(1)
@@ -556,6 +561,120 @@ class Handler(BaseHTTPRequestHandler):
         self.app.embedder(required=True)
         job = self.app.submit("embed", {"rebuild": bool(body.get("rebuild"))})
         self._json(202, {"job": job.id})
+
+    # -------------------------------------------------- settings
+    @route("GET", "/api/settings")
+    def settings(self, query):
+        try:
+            tesseract = ocr.find_tesseract(self.app.tesseract)
+            available = ocr.available_langs(tesseract)
+        except Exception as exc:  # Tesseract missing: say so, settings still work
+            available, tesseract = [], f"not found ({exc})"
+        h = self.app.host
+        self._json(200, {
+            "computer": servers.computer_name(),
+            "host": {"name": h.name, "chat": h.chat or "", "embedding": h.embedding or "",
+                     "vision": h.vision or "", "api_key_set": bool(h.api_key)},
+            "config": str(self.app.config) if self.app.config else None,
+            "lang": self.app.lang,
+            "ocr": {"langs": self.app.ocr_langs, "available": available,
+                    "tesseract": tesseract},
+            "library": str(self.app.folder)})
+
+    @route("PUT", "/api/settings")
+    def save_settings(self, query):
+        body = self._body()
+        url_ok = lambda u: not u or re.match(r"^https?://[^\s/]+(/\S*)?$", u)
+        if "servers" in body:
+            srv = body["servers"] or {}
+            urls = {k: (srv.get(k) or "").strip() for k in ("chat", "embedding", "vision")}
+            bad = [k for k, u in urls.items() if not url_ok(u)]
+            if bad:
+                raise ApiError(400, f"not an http(s) URL: {', '.join(bad)}")
+            if self.app.config is None:
+                raise ApiError(409, "no configuration file for the servers")
+            key = srv.get("api_key")          # None keeps the stored key
+            self.app.host = servers.save_host(self.app.config, urls["chat"],
+                                              urls["embedding"], urls["vision"], key)
+            self.app._embedder = None
+        with self.app.library() as lib:
+            if "ocr_langs" in body:
+                langs = str(body["ocr_langs"]).strip()
+                if not re.match(r"^[A-Za-z_]+(\+[A-Za-z_]+)*$", langs):
+                    raise ApiError(400, "OCR languages look like fra+eng")
+                db.set_setting(lib.con, "ocr_langs", langs)
+                self.app.ocr_langs = langs
+            if "lang" in body:
+                if body["lang"] not in ("fr", "en"):
+                    raise ApiError(400, "lang is fr or en")
+                db.set_setting(lib.con, "lang", body["lang"])
+                self.app.lang = body["lang"]
+        return self.settings(query)
+
+    # -------------------------------------------------- highlights
+    @route("GET", r"/api/passages/(\d+)/boxes")
+    def passage_boxes(self, passage_id, query):
+        with self.app.library() as lib:
+            try:
+                self._json(200, lib.passage_boxes(int(passage_id)))
+            except KeyError:
+                raise ApiError(404, "no such passage")
+
+    # -------------------------------------------------- streamed answers
+    @route("POST", "/api/ask/stream")
+    def ask_stream(self, query):
+        """Server-sent events: sources, token..., done (or error)."""
+        body = self._body()
+        question = body.get("question", "")
+        if not isinstance(question, str) or not question.strip():
+            raise ApiError(400, "question is required")
+        mode = body.get("mode", "auto")
+        filters = search.Filters(doc_ids=body.get("doc_ids"), kinds=body.get("kinds"))
+        t0 = time.perf_counter()
+        with self.app.library() as lib:
+            emb = self.app.embedder(required=mode in ("sem", "hybrid"))
+            hits, used = lib.find(question, 20, filters, emb, mode)
+        chat = self.app.chat()
+        # headers now: errors after this point are sent as an "error" event
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        origin = self._origin_ok()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        self.end_headers()
+        self.close_connection = True
+
+        def emit(event: str, data) -> None:
+            payload = json.dumps(data, ensure_ascii=False, default=str)
+            self.wfile.write(f"event: {event}\ndata: {payload}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+        src = lambda s: {"ref": s.ref, "passage_id": s.passage_id, "doc_id": s.doc_id,
+                         "unit_id": s.unit_id, "doc_name": s.doc_name, "label": s.label,
+                         "text": s.text}
+        try:
+            for kind, value in answer.ask_stream(
+                    question, hits, chat, int(body.get("budget", answer.DEFAULT_BUDGET_CHARS))):
+                if kind == "sources":
+                    emit("sources", {"search": used, "sent": [src(x) for x in value],
+                                     "remote": not servers.is_local(self.app.host.chat)})
+                elif kind == "token":
+                    emit("token", {"text": value})
+                else:
+                    emit("done", {"status": value.status, "text": value.text, "search": used,
+                                  "sources": [src(x) for x in value.sources],
+                                  "sent": [src(x) for x in value.sent],
+                                  "seconds": round(time.perf_counter() - t0, 1)})
+        except (BrokenPipeError, ConnectionResetError):
+            pass                                  # the interface went away
+        except Exception as exc:  # report in the stream
+            try:
+                emit("error", {"error": str(exc)})
+            except OSError:
+                pass
 
     # -------------------------------------------------- jobs
     @route("GET", "/api/jobs")
