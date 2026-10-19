@@ -17,3 +17,5 @@ venv*/
 # models never go into the repository
 *.gguf
 config/servers.toml
+# server logs
+*.log
