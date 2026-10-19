@@ -8,11 +8,12 @@ rem set "LLAMA_DIR=D:\ia\llama.cpp"
 rem set "CHAT_PORT=8080"
 rem set "EMBED_PORT=8081"
 
-rem --- memory tuning (see README, "Memory test") ---
+rem --- memory tuning (see README, "Testing a server") ---
 rem set "CTX=8192"
 rem set "KV_Q8=1"
 rem set "VISION=0"
 rem set "N_CPU_MOE=8"
+rem set "UBATCH=1024"
 
 rem --- explicit paths, when the default layout under MODELS_DIR does not fit ---
 rem set "GEMMA26_MODEL=E:\models\gemma-4-26B-A4B-it-QAT-Q4_0.gguf"

@@ -93,6 +93,11 @@ prompt (the wait before an answer starts), generation speed, an image
 answer, embedding similarity and, on Linux, the iGPU memory in use.
 `--api-key` (or `IAK_API_KEY`) is passed as a bearer token.
 
+Gemma 4 can reason before answering ("thinking"); the reasoning is returned
+apart from the answer and costs generation time. The test turns it off for
+each request (`chat_template_kwargs`), as IA-K will do by default; add
+`--thinking` to measure it.
+
 ## Licences
 
 IA-K's own code is under the MIT licence. PyMuPDF is AGPL-3.0: a packaged

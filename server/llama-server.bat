@@ -37,6 +37,9 @@ rem 1 = quantize the KV cache to q8_0 (about half the cache memory)
 set "KV_Q8=0"
 rem 0 = do not load the vision projector (saves ~1 GB, text chat only)
 set "VISION=1"
+rem micro-batch for prompt processing (empty = llama.cpp default 512);
+rem try 1024 or 2048: may speed up long prompts on the iGPU
+set "UBATCH="
 
 if exist "%HERE%local.bat" call "%HERE%local.bat"
 
@@ -115,16 +118,18 @@ set MMOPT=--mmproj "%MMPROJ%"
 :no_vision
 set "KVOPT="
 if "%KV_Q8%"=="1" set "KVOPT=-ctk q8_0 -ctv q8_0"
+set "UBOPT="
+if defined UBATCH set "UBOPT=-ub %UBATCH% -b %UBATCH%"
 set "MOEOPT="
 if defined N_CPU_MOE set "MOEOPT=--n-cpu-moe %N_CPU_MOE%"
 
 echo [ia-k] profile %PROFILE% on http://%HOST%:%PORT%/v1  (alias %ALIAS%)
 echo        model  : %MODEL%
 if defined MMOPT echo        mmproj : %MMPROJ%
-echo        ctx=%CTX% ngl=%NGL% kv_q8=%KV_Q8% n_cpu_moe=%N_CPU_MOE%
+echo        ctx=%CTX% ngl=%NGL% kv_q8=%KV_Q8% n_cpu_moe=%N_CPU_MOE% ubatch=%UBATCH%
 echo.
 "%SERVER%" -m "%MODEL%" %MMOPT% --alias %ALIAS% --host %HOST% --port %PORT% ^
-    -c %CTX% -ngl %NGL% -np 1 --jinja --no-mmap %KVOPT% %MOEOPT% %EXTRA%
+    -c %CTX% -ngl %NGL% -np 1 --jinja %UBOPT% %KVOPT% %MOEOPT% %EXTRA%
 exit /b %ERRORLEVEL%
 
 rem ---------------------------------------------------------------------------
@@ -137,7 +142,7 @@ echo.
 rem 4 slots of 2048 tokens (the model's maximum input); a request may batch
 rem many passages at once.
 "%SERVER%" -m "%MODEL%" --alias embeddinggemma --embeddings --host %HOST% --port %EMBED_PORT% ^
-    -c 8192 -np 4 -b 2048 -ub 2048 -ngl %NGL% --no-mmap %EXTRA%
+    -c 8192 -np 4 -b 2048 -ub 2048 -ngl %NGL% %EXTRA%
 exit /b %ERRORLEVEL%
 
 rem ---------------------------------------------------------------------------

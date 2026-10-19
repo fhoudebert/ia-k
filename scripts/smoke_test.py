@@ -75,7 +75,9 @@ def gpu_memory() -> str:
 
 def show_timings(label: str, resp: dict, wall: float) -> None:
     t = resp.get("timings") or {}
-    text = (resp.get("choices") or [{}])[0].get("message", {}).get("content", "")
+    msg = (resp.get("choices") or [{}])[0].get("message") or {}
+    text = msg.get("content") or ""
+    thought = msg.get("reasoning_content") or ""
     print(f"\n== {label} ==")
     if t:
         print(f"  prompt : {t.get('prompt_n', '?'):>6} tokens  "
@@ -84,7 +86,14 @@ def show_timings(label: str, resp: dict, wall: float) -> None:
         print(f"  answer : {t.get('predicted_n', '?'):>6} tokens  "
               f"{t.get('predicted_per_second', 0):8.1f} tok/s")
     print(f"  wall   : {wall:.1f} s")
-    print("  reply  : " + " ".join(text.split())[:300])
+    if thought:
+        print(f"  thought: {len(thought)} characters of reasoning "
+              "(spent before the answer)")
+    print("  reply  : " + (" ".join(text.split())[:300] or
+                           f"(empty; message fields: {sorted(msg)})"))
+
+
+THINKING = False
 
 
 def chat(base: str, model: str, content, max_tokens: int) -> tuple[dict, float]:
@@ -94,6 +103,10 @@ def chat(base: str, model: str, content, max_tokens: int) -> tuple[dict, float]:
         "max_tokens": max_tokens,
         "temperature": 0.2,
         "cache_prompt": False,  # measure a cold prompt every time
+        # Gemma 4 (and Qwen3) can "think" before answering; the thought goes
+        # to reasoning_content and can use the whole token budget. Off unless
+        # --thinking. Templates without this switch ignore it.
+        "chat_template_kwargs": {"enable_thinking": THINKING},
     }
     t0 = time.perf_counter()
     resp = call(f"{base}/v1/chat/completions", payload)
@@ -111,11 +124,14 @@ def main() -> int:
     ap.add_argument("--image", help="image file for the vision test")
     ap.add_argument("--embed-url", help="embedding server, e.g. http://127.0.0.1:8081")
     ap.add_argument("--max-tokens", type=int, default=200)
+    ap.add_argument("--thinking", action="store_true",
+                    help="let the model reason before answering (slower)")
     ap.add_argument("--api-key", default=os.environ.get("IAK_API_KEY", ""),
                     help="for servers started with --api-key (or IAK_API_KEY)")
     args = ap.parse_args()
-    global API_KEY
+    global API_KEY, THINKING
     API_KEY = args.api_key
+    THINKING = args.thinking
     # accept both http://host:port and http://host:port/v1
     base = args.url.rstrip("/").removesuffix("/v1")
     failures = 0

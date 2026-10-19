@@ -30,6 +30,7 @@ NGL="${NGL:-99}"             # layers on the iGPU (99 = all)
 N_CPU_MOE="${N_CPU_MOE:-}"   # 26B-A4B: experts of N layers kept on the CPU
 KV_Q8="${KV_Q8:-0}"          # 1 = KV cache in q8_0
 VISION="${VISION:-1}"        # 0 = no vision projector (saves ~1 GB)
+UBATCH="${UBATCH:-}"         # prompt micro-batch, e.g. 1024 (empty = default)
 
 GEMMA12_MODEL="${GEMMA12_MODEL:-$MODELS_DIR/lmstudio-community/gemma-4-12B-it-QAT-GGUF/gemma-4-12B-it-QAT-Q4_0.gguf}"
 GEMMA26_MODEL="${GEMMA26_MODEL:-$MODELS_DIR/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf}"
@@ -70,7 +71,7 @@ case "$PROFILE" in
         # 4 slots of 2048 tokens (the model's maximum input)
         exec "$SERVER" -m "$EMBED_MODEL" --alias embeddinggemma --embeddings \
             --host "$HOST" --port "$EMBED_PORT" -c 8192 -np 4 -b 2048 -ub 2048 \
-            -ngl "$NGL" --no-mmap "${EXTRA[@]}"
+            -ngl "$NGL" "${EXTRA[@]}"
         ;;
     *)
         echo "[ia-k] unknown profile: $PROFILE (expected gemma12 | gemma26 | qwenvl | embed)" >&2
@@ -97,6 +98,6 @@ fi
 echo "[ia-k] profile $PROFILE on http://$HOST:$PORT/v1  (alias $ALIAS)"
 echo "       model  : $MODEL"
 [ "$VISION" != "0" ] && echo "       mmproj : $MMPROJ"
-echo "       ctx=$CTX ngl=$NGL kv_q8=$KV_Q8 n_cpu_moe=${N_CPU_MOE:-}"
+echo "       ctx=$CTX ngl=$NGL kv_q8=$KV_Q8 n_cpu_moe=${N_CPU_MOE:-} ubatch=${UBATCH:-}"
 exec "$SERVER" "${ARGS[@]}" --alias "$ALIAS" --host "$HOST" --port "$PORT" \
-    -c "$CTX" -ngl "$NGL" -np 1 --jinja --no-mmap "${EXTRA[@]}"
+    -c "$CTX" -ngl "$NGL" -np 1 --jinja ${UBATCH:+-ub "$UBATCH" -b "$UBATCH"} "${EXTRA[@]}"
