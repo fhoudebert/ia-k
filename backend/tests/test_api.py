@@ -102,6 +102,7 @@ def test_import_job_search_ask(stack, native_pdf, docx_file):
     s, ans, _ = call(port, "POST", "/api/ask", {"question": "Où est l'atlas ?"})
     assert s == 200 and ans["status"] == "answered"
     assert ans["sources"][0]["ref"] == "S1" and ans["remote"] is False
+    assert ans["sources"][0]["unit_id"] > 0
     assert call(port, "POST", "/api/ask", {"question": " "})[0] == 400
 
     _, st, _ = call(port, "GET", "/api/status")
@@ -198,3 +199,24 @@ def test_announce_line(tmp_path, capsys):
     assert info["url"].startswith("http://127.0.0.1:") and len(info["token"]) >= 30
     port = int(info["url"].rsplit(":", 1)[1])
     assert call(port, "GET", "/api/health", token=info["token"])[0] == 200
+
+
+def test_serve_stops_when_stdin_closes(tmp_path):
+    """The desktop application keeps the backend's stdin open; when it dies,
+    stdin closes and the backend must stop."""
+    import os
+    import subprocess
+    import sys
+    env = dict(os.environ, PYTHONPATH=str(__import__("pathlib").Path(api.__file__).parents[1]),
+               IAK_LIBRARY=str(tmp_path / "lib"))
+    proc = subprocess.Popen([sys.executable, "-m", "iak", "serve", "--watch-stdin"],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
+    try:
+        line = proc.stdout.readline().decode()
+        assert line.startswith("IAK_API ")
+        assert proc.poll() is None
+        proc.stdin.close()
+        assert proc.wait(timeout=15) == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()

@@ -506,7 +506,8 @@ class Handler(BaseHTTPRequestHandler):
         res = answer.ask(question, hits, self.app.chat(),
                          int(body.get("budget", answer.DEFAULT_BUDGET_CHARS)))
         src = lambda s: {"ref": s.ref, "passage_id": s.passage_id, "doc_id": s.doc_id,
-                         "doc_name": s.doc_name, "label": s.label, "text": s.text}
+                         "unit_id": s.unit_id, "doc_name": s.doc_name, "label": s.label,
+                         "text": s.text}
         self._json(200, {"status": res.status, "text": res.text, "search": used,
                          "sources": [src(s) for s in res.sources],
                          "sent": [src(s) for s in res.sent],
@@ -577,10 +578,21 @@ def make_server(app: App, port: int = 0) -> ThreadingHTTPServer:
     return srv
 
 
-def serve(app: App, port: int = 0, announce=sys.stdout) -> None:
+def serve(app: App, port: int = 0, announce=sys.stdout, watch_stdin: bool = False) -> None:
     """Run until interrupted. The first stdout line, for the interface, is
-    IAK_API {"url": ..., "token": ...}."""
+    IAK_API {"url": ..., "token": ...}. With watch_stdin, stop when stdin
+    closes: the desktop application keeps it open, so the backend ends with
+    the application even if that one is killed or crashes."""
     srv = make_server(app, port)
+    if watch_stdin:
+        def watch():
+            try:
+                while sys.stdin.buffer.read(4096):
+                    pass
+            except (OSError, ValueError):
+                pass
+            srv.shutdown()
+        threading.Thread(target=watch, daemon=True, name="iak-stdin").start()
     url = f"http://127.0.0.1:{srv.server_address[1]}"
     print("IAK_API " + json.dumps({"url": url, "token": app.token,
                                    "version": __version__}), file=announce, flush=True)

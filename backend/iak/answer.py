@@ -35,6 +35,7 @@ class Source:
     doc_name: str
     label: str            # "p. 12"
     text: str
+    unit_id: int = 0      # the page or section, to open it
 
 
 @dataclass
@@ -56,7 +57,7 @@ def select(hits: list[Hit], budget_chars: int = DEFAULT_BUDGET_CHARS,
         if used + len(h.text) > budget_chars and out:
             continue
         out.append(Source(f"S{len(out) + 1}", h.passage_id, h.doc_id, h.doc_name,
-                          h.label, h.text))
+                          h.label, h.text, h.unit_id))
         used += len(h.text)
     return out
 

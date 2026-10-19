@@ -17,7 +17,7 @@ answers** (document, page, passage), using local language models only.
 > example server launchers, a speed test, a portable Python, and the backend
 > (import, extraction, OCR, hybrid keyword and semantic search, sourced
 > answers, image analysis, summaries, comparisons), usable from the command
-> line and through a local HTTP API. The Tauri interface comes next.
+> line, through a local HTTP API, and in a first desktop application.
 
 ## Architecture
 
@@ -35,6 +35,62 @@ answers** (document, page, passage), using local language models only.
 
 The model servers run on each computer, outside IA-K, which connects to them
 by URL (see below).
+
+## Desktop application
+
+The interface is a Tauri 2 application (`src-tauri/`, Rust) showing the web
+pages of `app/` (plain HTML, CSS and JavaScript, no build step). At start it
+launches the backend (`python -m iak serve`) with the portable Python, reads
+its URL and token, and stops it on exit; the backend also stops by itself if
+the application is killed. Its log is `data/iak-backend.log`.
+
+Screens, in French or English:
+
+- **Library**: import by dialog or by dropping files on the window (copied,
+  or only referenced), list with state, pages, OCR pages and passages,
+  summaries, comparison of the checked documents, deletion, running jobs.
+- **Document**: pages or sections, the page image beside its text; the text
+  can be corrected (OCR confidence shown); page analysis (describe,
+  transcribe, explain an error, extract, free question) and the stored
+  analyses.
+- **Search**: hybrid, keyword or meaning search; each result opens its page.
+- **Questions**: answers with clickable citations `[S1]` and their sources;
+  a warning shows when the chat server is not on this computer.
+
+### Portable layout
+
+The program goes at the root of the IA-K folder, on the key or a disk:
+
+```
+ia-k/                      the folder from this repository
+├── ia-k  or  ia-k.exe     the application (built below)
+├── backend/  app/  config/servers.toml
+├── build/python/linux/   build/python/windows/   build/tesseract/ (optional)
+└── data/                  library, created at first start
+```
+
+It finds that folder from its own location (or `IAK_ROOT`); the library is
+`data/` unless `IAK_LIBRARY` says otherwise. An AppImage counts from where the
+`.AppImage` file is.
+
+### Building
+
+Requirements: Rust (rustup), Node.js for the Tauri command line, and on
+Linux `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`; on Windows the MSVC
+build tools (WebView2 is part of Windows 10 and 11).
+
+```
+npm install
+npm run dev          # development: the application with its backend
+npm run build        # release: src-tauri/target/release/ia-k[.exe] and installers
+```
+
+Copy `src-tauri/target/release/ia-k` (or `ia-k.exe`) to the root of the
+IA-K folder. Builds are made on each system (Windows on Windows).
+
+For interface work in a browser, start the backend with
+`./iak.sh serve --allow-origin http://127.0.0.1:8899`, serve `app/` on that
+port and open `index.html?url=<backend url>&token=<token>`.
 
 ## Backend
 
@@ -170,6 +226,9 @@ The desktop interface talks to the backend through a local HTTP API:
   127.0.0.1 or localhost are refused (DNS rebinding), and only the Tauri
   origins get CORS answers (`--allow-origin` adds one, e.g. a development
   server).
+- **Lifetime.** With `--watch-stdin` (used by the application) the backend
+  stops as soon as its standard input closes, that is when the application
+  ends, even abruptly.
 - **Jobs.** Import (with OCR and vectors), embedding, re-extraction, image
   analysis, summaries and comparisons are jobs, run one at a time: the call
   returns `{"job": id}` (202) and `GET /api/jobs/<id>` gives the status,
@@ -343,6 +402,6 @@ licences (Gemma terms of use, Apache 2.0 for Qwen).
 3. Full-text search and sourced answers *(done, command line)*
 4. Embeddings and hybrid search *(done, command line)*
 5. Document chat and image analysis *(done: command line and local API)*
-6. Tauri interface: library, viewer, search, chat, OCR correction
+6. Tauri interface: library, viewer, search, chat, OCR correction *(first version)*
 7. Windows and Linux builds, portable layout, documentation
 8. Translation of documents (as in [truchement](https://github.com/fhoudebert/transcribe))

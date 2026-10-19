@@ -107,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="access token (default: random, announced on stdout)")
     p.add_argument("--allow-origin", action="append", default=[],
                    help="extra web origin allowed (e.g. a development server)")
+    p.add_argument("--watch-stdin", action="store_true",
+                   help="stop when stdin closes (used by the desktop application)")
     p = sub.add_parser("edit")
     p.add_argument("unit_id", type=int)
     p.add_argument("file", type=Path, help="UTF-8 text file with the corrected text")
@@ -128,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         from . import api
         app = api.App(args.library, host, args.lang, args.ocr_langs, args.tesseract,
                       token=args.token, origins=set(args.allow_origin))
-        api.serve(app, args.port)
+        api.serve(app, args.port, watch_stdin=args.watch_stdin)
         return 0
 
     def embedder(required: bool = False) -> embed.Embedder | None:
