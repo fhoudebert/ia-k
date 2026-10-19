@@ -1,0 +1,19 @@
+# personal launcher settings
+server/local.bat
+server/local.sh
+
+# portable binaries and runtimes (llama.cpp, python, tesseract...)
+build/
+
+# user data: documents, index, backups
+data/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv*/
+server/
+*.patch
+# models never go into the repository
+*.gguf
