@@ -135,6 +135,14 @@ until *New conversation*. When the documents do not contain the answer, IA-K
 says so instead of inventing one. Questions can be limited to a type or a
 document.
 
+**Exports.** Every answer has *Copy as Markdown*, and *Export the
+conversation…* saves all of it in a Markdown file: each question, its answer
+with its `[S1]` marks, and under it the sources — document, page and the
+passage quoted. Summaries, comparisons and page analyses have *Copy* and
+*Export…* too: a summary lists the pages it cites, a comparison says which
+documents D1, D2… are. Markdown opens in any text editor, Obsidian, Typora,
+or converts to Word or PDF (Pandoc).
+
 **Translation.** *Text*: paste a text, choose the languages (or let IA-K
 detect the source language), *Translate*. *Library document*: choose a
 document, *Translate the document*; it is translated page by page (or
@@ -225,14 +233,15 @@ Done:
     application for Apple silicon and Intel, `setup_python.sh` for macOS,
     engine tests on macOS in CI
 
+12. Export of answers, conversations, summaries, comparisons and page
+    analyses as Markdown, with their sources
+
 Next:
 
-12. **Export of answers, summaries and comparisons** (Markdown, with their
-    sources).
+13. **Collections** (named groups of documents) to limit search and questions.
 
 Later:
 
 - Other launchers by use, as needed.
-- Collections (named groups of documents) to limit search and questions.
 - Watched folders: documents added to a folder imported by themselves.
 - The engine frozen in the application (no `setup_python` step).

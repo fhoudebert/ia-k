@@ -64,6 +64,8 @@
       </div>
       <section class="panel" id="result-panel" hidden>
         <div class="panel-head"><h3 id="result-title"></h3>
+          <button class="link" id="result-copy" data-i18n="export.copy"></button>
+          <button class="link" id="result-export" data-i18n="export.save"></button>
           <button class="link close" id="result-close">×</button></div>
         <div id="result-body" class="prose"></div>
       </section>
@@ -99,6 +101,7 @@
         <select id="ask-kind" class="filter-kind"></select>
         <select id="ask-doc" class="filter-doc"></select>
         <span class="spacer"></span>
+        <button class="link" id="chat-export" data-i18n="export.conversation" hidden></button>
         <button class="link" id="chat-new" data-i18n="ask.new"></button>
       </div>
       <div id="chat" class="chat">

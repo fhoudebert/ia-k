@@ -15,6 +15,7 @@
     python -m iak summarize ID            summary of a document, with page labels
     python -m iak compare ID ID...        compare documents (from their summaries)
     python -m iak analyses [ID]           stored analyses
+    python -m iak export ANALYSIS [-o F]  an analysis (summary, comparison...) as Markdown
     python -m iak translate ID --to en    translate a document page by page (kept),
                                           or --text "..." / --file F.txt; --out FILE
                                           writes the translated document
@@ -95,6 +96,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--mode", choices=["auto", "hybrid", "sem", "kw"], default="auto")
     p.add_argument("--budget", type=int, default=answer.DEFAULT_BUDGET_CHARS,
                    help="characters of passages sent to the model")
+    p.add_argument("--md", type=Path, help="also write the answer and its sources as Markdown")
     p = sub.add_parser("look")
     p.add_argument("unit_id", type=int, help="unit (page) id, see the show command")
     p.add_argument("--task", default="describe",
@@ -117,6 +119,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("compare")
     p.add_argument("ids", type=int, nargs="+")
     p.add_argument("--question", default="", help="aspect to focus on")
+    p = sub.add_parser("export")
+    p.add_argument("analysis", type=int, help="analysis id (see analyses)")
+    p.add_argument("-o", "--out", type=Path, help="file to write (default: printed)")
     p = sub.add_parser("analyses")
     p.add_argument("id", type=int, nargs="?")
     p = sub.add_parser("translate")
@@ -318,6 +323,25 @@ def main(argv: list[str] | None = None) -> int:
                 for s in res.sources:
                     _out(f"  [{s.ref}] {s.doc_name}, {s.label}")
             _out(f"\n({len(res.sent)} passages sent, {used} search, {dt:.1f} s)")
+            if args.md:
+                from . import export
+                turn = {"question": args.question, "text": res.text, "status": res.status,
+                        "sources": [{"ref": s.ref, "doc_name": s.doc_name, "label": s.label,
+                                     "text": s.text} for s in res.sources]}
+                _out(f"written: {export.write(args.md, export.answer_md(turn, args.lang, 1))}")
+            return 0
+
+        if args.cmd == "export":
+            from . import export
+            try:
+                name, md = export.analysis_md(lib, args.analysis, args.lang)
+            except KeyError as exc:
+                _out(str(exc))
+                return 1
+            if args.out:
+                _out(f"written: {export.write(args.out, md)}")
+            else:
+                print(md, end="")
             return 0
 
         if args.cmd == "reread":

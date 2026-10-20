@@ -40,13 +40,17 @@ ne part sur Internet.
 
 ## Recherche et questions
 
-- **Recherche par mots, par sens ou les deux** : « Qui est Geoffroy Martel ? » trouve « lC'est le fils de Foulques Nerra, il est né en 1005 …' ».
+- **Recherche par mots, par sens ou les deux** : « Qui est Geoffroy Martel ? » trouve « C’est le fils de Foulques Nerra, il est né en 1005 … ».
 - **Réponses sourcées** : chaque affirmation renvoie au document, à la page
   et au passage ; un clic ouvre la page et **surligne le passage**.
 - Réponse écrite en direct ; **questions de suivi** (« et quand l'a-t-il
   rendu ? ») ; filtres par type ou par document.
 - Si les documents ne contiennent pas la réponse, IA-K **le dit** au lieu
   d'inventer.
+- **Export en Markdown** : « Copier en Markdown » sur chaque réponse,
+  « Exporter la conversation… » pour toute la séance ; chaque réponse garde
+  ses renvois [S1] et la liste de ses sources (document, page, extrait du
+  passage).
 
 ## Analyses
 
@@ -55,6 +59,8 @@ ne part sur Internet.
   répondre à une question.
 - **Résumé** d'un document avec renvoi aux pages ; **comparaison** de
   plusieurs documents (points communs, différences, contradictions).
+- Résumés, comparaisons et analyses se **copient ou s'exportent en
+  Markdown** : pages citées, documents comparés (D1, D2…), modèle et date.
 
 ## Relecture des scans difficiles
 

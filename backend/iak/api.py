@@ -32,8 +32,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, analyze, answer, book, db, embed, ocr, search, servers,
-               transcription, translate)
+from . import (__version__, analyze, answer, book, db, embed, export, ocr, search,
+               servers, transcription, translate)
 from .library import Library
 
 CONTENT_TYPES = {
@@ -729,6 +729,67 @@ class Handler(BaseHTTPRequestHandler):
         with self.app.library() as lib:
             rows = analyze.analyses(lib.con, int(doc[0]) if doc else None)
         self._json(200, [_row(r) for r in rows])
+
+    # -------------------------------------------------- Markdown exports
+    def _lang(self, value) -> str:
+        return value if value in export.LABELS else self.app.lang
+
+    def _deliver(self, name: str, markdown: str, path) -> None:
+        """Write to path when given, else hand the Markdown back (copy)."""
+        if not path:
+            self._json(200, {"name": export.safe_name(name), "markdown": markdown})
+            return
+        try:
+            out = export.write(str(path), markdown)
+        except OSError as exc:
+            raise ApiError(400, f"cannot write {path}: {exc}")
+        self._json(200, {"path": str(out)})
+
+    @route("POST", "/api/export/conversation")
+    def export_conversation(self, query):
+        body = self._body()
+        turns = body.get("turns")
+        if not isinstance(turns, list) or not turns or len(turns) > 500:
+            raise ApiError(400, "turns: a list of questions and answers")
+        clean = []
+        for t in turns:
+            if not isinstance(t, dict):
+                raise ApiError(400, "each turn is an object")
+            sources = t.get("sources") if isinstance(t.get("sources"), list) else []
+            clean.append({
+                "question": str(t.get("question") or ""), "text": str(t.get("text") or ""),
+                "status": str(t.get("status") or "answered"), "scope": str(t.get("scope") or ""),
+                "sources": [{k: str(src.get(k) or "") for k in ("ref", "doc_name", "label", "text")}
+                            for src in sources[:100] if isinstance(src, dict)]})
+        lang = self._lang(body.get("lang"))
+        md = (export.answer_md(clean[0], lang, 1, bool(body.get("quote", True)))
+              if body.get("single") else
+              export.conversation_md(clean, lang, body.get("title"), bool(body.get("quote", True))))
+        stem = "IA-K - " + (clean[0]["question"][:60] if body.get("single") else
+                            export.LABELS[lang]["conversation"])
+        self._deliver(f"{stem} - {time.strftime('%Y-%m-%d')}.md", md, body.get("path"))
+
+    @route("GET", r"/api/analyses/(\d+)/markdown")
+    def analysis_markdown(self, analysis_id, query):
+        lang = self._lang((query.get("lang") or [None])[0])
+        with self.app.library() as lib:
+            try:
+                name, md = export.analysis_md(lib, int(analysis_id), lang)
+            except KeyError:
+                raise ApiError(404, "no such analysis")
+        self._deliver(name, md, None)
+
+    @route("POST", r"/api/analyses/(\d+)/export")
+    def analysis_export(self, analysis_id, query):
+        body = self._body()
+        if not body.get("path"):
+            raise ApiError(400, "choose where to save the file")
+        with self.app.library() as lib:
+            try:
+                name, md = export.analysis_md(lib, int(analysis_id), self._lang(body.get("lang")))
+            except KeyError:
+                raise ApiError(404, "no such analysis")
+        self._deliver(name, md, body["path"])
 
     # -------------------------------------------------- page readings (vision)
     @route("POST", "/api/read")

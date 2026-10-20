@@ -31,6 +31,8 @@ interface uses.
 ./iak.sh summarize 3 [--refresh]                  # summary with [p. N] labels
 ./iak.sh compare 3 7 --question "dates"           # common points, differences
 ./iak.sh analyses 3                               # stored analyses
+./iak.sh export 12 -o resume.md                   # analysis 12 as Markdown
+./iak.sh ask "…" --md reponse.md                  # an answer and its sources as Markdown
 ./iak.sh translate 3 --to en --out doc3.en.md     # document, page by page (kept)
 ./iak.sh translate --unit 42 --to la              # one page
 ./iak.sh translate --text "Bonjour" --from fr --to de   # or --file text.txt
@@ -116,6 +118,19 @@ suits exFAT keys that may be unplugged.
 - `compare` works from the documents' summaries; documents are named D1, D2…
 - Results are stored with their task, language and model, and deleted with
   their document.
+
+## Exports
+
+`iak/export.py` writes Markdown in the interface language. An answer keeps
+its `[S1]` marks and gets a *Sources* list of the passages it cites
+(document, label, the passage cut to 300 characters as a quotation; an
+answer citing nothing is marked as such); a conversation is a
+title, the date and one section per question. An analysis gets its title
+(task, document, page), date and model, its text, and its sources: the
+document and the pages a summary cites, the documents D1, D2… of a
+comparison, the agreement of a page reading. Names and passages are escaped
+so that they cannot become Markdown markup; files are written through a
+temporary file.
 
 ## Reading pages again
 
@@ -251,6 +266,8 @@ The interface talks to the engine through an HTTP API:
 | `GET /api/analyses/<id>/diff`, `POST /api/analyses/<id>/apply` | word differences with the page's text; use a reading as the text |
 | `POST /api/units/<id>/restore` | back to the extracted text |
 | `POST /api/jobs/<id>/cancel` | cancel a queued job, or stop a reading between two pages |
+| `POST /api/export/conversation` `{"turns": [{"question", "text", "status", "sources", "scope"}], "lang", "single", "path"}` | Markdown of an answer or a conversation (returned, or written to `path`) |
+| `GET /api/analyses/<id>/markdown?lang=fr`, `POST /api/analyses/<id>/export` `{"path", "lang"}` | an analysis as Markdown |
 | `GET /api/languages` | languages offered for translation |
 | `POST /api/translate` `{"text", "src": "auto", "tgt": "en"}` | job: translated text, detected language |
 | `POST /api/translate/document` `{"doc_id"` or `"unit_id", "src", "tgt", "refresh"}` | job |

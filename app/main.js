@@ -26,6 +26,7 @@ const state = {
   jobs: [],
   waiters: new Map(),          // job id -> resolve
   history: [],                 // [{question, answer}] of the current conversation
+  turns: [],                   // the same answers with their sources, for export
   seenJobs: new Set(),         // finished jobs already taken into account
   started: false,              // first jobs poll done
   imageUrl: null,
@@ -319,7 +320,9 @@ async function removeDoc(d) {
   } catch (e) { fail(e); }
 }
 
-function showResult(title, text) {
+function showResult(title, text, analysisId = null) {
+  state.resultAnalysis = analysisId;
+  $("#result-copy").hidden = $("#result-export").hidden = !analysisId;
   $("#result-title").textContent = title;
   $("#result-body").replaceChildren(markdown(text));
   $("#result-panel").hidden = false;
@@ -332,7 +335,7 @@ async function summarize(docId, name, refresh = false) {
     const done = await waitJob(job);
     if (done.status === "error") { fail(done.error); return; }
     if (state.view === "viewer" && state.doc && state.doc.id === docId) await loadAnalyses();
-    else showResult(`${t("lib.summary")} — ${name}`, done.result.text);
+    else showResult(`${t("analysis.summary")} — ${name}`, done.result.text, done.result.analysis);
   } catch (e) { fail(e); }
 }
 
@@ -345,8 +348,53 @@ async function compareSelected() {
     const done = await waitJob(job);
     if (done.status === "error") { fail(done.error); return; }
     const names = ids.map((id, i) => `D${i + 1} ${(state.documents.find((d) => d.id === id) || {}).name || id}`);
-    showResult(`${t("lib.compare")} — ${names.join(", ")}`, done.result.text);
+    showResult(`${t("lib.compare")} — ${names.join(", ")}`, done.result.text, done.result.analysis);
   } catch (e) { fail(e); }
+}
+
+// ------------------------------------------------------------------ exports
+
+/** Copy the Markdown an export call returns. */
+async function copyMarkdown(promise) {
+  try {
+    const r = await promise;
+    await navigator.clipboard.writeText(r.markdown);
+    toast(t("export.copied"));
+  } catch (e) { fail(e); }
+}
+
+/** Ask where to save, then let `write(path)` produce the file. */
+async function saveMarkdown(name, write) {
+  if (!TAURI) { toast(t("tr.export_desktop"), true); return; }
+  const path = await TAURI.dialog.save({ defaultPath: name,
+                                         filters: [{ name: "Markdown", extensions: ["md"] }] });
+  if (!path) return;
+  try {
+    const r = await write(path);
+    toast(t("export.saved", { path: r.path }));
+  } catch (e) { fail(e); }
+}
+
+async function exportAnalysis(id) {
+  const lang = getLang();
+  const r = await get(`/api/analyses/${id}/markdown?lang=${lang}`);
+  await saveMarkdown(r.name, (path) => post(`/api/analyses/${id}/export`, { path, lang }));
+}
+
+function analysisExportButtons(id) {
+  return el("span", { class: "export-links" },
+    el("button", { class: "link inline", onclick: () =>
+      copyMarkdown(get(`/api/analyses/${id}/markdown?lang=${getLang()}`)) }, t("export.copy")),
+    el("button", { class: "link inline", onclick: () => exportAnalysis(id).catch(fail) },
+      t("export.save")));
+}
+
+async function exportConversation() {
+  if (!state.turns.length) return;
+  const lang = getLang();
+  const r = await post("/api/export/conversation", { turns: state.turns, lang });
+  await saveMarkdown(r.name, (path) =>
+    post("/api/export/conversation", { turns: state.turns, lang, path }));
 }
 
 // ------------------------------------------------------------------ viewer
@@ -462,7 +510,7 @@ async function loadAnalyses() {
     const unit = state.units.find((u) => u.id === a.unit_id);
     const when = new Date(a.created_at * 1000).toLocaleString(getLang(), {
       dateStyle: "short", timeStyle: "short" });
-    const what = a.task === "summary" ? t("lib.summary")
+    const what = a.task === "summary" ? t("analysis.summary")
       : (t(`viewer.task.${a.task}`) + (a.question ? ` : ${a.question}` : ""));
     const reading = a.task === "transcribe" || a.task === "correct";
     const meta = [what, unit ? unit.label : null, a.model || null, when];
@@ -470,7 +518,8 @@ async function loadAnalyses() {
       meta.push(t("reading.score", { pct: Math.round(a.score * 100) }));
     }
     const item = el("div", { class: reading ? "analysis reading" : "analysis" },
-      el("div", { class: "meta" }, meta.filter(Boolean).join(" · ")));
+      el("div", { class: "meta" }, meta.filter(Boolean).join(" · "), " · ",
+         analysisExportButtons(a.id)));
     if (reading) {
       item.append(el("div", { class: "text" }, a.text));
       if (a.sources && a.sources.truncated) item.append(el("p", { class: "badge warn" }, t("reading.truncated")));
@@ -645,8 +694,12 @@ async function runAsk(ev) {
       token: (d) => { text += d.text; if (!frame) frame = requestAnimationFrame(paint); },
       done: (d) => {
         if (frame) cancelAnimationFrame(frame);
-        live.replaceWith(answerMessage(d));
+        const turn = { question, text: d.text, status: d.status, scope: f.label,
+                       sources: d.sources };
+        live.replaceWith(answerMessage(d, turn));
         state.history.push({ question, answer: d.status === "no_answer" ? "" : d.text });
+        state.turns.push(turn);
+        $("#chat-export").hidden = false;
       },
       error: (d) => { throw new Error(d.error); },
     });
@@ -703,7 +756,7 @@ async function streamAsk(body, handlers) {
   if (!finished) throw new Error("the answer was interrupted");
 }
 
-function answerMessage(res) {
+function answerMessage(res, turn = null) {
   const msg = el("div", { class: "msg bot" });
   if (res.status === "no_answer") {
     msg.append(el("p", {}, t("ask.no_answer")));
@@ -728,8 +781,14 @@ function answerMessage(res) {
     }
   }
   const modeName = t(`search.mode.${res.search}`).toLowerCase();
-  msg.append(el("div", { class: "meta" },
-    t("ask.meta", { n: res.sent.length, mode: modeName, s: res.seconds })));
+  const meta = el("div", { class: "meta" },
+    t("ask.meta", { n: res.sent.length, mode: modeName, s: res.seconds }));
+  if (turn) {
+    meta.append(" · ", el("button", { class: "link inline", onclick: () =>
+      copyMarkdown(post("/api/export/conversation", { turns: [turn], single: true, lang: getLang() }))
+    }, t("export.copy_answer")));
+  }
+  msg.append(meta);
   return msg;
 }
 
@@ -1285,8 +1344,15 @@ function wire() {
   $("#compare-btn").addEventListener("click", compareSelected);
   $("#result-close").addEventListener("click", () => { $("#result-panel").hidden = true; });
   $("#search-form").addEventListener("submit", runSearch);
+  $("#chat-export").addEventListener("click", () => exportConversation().catch(fail));
+  $("#result-copy").addEventListener("click", () => state.resultAnalysis &&
+    copyMarkdown(get(`/api/analyses/${state.resultAnalysis}/markdown?lang=${getLang()}`)));
+  $("#result-export").addEventListener("click", () => state.resultAnalysis &&
+    exportAnalysis(state.resultAnalysis).catch(fail));
   $("#chat-new").addEventListener("click", () => {
     state.history = [];
+    state.turns = [];
+    $("#chat-export").hidden = true;
     $("#chat").replaceChildren($("#chat-empty"));
     $("#chat-empty").hidden = false;
     $("#ask-input").focus();

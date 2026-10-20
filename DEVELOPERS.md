@@ -28,7 +28,7 @@ Repository layout:
 ```
 app/                 interface: index.html, main.js, i18n.js (fr, en), style.css
 backend/iak/         engine: db, extract, ocr, chunk, library, search, embed,
-                     answer, analyze, transcription, translate, book, servers, api,
+                     answer, analyze, transcription, translate, book, export, servers, api,
                      __main__ (command line)
 backend/tests/       pytest, on generated documents and fake model servers
 src-tauri/           Rust: backend.rs (engine process, library folder), lib.rs
