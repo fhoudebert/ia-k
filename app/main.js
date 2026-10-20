@@ -204,6 +204,7 @@ async function loadLibrary() {
   renderLibrary();
   renderFilters();
   renderTranslateDocs();
+  renderBookDocs();
 }
 
 /** Type and document lists of the search and question filters. */
@@ -644,8 +645,10 @@ async function enterTranslate() {
   }
   $("#tr-src").options[0].textContent = t("tr.auto");
   renderTranslateDocs();
+  renderBookDocs();
   renderEngine();
   if (trMode() === "doc") await loadTranslations();
+  else if (trMode() === "book") await loadBooks();
   else $("#tr-input").focus();
 }
 
@@ -676,7 +679,9 @@ function setMode(mode) {
   document.querySelector(`input[name="tr-mode"][value="${mode}"]`).checked = true;
   $("#tr-text-mode").hidden = mode !== "text";
   $("#tr-doc-mode").hidden = mode !== "doc";
+  $("#tr-book-mode").hidden = mode !== "book";
   if (mode === "doc") loadTranslations().catch(fail);
+  if (mode === "book") { renderBookDocs(); loadBooks().catch(fail); }
 }
 
 function trLanguages() {
@@ -838,6 +843,153 @@ async function translateFromViewer() {
     const again = document.querySelector(`#tr-units li[data-unit="${unitId}"]`);
     if (again) again.scrollIntoView({ block: "start" });
   }
+}
+
+// ------------------------------------------------------------------ books
+
+const books = { list: [], file: null, logs: new Set() };
+
+function duration(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (h) return `${h} h ${String(m).padStart(2, "0")}`;
+  return m ? `${m} min ${String(s).padStart(2, "0")}` : `${s} s`;
+}
+
+function renderBookDocs() {
+  const sel = $("#book-doc");
+  if (!sel) return;
+  const keep = sel.value;
+  const docs = [...state.documents].sort((a, b) => a.name.localeCompare(b.name, getLang()));
+  sel.replaceChildren(el("option", { value: "" }, t("book.choose_doc")),
+    ...docs.map((d) => el("option", { value: String(d.id) }, `${d.name} (${kindLabel(d.kind)})`)));
+  sel.value = docs.some((d) => String(d.id) === keep) ? keep : "";
+}
+
+async function chooseBookFile() {
+  if (!TAURI) { toast(t("tr.export_desktop"), true); return; }
+  const path = await TAURI.dialog.open({ multiple: false, filters: [{
+    name: t("book.formats"), extensions: ["epub", "pdf", "txt", "md", "html", "htm", "xhtml", "docx"] }] });
+  if (!path) return;
+  books.file = path;
+  $("#book-doc").value = "";
+  $("#book-file-name").textContent = path.split(/[\\/]/).pop();
+}
+
+async function startBook() {
+  const docId = $("#book-doc").value;
+  if (!docId && !books.file) { $("#book-doc").focus(); return; }
+  const { src, tgt } = trLanguages();
+  const body = { src, tgt, passes: Number($("#book-passes").value),
+                 glossary: $("#book-glossary").value, limit: $("#book-trial").checked ? 3 : 0 };
+  if (docId) body.doc_id = Number(docId); else body.path = books.file;
+  try {
+    await post("/api/books", body);
+    toast(t("book.queued"));
+    await loadBooks();
+  } catch (e) { fail(e); }
+}
+
+async function loadBooks() {
+  clearTimeout(loadBooks.timer);
+  try {
+    books.list = await get("/api/books");
+    const logs = {};
+    await Promise.all([...books.logs].filter((id) => books.list.some((b) => b.id === id))
+      .map(async (id) => { logs[id] = (await get(`/api/books/${id}?log=60`)).log; }));
+    renderBooks(logs);
+  } finally {
+    // poll on, even after a failed request
+    const active = books.list.some((b) => b.status === "queued" || b.status === "running");
+    if (state.view === "translate" && trMode() === "book") {
+      loadBooks.timer = setTimeout(() => loadBooks().catch(() => {}), active ? 2000 : 15000);
+    }
+  }
+}
+
+function bookAction(label, fn, cls = "") {
+  return el("button", { class: cls, onclick: () => fn().catch(fail) }, label);
+}
+
+function renderBooks(logs = {}) {
+  const ul = $("#book-list");
+  $("#book-empty").hidden = books.list.length > 0;
+  ul.replaceChildren(...books.list.map((b) => {
+    const status = b.pausing ? "pausing" : b.status;
+    const cls = { done: "badge ok", error: "badge err", interrupted: "badge warn",
+                  paused: "badge warn" }[status] || "badge";
+    const head = el("div", { class: "book-head" },
+      el("strong", {}, b.name),
+      el("span", { class: "muted" }, `${b.src && b.src !== "auto" ? langName(b.src) : t("tr.auto")} → ${langName(b.tgt)}`),
+      el("span", { class: "muted" }, t(`book.passes${b.passes}`)),
+      el("span", { class: cls }, t(`book.status.${status}`)));
+    if (b.limit) head.append(el("span", { class: "badge warn" }, t("book.trial_badge")));
+    const li = el("li", { dataset: { id: b.id } }, head);
+    if (b.units) {
+      const info = [t("book.progress", { done: b.done_units || 0, units: b.units, pct: b.pct || 0 })];
+      if (b.status === "running" && b.eta) info.push(t("book.eta", { time: duration(b.eta) }));
+      if (b.status === "done" && b.work_seconds) info.push(t("book.took", { time: duration(b.work_seconds) }));
+      if (b.model) info.push(b.model);
+      li.append(el("div", { class: "book-progress" },
+        el("progress", { max: 100, value: b.pct || 0 }), info.join(" · ")));
+    }
+    if (b.status === "error" && b.error) li.append(el("div", { class: "status-error" }, trError(b.error)));
+    const actions = el("div", { class: "book-actions" });
+    if (b.status === "running" || b.status === "queued") {
+      if (!b.pausing) actions.append(bookAction(t("book.pause"), async () => {
+        await post(`/api/books/${b.id}/pause`); await loadBooks(); }));
+    } else if (b.status !== "done") {
+      actions.append(bookAction(t("book.resume"), async () => {
+        await post(`/api/books/${b.id}/resume`); await loadBooks(); }, "primary"));
+    }
+    if (b.output_ready) {
+      actions.append(bookAction(t("book.save"), () => saveBook(b, false), "primary"),
+        bookAction(t("book.import"), async () => {
+          const { job } = await post(`/api/books/${b.id}/import`);
+          toast(t("book.importing"));
+          const done = await waitJob(job);
+          if (done.status === "error") fail(done.error); else toast(t("book.imported"));
+        }));
+      if (b.limit) actions.append(bookAction(t("book.full"), async () => {
+        await post("/api/books", { ...(b.doc_id !== null && b.doc_id !== undefined ? { doc_id: b.doc_id } : { path: b.source }),
+          src: b.src, tgt: b.tgt, passes: b.passes, limit: 0 });
+        await loadBooks(); }));
+    } else if (b.partial_ready) {
+      actions.append(bookAction(t("book.save_partial"), () => saveBook(b, true)));
+    }
+    const open = books.logs.has(b.id);
+    actions.append(bookAction(open ? t("book.log_hide") : t("book.log"), async () => {
+      if (open) books.logs.delete(b.id); else books.logs.add(b.id);
+      await loadBooks(); }, "link"));
+    if (b.status !== "running" && b.status !== "queued") {
+      actions.append(bookAction(t("book.delete"), async () => {
+        const ok = TAURI && TAURI.dialog.ask
+          ? await TAURI.dialog.ask(t("book.delete_confirm", { name: b.name }), { kind: "warning" })
+          : window.confirm(t("book.delete_confirm", { name: b.name }));
+        if (!ok) return;
+        await request("DELETE", `/api/books/${b.id}`);
+        books.logs.delete(b.id);
+        await loadBooks(); }, "link danger"));
+    }
+    li.append(actions);
+    if (open && logs[b.id]) {
+      const pre = el("pre", { class: "book-log" }, logs[b.id].join("\n"));
+      li.append(pre);
+      requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+    }
+    return li;
+  }));
+}
+
+async function saveBook(b, partial) {
+  if (!TAURI) { toast(t("tr.export_desktop"), true); return; }
+  const name = partial ? b.partial : b.output;
+  const ext = name.split(".").pop();
+  const path = await TAURI.dialog.save({ defaultPath: name,
+                                         filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
+  if (!path) return;
+  const r = await post(`/api/books/${b.id}/save`, { path, partial });
+  toast(t("tr.exported", { path: r.path }));
 }
 
 // ------------------------------------------------------------------ settings
@@ -1070,6 +1222,11 @@ function wire() {
   $("#tr-doc-run").addEventListener("click", translateDocument);
   $("#tr-export").addEventListener("click", () => exportTranslation().catch(fail));
   $("#viewer-translate").addEventListener("click", () => translateFromViewer().catch(fail));
+  $("#book-file").addEventListener("click", () => chooseBookFile().catch(fail));
+  $("#book-doc").addEventListener("change", () => {
+    if ($("#book-doc").value) { books.file = null; $("#book-file-name").textContent = ""; }
+  });
+  $("#book-start").addEventListener("click", startBook);
   $("#look-task").addEventListener("change", () => {
     $("#look-question").hidden = $("#look-task").value !== "ask";
   });

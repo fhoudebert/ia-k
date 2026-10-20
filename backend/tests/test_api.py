@@ -220,3 +220,23 @@ def test_serve_stops_when_stdin_closes(tmp_path):
     finally:
         if proc.poll() is None:
             proc.kill()
+
+
+def test_keep_alive_after_unread_bodies(stack):
+    """A body the route ignores, or a refused request's body, must not be
+    taken for the next request on the same connection (the browser reuses it)."""
+    _, port, _ = stack
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    auth = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
+    for method, path, headers in (("POST", "/api/books/none/pause", auth),   # 404, body unread
+                                  ("POST", "/api/import", {"Content-Type": "application/json"}),
+                                  ("GET", "/api/health", auth)):
+        conn.request(method, path, '{"paths": []}' if method == "POST" else None, headers)
+        r = conn.getresponse()
+        r.read()
+        assert r.status in (404, 401, 200)
+    assert r.status == 200
+    conn.request("GET", "/api/status", None, auth)
+    r = conn.getresponse()
+    assert r.status == 200 and json.loads(r.read())["documents"] == 0
+    conn.close()

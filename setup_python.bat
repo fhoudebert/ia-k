@@ -62,7 +62,7 @@ echo [2/3] Installing packages (backend\requirements.lock)
 "%PY%" -m pip install --disable-pip-version-check --no-warn-script-location -q -r "%ROOT%backend\requirements.lock" || goto fail
 
 echo [3/3] Checking
-"%PY%" -c "import pymupdf, docx, numpy, sqlite3; c = sqlite3.connect(':memory:'); c.execute('create virtual table t using fts5(x)'); print('PyMuPDF', pymupdf.__version__, '- numpy', numpy.__version__, '- SQLite', sqlite3.sqlite_version, 'with FTS5')" || goto fail
+"%PY%" -c "import pymupdf, docx, numpy, bs4, sqlite3; c = sqlite3.connect(':memory:'); c.execute('create virtual table t using fts5(x)'); print('PyMuPDF', pymupdf.__version__, '- numpy', numpy.__version__, '- SQLite', sqlite3.sqlite_version, 'with FTS5')" || goto fail
 if exist "%ROOT%build\tesseract\tesseract.exe" (
     echo Tesseract: build\tesseract\tesseract.exe
 ) else (

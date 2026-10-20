@@ -33,6 +33,8 @@ interface uses.
 ./iak.sh translate 3 --to en --out doc3.en.md     # document, page by page (kept)
 ./iak.sh translate --unit 42 --to la              # one page
 ./iak.sh translate --text "Bonjour" --from fr --to de   # or --file text.txt
+./iak.sh book candide.epub --to en [--passes 1|2|3] [--glossary g.txt] [--limit 3] [-o out.epub]
+./iak.sh book --doc 3 --to en                     # a library document; resumable
 ./iak.sh delete 3                                 # database backed up first
 ./iak.sh serve                                    # local API (below)
 ```
@@ -137,6 +139,42 @@ suits exFAT keys that may be unplugged.
   Export writes Markdown (`# title`, `## p. N`) or text, optionally with the
   original before each translation.
 
+## Books
+
+`iak/book.py`, ported from truchement's `traduire-livre.py`.
+
+- **Reading.** EPUB (every XHTML document in reading order, and the NCX),
+  HTML, DOCX (paragraphs and table cells), Markdown (headings, lists and
+  quotes keep their marks, code blocks are left alone), TXT, PDF. A PDF is
+  read with its font sizes (headings), without its running heads and page
+  numbers, with paragraphs joined across pages and hyphenation removed; for a
+  library PDF, pages read by OCR or corrected are taken from the library. An
+  image or a document whose original is gone is translated from the
+  library's text, as Markdown; so is an EPUB, DOCX or HTML whose text was
+  corrected in IA-K.
+- **Segments and units.** Each paragraph, heading, list item or cell is a
+  segment; consecutive segments are sent together, as
+  `<seg n="1">…</seg>` (up to 2,500 characters, less with a small context),
+  so the model keeps the context. Inside a paragraph, formatting becomes
+  neutral tags `<g1>…</g1>`, `<x2/>` that the model must keep; the original
+  tags are put back around the translation. A group whose tags come back
+  damaged is translated again paragraph by paragraph, a paragraph as plain
+  text as a last resort; after a few failures in a row IA-K stops sending
+  tags to that model. Everything is counted in the log.
+- **Passes.** 1 translation (TranslateGemma's own prompt, or an instruction
+  for another model); 2 a bilingual revision; 3 a final proofreading. A
+  revision that loses tags or changes the length too much is rejected. A
+  glossary is put in the instruction when a term occurs (TranslateGemma: in
+  the revisions only, its own prompt cannot carry it).
+- **Resuming.** Results are appended to `cache.jsonl` (synced every 20 s),
+  per unit and pass and per segment: resuming does not depend on the cutting,
+  the context or the model. A pause is taken between two units and writes the
+  partial book (translated beginning, original rest).
+- **Jobs.** Books have their own thread, one at a time, so imports and
+  questions are not held up. Each lives in `<library>/books/<id>/`
+  (`job.json`, `cache.jsonl`, `book.log`, the translated book). A book left
+  running when IA-K closed shows as *interrupted* and is resumed by hand.
+
 ## Local API
 
 The interface talks to the engine through an HTTP API:
@@ -183,5 +221,9 @@ The interface talks to the engine through an HTTP API:
 | `POST /api/translate/document` `{"doc_id"` or `"unit_id", "src", "tgt", "refresh"}` | job |
 | `GET /api/documents/<id>/translations?tgt=en` | each unit with its translation (or null) and whether it is stale |
 | `POST /api/documents/<id>/translations/export` `{"tgt", "path", "format": "md"\|"txt", "bilingual"}` | write the file |
+| `GET /api/books`, `GET /api/books/<id>?log=40` | book translations, one with the end of its log |
+| `POST /api/books` `{"doc_id"` or `"path", "src", "tgt", "passes", "glossary", "limit"}` | start (or take up) a book |
+| `POST /api/books/<id>/pause`, `/resume` `{"fresh": false}`, `DELETE /api/books/<id>` | pause between two units, resume, delete |
+| `POST /api/books/<id>/save` `{"path", "partial": false}`, `POST /api/books/<id>/import` | copy the translated (or partial) book; import it (job) |
 | `POST /api/embed` `{"rebuild": false}` | job |
 | `GET /api/settings`, `PUT /api/settings` `{"servers", "ocr_langs", "lang"}` | servers of this computer, OCR languages |

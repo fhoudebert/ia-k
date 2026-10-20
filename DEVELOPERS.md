@@ -12,6 +12,7 @@
 | OCR | Tesseract, command line |
 | PDF, EPUB, images | PyMuPDF 1.x (2.0 pulls onnxruntime and more) |
 | DOCX | python-docx |
+| EPUB and HTML rewriting | Beautiful Soup 4 on lxml (books) |
 | Storage | SQLite: documents, units, passages, FTS5, vectors as float32 BLOBs searched with numpy, analyses, translations, settings |
 
 At start the application finds the IA-K folder from its own location (or
@@ -27,7 +28,7 @@ Repository layout:
 ```
 app/                 interface: index.html, main.js, i18n.js (fr, en), style.css
 backend/iak/         engine: db, extract, ocr, chunk, library, search, embed,
-                     answer, analyze, translate, servers, api, __main__ (command line)
+                     answer, analyze, translate, book, servers, api, __main__ (command line)
 backend/tests/       pytest, on generated documents and fake model servers
 src-tauri/           Rust: backend.rs (engine process, library folder), lib.rs
 config/              servers.example.toml
@@ -94,7 +95,7 @@ cd src-tauri && cargo test
 ```
 
 The engine tests generate their documents (PDF, scans, DOCX, EPUB…) and use
-fake chat and embedding servers speaking the llama-server protocol
+fake chat, embedding and TranslateGemma servers speaking the llama-server protocol
 (including streaming and its error lines). The interface was checked with
 Playwright against real models; `scripts/smoke_test.py` checks real servers.
 

@@ -33,10 +33,16 @@ LANGUAGES = {
     "zh": "中文", "ja": "日本語",
 }
 ENGLISH_NAMES = {
-    "fr": "French", "en": "English", "es": "Spanish", "it": "Italian", "de": "German",
-    "pt": "Portuguese", "nl": "Dutch", "ca": "Catalan", "oc": "Occitan", "br": "Breton",
-    "la": "Latin", "pl": "Polish", "ru": "Russian", "el": "Greek", "ar": "Arabic",
-    "he": "Hebrew", "zh": "Chinese", "ja": "Japanese",
+    "ar": "Arabic", "az": "Azerbaijani", "bg": "Bulgarian", "bn": "Bengali", "br": "Breton",
+    "ca": "Catalan", "cs": "Czech", "da": "Danish", "de": "German", "el": "Greek",
+    "en": "English", "eo": "Esperanto", "es": "Spanish", "et": "Estonian", "eu": "Basque",
+    "fa": "Persian", "fi": "Finnish", "fr": "French", "ga": "Irish", "gl": "Galician",
+    "he": "Hebrew", "hi": "Hindi", "hu": "Hungarian", "id": "Indonesian", "it": "Italian",
+    "ja": "Japanese", "ko": "Korean", "la": "Latin", "lt": "Lithuanian", "lv": "Latvian",
+    "ms": "Malay", "nb": "Norwegian Bokmål", "nl": "Dutch", "oc": "Occitan", "pl": "Polish",
+    "pt": "Portuguese", "ro": "Romanian", "ru": "Russian", "sk": "Slovak", "sl": "Slovenian",
+    "sq": "Albanian", "sv": "Swedish", "th": "Thai", "tl": "Tagalog", "tr": "Turkish",
+    "uk": "Ukrainian", "ur": "Urdu", "vi": "Vietnamese", "zh": "Chinese",
 }
 
 # frequent short words, enough to tell the usual European languages apart

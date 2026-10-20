@@ -90,7 +90,7 @@ echo "[2/3] Installing packages (backend/requirements.lock)"
     -q -r "$ROOT/backend/requirements.lock"
 
 echo "[3/3] Checking"
-"$PY" -c "import pymupdf, docx, numpy, sqlite3; \
+"$PY" -c "import pymupdf, docx, numpy, bs4, sqlite3; \
 c = sqlite3.connect(':memory:'); c.execute('create virtual table t using fts5(x)'); \
 print('PyMuPDF', pymupdf.__version__, '- numpy', numpy.__version__, '- SQLite', sqlite3.sqlite_version, 'with FTS5')"
 if command -v tesseract >/dev/null; then

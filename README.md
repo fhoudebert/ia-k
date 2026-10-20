@@ -120,6 +120,20 @@ translation to a Markdown or text file, with the original if you like. In
 the viewer, *Translate the page* does it for the page shown. Translation uses
 TranslateGemma when its server runs, and otherwise the chat model.
 
+*Book* translates a whole book and keeps its layout: an EPUB comes back as
+an EPUB with its italics, notes, links and table of contents; a PDF as
+Markdown (headings found from the font sizes, running heads and page numbers
+removed, paragraphs joined across pages; pages read by OCR in the library
+are taken from there); DOCX, HTML, text and Markdown files in their own
+format. Choose a library document or a file, the languages and the quality
+(1 pass, 2 with a revision, 3 with a final proofreading), and optionally a
+glossary (`term = translation` per line). Paragraphs are sent in groups so
+the model keeps the context. Everything translated is saved at once: *Pause*,
+close IA-K, shut the computer down, and *Resume* another day where it
+stopped. A *Trial* translates the first three blocks to check the result
+first. When it is done, *Save as…*, or *Add to the library* to search the
+translation. A long book takes hours, a night with two passes: the log
+shows the time left.
 **Settings.** The model servers of this computer, an API key if your servers
 need one, the OCR languages (`fra+eng`, `fra+frm` for Middle French…), the
 library folder.
@@ -172,25 +186,24 @@ Done:
 8. Translation tab with [TranslateGemma](https://huggingface.co/google/translategemma-12b-it):
    a text, a page or a whole document of the library, kept and exportable;
    launchers that start the servers of a use and IA-K together
+9. Translation of whole books (EPUB, PDF, DOCX, HTML, TXT, Markdown) as in
+   [truchement](https://github.com/fhoudebert/transcribe): paragraph groups
+   sized to the server's context, revision passes, layout, notes and table
+   of contents kept, glossary, resumable after a pause or a shutdown
 
 Next:
 
-9. **Translation of long texts** (EPUB, PDF, TXT) as in
-   [truchement](https://github.com/fhoudebert/transcribe): split by paragraph
-   groups sized to the server's context, revision passes, layout, notes and
-   table of contents kept, resumable after a pause or a shutdown.
+10. **[Qwen3-VL-8B](https://huggingface.co/lmstudio-community/Qwen3-VL-8B-Instruct-GGUF)
+    as dedicated vision model** (`serveurs-vl.bat`, with EmbeddingGemma):
+    transcription of difficult scans and tables to correct or replace
+    Tesseract's text, page by page or for a whole document.
 
 Later:
 
 - **macOS**: an `ia-k-mac` zip downloadable from the *Actions* tab
   (*Artifacts*) like the Windows and Linux ones, built by CI on a macOS
   runner, with a `setup_python` for macOS.
-- `serveurs-vl.bat` (Qwen3-VL-8B for page reading, with EmbeddingGemma) and
-  other launchers by use, as needed.
-
-- [Qwen3-VL-8B](https://huggingface.co/lmstudio-community/Qwen3-VL-8B-Instruct-GGUF)
-  as dedicated vision model: transcription of difficult scans and tables to
-  correct or replace Tesseract's text, page by page or for a whole document.
+- Other launchers by use, as needed.
 - Export of answers, summaries and comparisons (Markdown, with their sources).
 - Collections (named groups of documents) to limit search and questions.
 - Watched folders: documents added to a folder imported by themselves.

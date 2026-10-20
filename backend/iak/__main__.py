@@ -16,6 +16,8 @@
     python -m iak translate ID --to en    translate a document page by page (kept),
                                           or --text "..." / --file F.txt; --out FILE
                                           writes the translated document
+    python -m iak book FILE|--doc ID --to fr  translate a whole book, layout kept
+                                          (EPUB, PDF, TXT, MD, HTML, DOCX); resumable
     python -m iak serve [--port N]        local API for the desktop interface
     python -m iak edit UNIT_ID FILE       replace a page's text (OCR correction)
     python -m iak reindex ID [--extract]  rebuild passages, or extract again
@@ -115,6 +117,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--refresh", action="store_true", help="ignore stored translations")
     p.add_argument("--out", type=Path, help="write the translated document (.md or .txt)")
     p.add_argument("--bilingual", action="store_true", help="--out with the original text")
+    p = sub.add_parser("book")
+    p.add_argument("file", type=Path, nargs="?", help="EPUB, PDF, TXT, MD, HTML or DOCX")
+    p.add_argument("--doc", type=int, help="a library document instead of a file")
+    p.add_argument("--to", required=True, help="target language code")
+    p.add_argument("--from", dest="src", default="auto", help="source language (default: detected)")
+    p.add_argument("--passes", type=int, choices=(1, 2, 3), default=2,
+                   help="1 translation, 2 + revision (default), 3 + final proofreading")
+    p.add_argument("--glossary", type=Path, help="text file of 'term = translation' lines")
+    p.add_argument("--limit", type=int, default=0, help="trial: only the first N units")
+    p.add_argument("--fresh", action="store_true", help="forget earlier results")
+    p.add_argument("-o", "--out", type=Path, help="copy the translated book here")
     p = sub.add_parser("serve")
     p.add_argument("--port", type=int, default=int(os.environ.get("IAK_PORT", "0")),
                    help="port on 127.0.0.1 (default: a free one, announced on stdout)")
@@ -376,6 +389,48 @@ def main(argv: list[str] | None = None) -> int:
             except (translate.TranslateError, servers.ServerError, KeyError) as exc:
                 _out(f"\n{exc}")
                 return 1
+            return 0
+
+        if args.cmd == "book":
+            from . import api, book, translate
+            try:
+                if args.doc is not None:
+                    info = api._book_source(lib, args.doc)
+                elif args.file:
+                    info = api._file_source(str(args.file))
+                else:
+                    _out("give a FILE or --doc ID")
+                    return 1
+            except api.ApiError as exc:
+                _out(str(exc))
+                return 1
+            src = args.src
+            if src == "auto" and info.get("doc_language") in translate.ENGLISH_NAMES:
+                src = info["doc_language"]
+            info.pop("doc_language", None)
+            glossary = args.glossary.read_text(encoding="utf-8-sig") if args.glossary else ""
+            job = book.prepare(lib.folder, {**info, "src": src, "tgt": args.to,
+                                            "passes": args.passes, "glossary": glossary,
+                                            "limit": args.limit, "fresh": args.fresh})
+            job.echo = _out
+            try:
+                tr = translate.translator_for(host, host.api_key)
+                status = book.run_job(job, tr, lambda: False)
+            except (book.BookError, translate.TranslateError, servers.ServerError) as exc:
+                job.save(status="error", error=str(exc))
+                _out(f"stopped: {exc}  (what is translated is kept: run again to resume)")
+                return 1
+            except KeyboardInterrupt:
+                job.save(status="interrupted")
+                _out("interrupted: run the same command again to resume")
+                return 130
+            job.save(status=status)
+            if args.out and job.output:
+                import shutil
+                shutil.copyfile(job.output, args.out)
+                _out(f"written: {args.out}")
+            else:
+                _out(f"translated book: {job.output}")
             return 0
 
         if args.cmd == "analyses":

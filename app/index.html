@@ -118,6 +118,8 @@
             <span data-i18n="tr.mode.text"></span></label>
           <label><input type="radio" name="tr-mode" value="doc">
             <span data-i18n="tr.mode.doc"></span></label>
+          <label><input type="radio" name="tr-mode" value="book">
+            <span data-i18n="tr.mode.book"></span></label>
         </div>
         <select id="tr-src" data-i18n-title="tr.src"></select>
         <button type="button" class="link" id="tr-swap" data-i18n-title="tr.swap">⇄</button>
@@ -155,6 +157,36 @@
         </div>
         <p class="muted" id="tr-doc-info"></p>
         <ol id="tr-units" class="tr-units"></ol>
+      </div>
+      <!-- a whole book, layout kept -->
+      <div id="tr-book-mode" hidden>
+        <section class="panel book-new">
+          <p class="muted" data-i18n="book.intro"></p>
+          <div class="row">
+            <select id="book-doc"></select>
+            <button type="button" id="book-file" data-i18n="book.file"></button>
+            <span id="book-file-name" class="muted"></span>
+          </div>
+          <div class="row">
+            <label class="check"><span data-i18n="book.passes"></span>
+              <select id="book-passes">
+                <option value="1" data-i18n="book.passes1"></option>
+                <option value="2" data-i18n="book.passes2" selected></option>
+                <option value="3" data-i18n="book.passes3"></option>
+              </select></label>
+            <label class="check"><input type="checkbox" id="book-trial">
+              <span data-i18n="book.trial"></span></label>
+            <span class="spacer"></span>
+            <button class="primary" id="book-start" data-i18n="book.start"></button>
+          </div>
+          <details>
+            <summary data-i18n="book.glossary"></summary>
+            <textarea id="book-glossary" rows="4" spellcheck="false"
+                      data-i18n-placeholder="book.glossary_hint"></textarea>
+          </details>
+        </section>
+        <p class="muted" id="book-empty" data-i18n="book.none"></p>
+        <ul id="book-list" class="book-list"></ul>
       </div>
     </main>
 

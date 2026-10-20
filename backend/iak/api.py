@@ -22,6 +22,7 @@ import mimetypes
 import queue
 import re
 import secrets
+import shutil
 import sys
 import threading
 import time
@@ -31,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, analyze, answer, db, embed, ocr, search, servers, translate
+from . import __version__, analyze, answer, book, db, embed, ocr, search, servers, translate
 from .library import Library
 
 CONTENT_TYPES = {
@@ -96,6 +97,9 @@ class App:
         self._lock = threading.Lock()
         self._embedder = None
         threading.Thread(target=self._worker, daemon=True, name="iak-jobs").start()
+        # whole books: their own thread, they take hours
+        self.books = book.Books(self.folder, lambda: translate.translator_for(
+            self.host, self.host.api_key))
 
     def library(self) -> Library:
         return Library(self.folder, self.ocr_langs, self.tesseract, vectors=self.vectors)
@@ -301,6 +305,48 @@ def _filters(q: dict) -> search.Filters:
                           folder=(q.get("folder") or [None])[0])
 
 
+def _book_source(lib: Library, doc_id: int) -> dict:
+    """What to translate for a library document: its original file, with the
+    pages read by OCR or corrected taken from the library; the library's text
+    alone when the original is gone or is an image."""
+    d = lib.document(doc_id)
+    if d is None:
+        raise ApiError(404, "no such document")
+    units = lib.units(doc_id)
+    original = lib.original_path(doc_id)
+    page_texts, kind = {}, d["kind"]
+    if kind == "pdf" and original.exists():
+        for u in units:
+            page = json.loads(u["locator"] or "{}").get("page")
+            if page and (u["source"] == "ocr" or u["edited"]):
+                page_texts[str(page)] = u["text"]
+    elif kind in ("epub", "html", "docx", "txt", "md") and original.exists():
+        if any(u["edited"] for u in units):
+            # corrections in the library would be lost from the original file:
+            # translate the library's text (layout simplified to Markdown)
+            kind = "units"
+    else:
+        kind = "units"
+    if kind == "units":
+        page_texts = {str(i): u["text"] for i, u in enumerate(units, 1)}
+    meta = json.loads(d["meta"] or "{}")
+    return {"name": d["name"], "kind": kind,
+            "source": str(original) if kind != "units" else None,
+            "sha256": d["sha256"], "page_texts": page_texts, "pages": len(units),
+            "doc_id": doc_id, "doc_language": (meta.get("language") or "").split("-")[0]}
+
+
+def _file_source(path: str) -> dict:
+    p = Path(path)
+    if not p.is_file():
+        raise ApiError(404, f"no such file: {path}")
+    kind = book.FORMATS.get(p.suffix.lower())
+    if kind is None:
+        raise ApiError(400, "books are EPUB, PDF, TXT, Markdown, HTML or DOCX files")
+    return {"name": p.name, "kind": kind, "source": str(p.resolve()),
+            "sha256": book.file_sha256(p), "page_texts": {}, "pages": 0, "doc_id": None}
+
+
 ROUTES: list[tuple[str, re.Pattern, str]] = []
 
 
@@ -344,14 +390,30 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, status: int, obj) -> None:
         self._send(status, json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8"))
 
-    def _body(self) -> dict:
-        n = int(self.headers.get("Content-Length") or 0)
+    def _read_body(self) -> None:
+        """Read the request body before anything else, even when the route
+        ignores it or the request is refused: left in the socket, it would be
+        taken for the start of the next request on a kept-alive connection."""
+        self._raw = b""
+        self._too_large = False
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = 0
         if n > MAX_BODY:
+            self._too_large = True
+            self.close_connection = True       # the rest is not read
+        elif n > 0:
+            self._raw = self.rfile.read(n)
+
+    def _body(self) -> dict:
+        if getattr(self, "_too_large", False):
             raise ApiError(413, "request too large")
-        if not n:
+        raw = getattr(self, "_raw", b"")
+        if not raw:
             return {}
         try:
-            data = json.loads(self.rfile.read(n).decode("utf-8"))
+            data = json.loads(raw.decode("utf-8"))
         except ValueError:
             raise ApiError(400, "body is not valid JSON")
         if not isinstance(data, dict):
@@ -382,6 +444,7 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self):
         url = urlparse(self.path)
         try:
+            self._read_body()
             self._check()
             for method, pattern, name in ROUTES:
                 m = pattern.match(url.path)
@@ -393,7 +456,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(404, "not found")
         except ApiError as exc:
             self._json(exc.status, {"error": str(exc)})
-        except (analyze.AnalysisError, embed.EmbeddingMismatch) as exc:
+        except (analyze.AnalysisError, embed.EmbeddingMismatch, book.BookError) as exc:
             self._json(409, {"error": str(exc)})
         except servers.ServerError as exc:
             self._json(502, {"error": str(exc)})
@@ -421,7 +484,8 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {"library": str(self.app.folder), "lang": self.app.lang,
                          **counts, "embedding_model": fp["model"] if fp else None,
                          "busy": sum(j.status in ("queued", "running")
-                                     for j in self.app.jobs.values())})
+                                     for j in self.app.jobs.values()),
+                         "books_busy": self.app.books.busy()})
 
     @route("GET", "/api/servers")
     def servers_info(self, query):
@@ -695,6 +759,96 @@ class Handler(BaseHTTPRequestHandler):
             except OSError as exc:
                 raise ApiError(400, f"cannot write {path}: {exc}")
         self._json(200, {"path": str(out)})
+
+    # -------------------------------------------------- books
+    @route("GET", "/api/books")
+    def books(self, query):
+        self._json(200, self.app.books.list())
+
+    @route("POST", "/api/books")
+    def book_start(self, query):
+        body = self._body()
+        _, tgt = _languages(body)
+        passes = int(body.get("passes") or 2)
+        if passes not in (1, 2, 3):
+            raise ApiError(400, "passes is 1, 2 or 3")
+        glossary = str(body.get("glossary") or "")
+        if len(glossary) > 50_000:
+            raise ApiError(400, "glossary too long")
+        if body.get("doc_id") is not None:
+            with self.app.library() as lib:
+                src_info = _book_source(lib, int(body["doc_id"]))
+        elif body.get("path"):
+            src_info = _file_source(str(body["path"]))
+        else:
+            raise ApiError(400, "give doc_id or path")
+        src = (body.get("src") or "auto").strip()
+        if src == "auto" and src_info.get("doc_language") in translate.ENGLISH_NAMES:
+            src = src_info["doc_language"]
+        src_info.pop("doc_language", None)
+        job = self.app.books.create({**src_info, "src": src, "tgt": tgt, "passes": passes,
+                                     "glossary": glossary,
+                                     "limit": max(0, int(body.get("limit") or 0)),
+                                     "fresh": bool(body.get("fresh"))})
+        self._json(202, job.public())
+
+    def _book(self, book_id):
+        try:
+            return self.app.books.get(book_id)
+        except KeyError:
+            raise ApiError(404, "no such book")
+
+    @route("GET", r"/api/books/([\w.-]+)")
+    def book_info(self, book_id, query):
+        job = self._book(book_id)
+        n = int((query.get("log") or ["40"])[0])
+        self._json(200, {**job.public(), "log": job.log_tail(min(max(n, 0), 500))})
+
+    @route("POST", r"/api/books/([\w.-]+)/pause")
+    def book_pause(self, book_id, query):
+        self._json(200, self.app.books.pause(self._book(book_id).id).public())
+
+    @route("POST", r"/api/books/([\w.-]+)/resume")
+    def book_resume(self, book_id, query):
+        body = self._body()
+        job = self._book(book_id)
+        if job.data.get("doc_id") is not None:
+            # pages corrected since are translated from their new text
+            with self.app.library() as lib:
+                if lib.document(job.data["doc_id"]) is not None:
+                    info = _book_source(lib, job.data["doc_id"])
+                    job.save(page_texts=info["page_texts"], kind=info["kind"],
+                             source=info["source"], pages=info["pages"])
+        self._json(200, self.app.books.resume(job.id, bool(body.get("fresh"))).public())
+
+    @route("DELETE", r"/api/books/([\w.-]+)")
+    def book_delete(self, book_id, query):
+        self.app.books.delete(self._book(book_id).id)
+        self._json(200, {"deleted": book_id})
+
+    @route("POST", r"/api/books/([\w.-]+)/save")
+    def book_save(self, book_id, query):
+        body = self._body()
+        job = self._book(book_id)
+        src = job.partial if body.get("partial") else job.output
+        if not src or not src.exists():
+            raise ApiError(409, "nothing to save yet")
+        dest = Path(str(body.get("path") or ""))
+        if not body.get("path"):
+            raise ApiError(400, "choose where to save the file")
+        try:
+            shutil.copyfile(src, dest)
+        except OSError as exc:
+            raise ApiError(400, f"cannot write {dest}: {exc}")
+        self._json(200, {"path": str(dest)})
+
+    @route("POST", r"/api/books/([\w.-]+)/import")
+    def book_import(self, book_id, query):
+        job = self._book(book_id)
+        if not (job.output and job.output.exists() and job.data.get("status") == "done"):
+            raise ApiError(409, "the translation is not finished")
+        j = self.app.submit("import", {"paths": [str(job.output)], "reference": False})
+        self._json(202, {"job": j.id})
 
     @route("POST", "/api/embed")
     def embed_(self, query):
