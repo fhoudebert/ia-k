@@ -21,3 +21,11 @@ rem set "GEMMA26_MODEL=E:\models\gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
 rem set "GEMMA26_MMPROJ=E:\models\mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf"
 rem set "QWENVL_MODEL=E:\models\Qwen3-VL-8B-Instruct-Q4_K_M.gguf"
 rem set "QWENVL_MMPROJ=E:\models\mmproj-Qwen3-VL-8B-Instruct-F16.gguf"
+
+rem --- translation server (TranslateGemma) ---
+rem set "TRANSLATE_PORT=8083"
+rem set "TRANSLATE_CTX=8192"
+rem set "TRANSLATE_MODEL=E:\models\translategemma-12b-it-q4_k_m.gguf"
+
+rem --- CPU threads of every server (empty = llama.cpp's choice) ---
+rem set "THREADS=8"

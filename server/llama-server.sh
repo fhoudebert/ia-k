@@ -7,6 +7,7 @@
 #    gemma26  Gemma 4 26B-A4B QAT + vision          (port CHAT_PORT)
 #    qwenvl   optional dedicated vision model       (port VISION_PORT)
 #    embed    EmbeddingGemma 300M, embeddings only  (port EMBED_PORT)
+#    translate  TranslateGemma 12B, translation     (port TRANSLATE_PORT)
 #
 #  Personal settings go in server/local.sh (copy local.example.sh); any
 #  variable can also be given in the environment: CTX=8192 server/llama-server.sh
@@ -17,7 +18,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 
 # shellcheck source=/dev/null
-[ -f "$HERE/local.sh" ] && . "$HERE/local.sh"
+if [ -n "${IAK_SERVER_SETTINGS:-}" ]; then
+    [ -f "$IAK_SERVER_SETTINGS" ] || { echo "[ia-k] settings file not found: $IAK_SERVER_SETTINGS" >&2; exit 1; }
+    . "$IAK_SERVER_SETTINGS"
+elif [ -f "$HERE/local.sh" ]; then
+    . "$HERE/local.sh"
+fi
 
 MODELS_DIR="${MODELS_DIR:-$HOME/ia/models}"
 LLAMA_DIR="${LLAMA_DIR:-$ROOT/build/llama}"
@@ -26,6 +32,9 @@ CHAT_PORT="${CHAT_PORT:-8080}"
 EMBED_PORT="${EMBED_PORT:-8081}"
 EMBED_NGL="${EMBED_NGL:-0}"     # embeddings on the CPU (99 = on the GPU)
 VISION_PORT="${VISION_PORT:-8082}"
+TRANSLATE_PORT="${TRANSLATE_PORT:-8083}"
+TRANSLATE_CTX="${TRANSLATE_CTX:-8192}"
+THREADS="${THREADS:-}"         # CPU threads (empty = llama.cpp's choice)
 CTX="${CTX:-16384}"          # chat context (prompt + answer)
 NGL="${NGL:-99}"             # layers on the iGPU (99 = all)
 N_CPU_MOE="${N_CPU_MOE:-}"   # MoE: experts of N layers on the CPU (gemma26 default 99, 0 = none)
@@ -38,6 +47,9 @@ GEMMA12_MODEL="${GEMMA12_MODEL:-$MODELS_DIR/lmstudio-community/gemma-4-12B-it-QA
 GEMMA26_MODEL="${GEMMA26_MODEL:-$MODELS_DIR/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf}"
 QWENVL_MODEL="${QWENVL_MODEL:-$MODELS_DIR/lmstudio-community/Qwen3-VL-8B-Instruct-GGUF/Qwen3-VL-8B-Instruct-Q4_K_M.gguf}"
 EMBED_MODEL="${EMBED_MODEL:-$MODELS_DIR/lmstudio-community/embeddinggemma-300m-qat-GGUF/embeddinggemma-300m-qat-Q4_0.gguf}"
+TRANSLATE_MODEL="${TRANSLATE_MODEL:-$MODELS_DIR/NikolayKozloff/translategemma-12b-it-Q4_K_M-GGUF/translategemma-12b-it-q4_k_m.gguf}"
+THOPT=()
+[ -n "$THREADS" ] && THOPT=(-t "$THREADS")
 
 PROFILE="${1:-gemma12}"
 [ $# -gt 0 ] && shift
@@ -74,10 +86,20 @@ case "$PROFILE" in
         # 4 slots of 2048 tokens (the model's maximum input)
         exec "$SERVER" -m "$EMBED_MODEL" --alias embeddinggemma --embeddings \
             --host "$HOST" --port "$EMBED_PORT" -c 8192 -np 4 -b 2048 -ub 2048 \
-            -ngl "$EMBED_NGL" "${EXTRA[@]}"
+            -ngl "$EMBED_NGL" "${THOPT[@]}" "${EXTRA[@]}"
+        ;;
+    translate)
+        need_file "$TRANSLATE_MODEL"
+        echo "[ia-k] translation on http://$HOST:$TRANSLATE_PORT/v1  (alias translategemma)"
+        echo "       model  : $TRANSLATE_MODEL"
+        KVT=()
+        [ "$KV_Q8" = "1" ] && KVT=(-ctk q8_0 -ctv q8_0)
+        exec "$SERVER" -m "$TRANSLATE_MODEL" --alias translategemma --host "$HOST" \
+            --port "$TRANSLATE_PORT" -c "$TRANSLATE_CTX" -ngl "$NGL" -np 1 --jinja \
+            "${KVT[@]}" "${THOPT[@]}" "${EXTRA[@]}"
         ;;
     *)
-        echo "[ia-k] unknown profile: $PROFILE (expected gemma12 | gemma26 | qwenvl | embed)" >&2
+        echo "[ia-k] unknown profile: $PROFILE (expected gemma12 | gemma26 | qwenvl | embed | translate)" >&2
         exit 1 ;;
 esac
 
@@ -106,4 +128,4 @@ echo "       model  : $MODEL"
 [ "$VISION" != "0" ] && echo "       mmproj : $MMPROJ"
 echo "       ctx=$CTX ngl=$NGL kv_q8=$KV_Q8 n_cpu_moe=${N_CPU_MOE:-} mmproj_cpu=${MMPROJ_CPU:-0} ubatch=${UBATCH:-}"
 exec "$SERVER" "${ARGS[@]}" --alias "$ALIAS" --host "$HOST" --port "$PORT" \
-    -c "$CTX" -ngl "$NGL" -np 1 --jinja ${UBATCH:+-ub "$UBATCH"} "${EXTRA[@]}"
+    -c "$CTX" -ngl "$NGL" -np 1 --jinja ${UBATCH:+-ub "$UBATCH"} "${THOPT[@]}" "${EXTRA[@]}"

@@ -128,7 +128,7 @@ const kindLabel = (k) => ({ pdf: "PDF", image: "Image", docx: "DOCX", txt: "TXT"
 
 function show(view) {
   state.view = view;
-  for (const name of ["library", "search", "ask", "viewer", "settings"]) {
+  for (const name of ["library", "search", "ask", "translate", "viewer", "settings"]) {
     $(`#view-${name}`).hidden = name !== view;
   }
   document.querySelectorAll(".tabs button").forEach((b) =>
@@ -136,6 +136,7 @@ function show(view) {
   if (view === "search") $("#search-input").focus();
   if (view === "ask") $("#ask-input").focus();
   if (view === "settings") loadSettings().catch(fail);
+  if (view === "translate") enterTranslate().catch(fail);
 }
 
 // ------------------------------------------------------------------ jobs
@@ -202,6 +203,7 @@ async function loadLibrary() {
   state.documents = await get("/api/documents");
   renderLibrary();
   renderFilters();
+  renderTranslateDocs();
 }
 
 /** Type and document lists of the search and question filters. */
@@ -617,6 +619,227 @@ function answerMessage(res) {
   return msg;
 }
 
+// ------------------------------------------------------------------ translation
+
+const tr = { langs: [], docId: null, rows: [], busy: false };
+
+function store(key, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(key);
+    localStorage.setItem(key, value);
+  } catch (_) { /* storage unavailable */ }
+  return null;
+}
+
+const trMode = () => document.querySelector('input[name="tr-mode"]:checked').value;
+
+async function enterTranslate() {
+  if (!tr.langs.length) {
+    tr.langs = await get("/api/languages");
+    const opts = () => tr.langs.map((l) => el("option", { value: l.code }, `${l.name} (${l.code})`));
+    $("#tr-src").replaceChildren(el("option", { value: "auto" }, t("tr.auto")), ...opts());
+    $("#tr-tgt").replaceChildren(...opts());
+    $("#tr-src").value = store("iak.tr.src") || "auto";
+    $("#tr-tgt").value = store("iak.tr.tgt") || getLang();
+  }
+  $("#tr-src").options[0].textContent = t("tr.auto");
+  renderTranslateDocs();
+  renderEngine();
+  if (trMode() === "doc") await loadTranslations();
+  else $("#tr-input").focus();
+}
+
+/** Which model translates: the translation server, or the chat server as a fallback. */
+function renderEngine() {
+  const info = state.servers || {};
+  const tsrv = info.translate || {};
+  const chat = info.chat || {};
+  const name = (s) => (s.model || "").split(/[\\/]/).pop().replace(/\.gguf$/i, "");
+  let text = t("tr.engine.none");
+  if (tsrv.url && tsrv.ok) text = t("tr.engine.translate", { model: name(tsrv) });
+  else if (chat.ok) text = t(tsrv.url ? "tr.engine.fallback" : "tr.engine.chat", { model: name(chat) });
+  $("#tr-engine").textContent = text;
+}
+
+function renderTranslateDocs() {
+  const sel = $("#tr-doc");
+  if (!sel) return;
+  const keep = tr.docId ? String(tr.docId) : sel.value;
+  const docs = [...state.documents].sort((a, b) => a.name.localeCompare(b.name, getLang()));
+  sel.replaceChildren(el("option", { value: "" }, t("tr.choose_doc")),
+    ...docs.map((d) => el("option", { value: String(d.id) }, d.name)));
+  sel.value = docs.some((d) => String(d.id) === keep) ? keep : "";
+  tr.docId = sel.value ? Number(sel.value) : null;
+}
+
+function setMode(mode) {
+  document.querySelector(`input[name="tr-mode"][value="${mode}"]`).checked = true;
+  $("#tr-text-mode").hidden = mode !== "text";
+  $("#tr-doc-mode").hidden = mode !== "doc";
+  if (mode === "doc") loadTranslations().catch(fail);
+}
+
+function trLanguages() {
+  const src = $("#tr-src").value;
+  const tgt = $("#tr-tgt").value;
+  store("iak.tr.src", src);
+  store("iak.tr.tgt", tgt);
+  return { src, tgt };
+}
+
+/** Wait for a translation job, showing its progress in `info`. */
+async function waitTranslation(job, info) {
+  const timer = setInterval(() => {
+    const j = state.jobs.find((x) => x.id === job);
+    const p = (j && j.progress) || {};
+    if (j && j.status === "queued") info.textContent = t("tr.queued");
+    else if (p.total > 1) info.textContent = t("tr.progress", { done: p.done, total: p.total });
+  }, 500);
+  try { return await waitJob(job); } finally { clearInterval(timer); }
+}
+
+function langName(code) {
+  const l = tr.langs.find((x) => x.code === code);
+  return l ? l.name : code;
+}
+
+async function translateText() {
+  const text = $("#tr-input").value;
+  if (!text.trim() || tr.busy) { $("#tr-input").focus(); return; }
+  const { src, tgt } = trLanguages();
+  const info = $("#tr-info");
+  tr.busy = true;
+  $("#tr-run").disabled = true;
+  info.textContent = t("tr.running");
+  try {
+    const { job } = await post("/api/translate", { text, src, tgt });
+    const done = await waitTranslation(job, info);
+    if (done.status === "error") { info.textContent = ""; fail(trError(done.error)); return; }
+    const r = done.result;
+    $("#tr-output").value = r.text;
+    tr.detected = r.src;
+    info.textContent = r.src === r.tgt ? t("tr.same", { lang: langName(r.src) })
+      : t("tr.done", { src: langName(r.src), model: r.model, seconds: r.seconds });
+  } catch (e) { info.textContent = ""; fail(e); }
+  finally { tr.busy = false; $("#tr-run").disabled = false; }
+}
+
+function trError(msg) {
+  if (/could not be detected/.test(msg)) return t("tr.detect_failed");
+  if (/no translation or chat server/.test(msg)) return t("tr.no_server");
+  return msg;
+}
+
+async function loadTranslations() {
+  const list = $("#tr-units");
+  const info = $("#tr-doc-info");
+  tr.docId = $("#tr-doc").value ? Number($("#tr-doc").value) : null;
+  if (!tr.docId) { list.replaceChildren(); info.textContent = t("tr.choose_doc_hint"); return; }
+  const { tgt } = trLanguages();
+  const data = await get(`/api/documents/${tr.docId}/translations?tgt=${encodeURIComponent(tgt)}`);
+  // the document or the language changed meanwhile: a newer call shows it
+  if (Number($("#tr-doc").value) !== tr.docId || $("#tr-tgt").value !== tgt) return;
+  tr.rows = data.units;
+  tr.detected = data.src;
+  const done = data.units.filter((u) => u.text !== null).length;
+  const stale = data.units.filter((u) => u.stale).length;
+  info.textContent = [
+    t("tr.doc_state", { done, total: data.units.length, tgt: langName(tgt) }),
+    stale ? t("tr.doc_stale", { n: stale }) : null,
+    data.src ? t("tr.doc_lang", { lang: langName(data.src) }) : null,
+    data.languages.filter((l) => l !== tgt).length
+      ? t("tr.doc_other", { langs: data.languages.filter((l) => l !== tgt).map(langName).join(", ") }) : null,
+  ].filter(Boolean).join(" · ");
+  list.replaceChildren(...data.units.map(unitRow));
+}
+
+function unitRow(u) {
+  const head = el("div", { class: "tr-head" }, el("strong", {}, u.label));
+  if (u.stale) head.append(el("span", { class: "badge warn" }, t("tr.stale")));
+  const again = u.text === null ? t("tr.unit_run") : t("tr.unit_again");
+  head.append(el("span", { class: "spacer" }),
+    el("button", { class: "link", onclick: () => translateUnit(u.unit_id, u.text !== null && !u.stale) }, again),
+    el("button", { class: "link", onclick: () => openDoc(tr.docId, u.unit_id) }, t("tr.open")));
+  const out = u.text === null ? el("div", { class: "none" }, t("tr.not_yet"))
+    : el("div", {}, u.text);
+  return el("li", { dataset: { unit: u.unit_id } }, head,
+    el("div", { class: "tr-pair" }, el("div", { class: "src" }, u.source), out));
+}
+
+async function translateUnit(unitId, refresh) {
+  const { src, tgt } = trLanguages();
+  const li = document.querySelector(`#tr-units li[data-unit="${unitId}"]`);
+  if (li) li.querySelector(".tr-pair").lastChild.replaceWith(el("div", { class: "thinking" }, t("tr.running")));
+  try {
+    const { job } = await post("/api/translate/document", { unit_id: unitId, src, tgt, refresh });
+    const done = await waitJob(job);
+    if (done.status === "error") fail(trError(done.error));
+    if (trMode() === "doc" && tr.docId) await loadTranslations();
+    return done;
+  } catch (e) { fail(e); return null; }
+}
+
+async function translateDocument() {
+  if (!tr.docId || tr.busy) { $("#tr-doc").focus(); return; }
+  const { src, tgt } = trLanguages();
+  const info = $("#tr-doc-info");
+  const docId = tr.docId;
+  tr.busy = true;
+  $("#tr-doc-run").disabled = true;
+  info.textContent = t("tr.running");
+  try {
+    const { job } = await post("/api/translate/document", {
+      doc_id: docId, src, tgt, refresh: $("#tr-refresh").checked });
+    const done = await waitTranslation(job, info);
+    if (done.status === "error") fail(trError(done.error));
+    else toast(t("tr.doc_done", { n: done.result.translated, cached: done.result.cached,
+                                  seconds: done.result.seconds }));
+  } catch (e) { fail(e); }
+  finally {
+    tr.busy = false;
+    $("#tr-doc-run").disabled = false;
+    $("#tr-refresh").checked = false;
+    if (tr.docId === docId) loadTranslations().catch(fail);
+  }
+}
+
+async function exportTranslation() {
+  if (!tr.docId) return;
+  const { tgt } = trLanguages();
+  const format = $("#tr-format").value;
+  const doc = state.documents.find((d) => d.id === tr.docId);
+  const base = (doc ? doc.name : "document").replace(/\.[^.]+$/, "");
+  if (!TAURI) { toast(t("tr.export_desktop"), true); return; }
+  const path = await TAURI.dialog.save({
+    defaultPath: `${base}.${tgt}.${format}`,
+    filters: [{ name: format === "md" ? "Markdown" : "Text", extensions: [format] }] });
+  if (!path) return;
+  try {
+    const r = await post(`/api/documents/${tr.docId}/translations/export`, {
+      tgt, path, format, bilingual: $("#tr-bilingual").checked });
+    toast(t("tr.exported", { path: r.path }));
+  } catch (e) { fail(e); }
+}
+
+/** From the viewer: the translation of the page shown, in the translation tab. */
+async function translateFromViewer() {
+  if (!state.doc || !state.unit) return;
+  const unitId = state.unit.id;
+  tr.docId = state.doc.id;
+  show("translate");
+  setMode("doc");
+  $("#tr-doc").value = String(tr.docId);
+  await loadTranslations();
+  const row = tr.rows.find((u) => u.unit_id === unitId);
+  const li = document.querySelector(`#tr-units li[data-unit="${unitId}"]`);
+  if (li) li.scrollIntoView({ block: "start" });
+  if (row && (row.text === null || row.stale)) {
+    await translateUnit(unitId, false);
+    const again = document.querySelector(`#tr-units li[data-unit="${unitId}"]`);
+    if (again) again.scrollIntoView({ block: "start" });
+  }
+}
+
 // ------------------------------------------------------------------ settings
 
 async function loadSettings() {
@@ -628,6 +851,7 @@ async function loadSettings() {
   f.chat.value = cfg.host.chat;
   f.embedding.value = cfg.host.embedding;
   f.vision.value = cfg.host.vision;
+  f.translate.value = cfg.host.translate || "";
   f.api_key.value = "";
   f.api_key.placeholder = cfg.host.api_key_set ? t("settings.api_key_set") : "";
   $("#api-key-clear").hidden = !cfg.host.api_key_set;
@@ -659,7 +883,7 @@ async function saveServers(ev, clearKey = false) {
   if (ev) ev.preventDefault();
   const f = $("#servers-form");
   const servers = { chat: f.chat.value.trim(), embedding: f.embedding.value.trim(),
-                    vision: f.vision.value.trim() };
+                    vision: f.vision.value.trim(), translate: f.translate.value.trim() };
   if (clearKey) servers.api_key = "";
   else if (f.api_key.value) servers.api_key = f.api_key.value;
   try {
@@ -700,14 +924,20 @@ async function chooseLibrary(useDefault) {
 
 // ------------------------------------------------------------------ servers
 
+const OPTIONAL_DEFAULTS = { vision: "http://127.0.0.1:8082/v1", translate: "http://127.0.0.1:8083/v1" };
+
 async function loadServers() {
   try {
     const info = await get("/api/servers");
     const pills = [];
-    for (const role of ["chat", "embedding", "vision"]) {
+    state.servers = info;
+    for (const role of ["chat", "embedding", "vision", "translate"]) {
       const s = info[role] || {};
       const name = t(`server.${role}`);
-      if (!s.url) { if (role !== "vision") pills.push(el("span", { class: "pill none" }, t("server.none", { role: name }))); continue; }
+      // a vision or translation server at its default port that does not
+      // answer is simply not started: the chat server stands in, no red pill
+      if (s.url && !s.ok && OPTIONAL_DEFAULTS[role] === s.url) continue;
+      if (!s.url) { if (role === "chat" || role === "embedding") pills.push(el("span", { class: "pill none" }, t("server.none", { role: name }))); continue; }
       const model = (s.model || "").split(/[\\/]/).pop().replace(/\.gguf$/i, "");
       pills.push(el("span", { class: `pill ${s.ok ? "ok" : "ko"}`, title: s.url + (s.error ? `\n${s.error}` : "") },
         s.ok ? t("server.ok", { role: name, model }) : t("server.ko", { role: name })));
@@ -715,6 +945,7 @@ async function loadServers() {
     $("#servers").replaceChildren(...pills);
     $("#remote-warning").hidden = !(info.chat && info.chat.url && info.chat.local === false);
     if (state.view === "settings") renderServerStatus();
+    if (state.view === "translate") renderEngine();
   } catch (_) { /* shown at next refresh */ }
   clearTimeout(loadServers.timer);
   loadServers.timer = setTimeout(loadServers, 30000);
@@ -779,6 +1010,7 @@ function wire() {
     loadServers();
     if (state.doc) { loadAnalyses().catch(fail); if (state.unit) selectUnit(state.unit.id); }
     if (state.view === "settings") loadSettings().catch(fail);
+    if (state.view === "translate") enterTranslate().catch(fail);
   });
   $("#boot-retry").addEventListener("click", async () => {
     await TAURI.core.invoke("restart_backend", { lang: getLang() });
@@ -805,6 +1037,39 @@ function wire() {
   $("#ocr-form").addEventListener("submit", saveOcr);
   $("#library-choose").addEventListener("click", () => chooseLibrary(false));
   $("#library-default").addEventListener("click", () => chooseLibrary(true));
+  document.querySelectorAll('input[name="tr-mode"]').forEach((r) =>
+    r.addEventListener("change", () => setMode(r.value)));
+  $("#tr-run").addEventListener("click", translateText);
+  $("#tr-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); translateText(); }
+  });
+  $("#tr-copy").addEventListener("click", () => {
+    const text = $("#tr-output").value;
+    if (text) navigator.clipboard.writeText(text).then(() => toast(t("tr.copied")), fail);
+  });
+  $("#tr-swap").addEventListener("click", () => {
+    const src = $("#tr-src").value === "auto" ? (tr.detected || "") : $("#tr-src").value;
+    if (!src) return;
+    const tgt = $("#tr-tgt").value;
+    $("#tr-src").value = tgt;
+    $("#tr-tgt").value = src;
+    if ($("#tr-output").value) {
+      $("#tr-input").value = $("#tr-output").value;
+      $("#tr-output").value = "";
+    }
+    trLanguages();
+    if (trMode() === "doc") loadTranslations().catch(fail);
+  });
+  for (const id of ["#tr-src", "#tr-tgt"]) {
+    $(id).addEventListener("change", () => {
+      trLanguages();
+      if (trMode() === "doc") loadTranslations().catch(fail);
+    });
+  }
+  $("#tr-doc").addEventListener("change", () => loadTranslations().catch(fail));
+  $("#tr-doc-run").addEventListener("click", translateDocument);
+  $("#tr-export").addEventListener("click", () => exportTranslation().catch(fail));
+  $("#viewer-translate").addEventListener("click", () => translateFromViewer().catch(fail));
   $("#look-task").addEventListener("change", () => {
     $("#look-question").hidden = $("#look-task").value !== "ask";
   });

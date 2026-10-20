@@ -6,7 +6,8 @@ IA-K is a personal, offline desktop assistant for your documents. Give it
 PDF files, scans, screenshots, EPUB, HTML, DOCX, TXT or Markdown: it reads
 them (with OCR when needed), lets you search them by words or by meaning, and
 answers questions about them with **sourced answers** that point to the
-document, the page and the passage.
+document, the page and the passage. It also translates texts and whole
+documents with TranslateGemma.
 
 - **Offline and private.** Everything runs on your computer with local
   language models; no document is sent anywhere.
@@ -46,13 +47,24 @@ architecture).
    `setup_python.bat` on Windows, `./setup_python.sh` on Linux. It puts a
    complete Python in `build\python\` without touching the computer; it can
    be run again safely.
-3. **Say where the model servers are.** Either start IA-K and fill in
-   *Settings* (chat `http://127.0.0.1:8080/v1`, meaning
-   `http://127.0.0.1:8081/v1`), or copy `config/servers.example.toml` to
+3. **Say where the model servers are.** With the usual ports (chat 8080,
+   meaning 8081, vision 8082, translation 8083) there is nothing to do.
+   Otherwise fill in *Settings*, or copy `config/servers.example.toml` to
    `config/servers.toml` and edit it. Each computer gets its own section,
    chosen by its name, so one key works on several computers.
-4. **Start the model servers** ([SERVERS.md](SERVERS.md)), then **IA-K**:
-   `ia-k.exe`, or `./ia-k` on Linux.
+4. **Start the model servers, then IA-K.** One file does both, and stops
+   the servers when IA-K is closed:
+   - `serveurs-baseConnaissance.bat` (Linux: `./serveurs-baseConnaissance.sh`):
+     Gemma 4 26B-A4B and EmbeddingGemma, for the library, search and
+     questions;
+   - `serveurs-traduction.bat` (`./serveurs-traduction.sh`): TranslateGemma
+     and EmbeddingGemma, for translation.
+
+   Their settings (where llama.cpp and the models are, memory options) are
+   those of the reference laptop, in `server/local.hx370.bat`; on another
+   computer copy it to `server/local.bat` and edit the copy
+   ([SERVERS.md](SERVERS.md#starting-them)). IA-K alone is `ia-k.exe`, or
+   `./ia-k` on Linux.
 
 The folder then looks like this:
 
@@ -63,7 +75,8 @@ ia-k/
 ├── build/python/            portable Python, one folder per system
 ├── config/servers.toml      where the model servers are, per computer
 ├── data/                    your library: database, copies of your files, backups
-├── server/                  example launchers for the model servers
+├── server/                  launchers for the model servers, their settings
+├── serveurs-*.bat  *.sh     model servers + IA-K in one go
 └── setup_python.*  iak.*    setup, and the command line (BACKEND.md)
 ```
 
@@ -97,6 +110,16 @@ until *New conversation*. When the documents do not contain the answer, IA-K
 says so instead of inventing one. Questions can be limited to a type or a
 document.
 
+**Translation.** *Text*: paste a text, choose the languages (or let IA-K
+detect the source language), *Translate*. *Library document*: choose a
+document, *Translate the document*; it is translated page by page (or
+section by section) and the translations are kept, so a long document can be
+translated in several sittings, a page re-translated on its own, and the
+pages whose text you corrected since are marked. *Export…* writes the
+translation to a Markdown or text file, with the original if you like. In
+the viewer, *Translate the page* does it for the page shown. Translation uses
+TranslateGemma when its server runs, and otherwise the chat model.
+
 **Settings.** The model servers of this computer, an API key if your servers
 need one, the OCR languages (`fra+eng`, `fra+frm` for Middle French…), the
 library folder.
@@ -107,6 +130,9 @@ Good to know:
   after about 10 to 20 seconds and is written at 15 to 19 words per second;
   an image analysis takes 15 to 30 seconds. Importing a scanned book takes
   about a second per page for OCR.
+- **One big model at a time** on a 32 GB laptop: the 26B (answers) and
+  TranslateGemma 12B (translation) do not fit in graphics memory together;
+  switch with the `serveurs-*` files.
 - **Remote servers.** If the chat server is not on this computer, a banner
   says that passages of your documents leave it.
 - **Backups.** The database is backed up in `data/backups/` before each
@@ -117,7 +143,7 @@ Good to know:
 | What you see | What to do |
 |---|---|
 | "The IA-K engine could not start" | Run `setup_python` on this system; read `data/iak-backend.log`. |
-| Chat or Meaning shown in red at the top | The model server is not running or not at that address: start it, check *Settings*. |
+| Chat, Meaning or Translation shown in red at the top | The model server is not running or not at that address: start it, check *Settings*. |
 | An error mentioning `ErrorOutOfDeviceMemory` or "graphics memory" | The model server ran out of graphics memory: see [SERVERS.md, Memory](SERVERS.md#memory). |
 | "The documents do not allow an answer" | Nothing relevant was found: rephrase, check the document is indexed, or try *Search* first. |
 | Scans give no text | Tesseract is missing or lacks the language: *Settings* lists the installed languages. |
@@ -143,17 +169,24 @@ Done:
    questions, settings
 7. Windows and Linux builds by CI, portable zip, Linux and Windows on the
    same exFAT key
+8. Translation tab with [TranslateGemma](https://huggingface.co/google/translategemma-12b-it):
+   a text, a page or a whole document of the library, kept and exportable;
+   launchers that start the servers of a use and IA-K together
 
 Next:
 
-8. **Translation tab** with [TranslateGemma](https://huggingface.co/google/translategemma-12b-it):
-   translate a passage, a page or a whole document from the library.
 9. **Translation of long texts** (EPUB, PDF, TXT) as in
    [truchement](https://github.com/fhoudebert/transcribe): split by paragraph
    groups sized to the server's context, revision passes, layout, notes and
    table of contents kept, resumable after a pause or a shutdown.
 
 Later:
+
+- **macOS**: an `ia-k-mac` zip downloadable from the *Actions* tab
+  (*Artifacts*) like the Windows and Linux ones, built by CI on a macOS
+  runner, with a `setup_python` for macOS.
+- `serveurs-vl.bat` (Qwen3-VL-8B for page reading, with EmbeddingGemma) and
+  other launchers by use, as needed.
 
 - [Qwen3-VL-8B](https://huggingface.co/lmstudio-community/Qwen3-VL-8B-Instruct-GGUF)
   as dedicated vision model: transcription of difficult scans and tables to

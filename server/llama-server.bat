@@ -7,10 +7,12 @@ rem    gemma12  Gemma 4 12B QAT + vision projector   (default, port CHAT_PORT)
 rem    gemma26  Gemma 4 26B-A4B QAT + vision          (port CHAT_PORT)
 rem    qwenvl   optional dedicated vision model       (port VISION_PORT)
 rem    embed    EmbeddingGemma 300M, embeddings only  (port EMBED_PORT)
+rem    translate  TranslateGemma 12B, translation     (port TRANSLATE_PORT)
 rem
 rem  Personal settings (model paths, ports, memory options) go in
-rem  server\local.bat : copy local.example.bat and edit it. local.bat is
-rem  ignored by git.
+rem  server\local.bat : copy local.example.bat (or local.hx370.bat, the
+rem  reference laptop) and edit it. local.bat is ignored by git.
+rem  IAK_SERVER_SETTINGS can name another settings file.
 rem
 rem  The server listens on 127.0.0.1 only. Stop it with Ctrl+C.
 rem ============================================================================
@@ -28,6 +30,11 @@ rem embeddings on the CPU by default: the model is small, and the iGPU memory
 rem is better left to the chat model (99 = on the iGPU)
 set "EMBED_NGL=0"
 set "VISION_PORT=8082"
+set "TRANSLATE_PORT=8083"
+rem context of the translation server
+set "TRANSLATE_CTX=8192"
+rem CPU threads (empty = llama.cpp's choice)
+set "THREADS="
 rem context of the chat server (prompt + answer). 16384 leaves room for
 rem ~8000 tokens of retrieved passages; lower it to save memory.
 set "CTX=16384"
@@ -50,13 +57,22 @@ rem image may use up to 1120 tokens, llama.cpp caps it to the micro-batch),
 rem else the llama.cpp default (512). Above 2048, add -b in the arguments.
 set "UBATCH="
 
+if not defined IAK_SERVER_SETTINGS goto settings_default
+if not exist "%IAK_SERVER_SETTINGS%" goto settings_missing
+call "%IAK_SERVER_SETTINGS%"
+goto settings_done
+:settings_default
 if exist "%HERE%local.bat" call "%HERE%local.bat"
+:settings_done
 
 rem --- model paths (defaults built from MODELS_DIR after local.bat) ----------
 if not defined GEMMA12_MODEL set "GEMMA12_MODEL=%MODELS_DIR%\lmstudio-community\gemma-4-12B-it-QAT-GGUF\gemma-4-12B-it-QAT-Q4_0.gguf"
 if not defined GEMMA26_MODEL set "GEMMA26_MODEL=%MODELS_DIR%\lmstudio-community\gemma-4-26B-A4B-it-QAT-GGUF\gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
 if not defined QWENVL_MODEL  set "QWENVL_MODEL=%MODELS_DIR%\lmstudio-community\Qwen3-VL-8B-Instruct-GGUF\Qwen3-VL-8B-Instruct-Q4_K_M.gguf"
 if not defined EMBED_MODEL   set "EMBED_MODEL=%MODELS_DIR%\lmstudio-community\embeddinggemma-300m-qat-GGUF\embeddinggemma-300m-qat-Q4_0.gguf"
+if not defined TRANSLATE_MODEL set "TRANSLATE_MODEL=%MODELS_DIR%\NikolayKozloff\translategemma-12b-it-Q4_K_M-GGUF\translategemma-12b-it-q4_k_m.gguf"
+set "THOPT="
+if defined THREADS set "THOPT=-t %THREADS%"
 
 rem --- arguments ---------------------------------------------------------------
 set "PROFILE=%~1"
@@ -85,8 +101,9 @@ if /i "%PROFILE%"=="gemma12" goto p_gemma12
 if /i "%PROFILE%"=="gemma26" goto p_gemma26
 if /i "%PROFILE%"=="qwenvl"  goto p_qwenvl
 if /i "%PROFILE%"=="embed"   goto p_embed
+if /i "%PROFILE%"=="translate" goto p_translate
 echo [ia-k] unknown profile: %PROFILE%
-echo        expected: gemma12 ^| gemma26 ^| qwenvl ^| embed
+echo        expected: gemma12 ^| gemma26 ^| qwenvl ^| embed ^| translate
 exit /b 1
 
 :p_gemma12
@@ -142,7 +159,7 @@ if defined MMOPT echo        mmproj : %MMPROJ%
 echo        ctx=%CTX% ngl=%NGL% kv_q8=%KV_Q8% n_cpu_moe=%N_CPU_MOE% mmproj_cpu=%MMPROJ_CPU% ubatch=%UBATCH%
 echo.
 "%SERVER%" -m "%MODEL%" %MMOPT% --alias %ALIAS% --host %HOST% --port %PORT% ^
-    -c %CTX% -ngl %NGL% -np 1 --jinja %UBOPT% %KVOPT% %MOEOPT% %EXTRA%
+    -c %CTX% -ngl %NGL% -np 1 --jinja %UBOPT% %KVOPT% %MOEOPT% %THOPT% %EXTRA%
 exit /b %ERRORLEVEL%
 
 rem ---------------------------------------------------------------------------
@@ -155,13 +172,30 @@ echo.
 rem 4 slots of 2048 tokens (the model's maximum input); a request may batch
 rem many passages at once.
 "%SERVER%" -m "%MODEL%" --alias embeddinggemma --embeddings --host %HOST% --port %EMBED_PORT% ^
-    -c 8192 -np 4 -b 2048 -ub 2048 -ngl %EMBED_NGL% %EXTRA%
+    -c 8192 -np 4 -b 2048 -ub 2048 -ngl %EMBED_NGL% %THOPT% %EXTRA%
+exit /b %ERRORLEVEL%
+
+rem ---------------------------------------------------------------------------
+:p_translate
+set "MODEL=%TRANSLATE_MODEL%"
+if not exist "%MODEL%" goto model_missing
+set "KVOPT="
+if "%KV_Q8%"=="1" set "KVOPT=-ctk q8_0 -ctv q8_0"
+echo [ia-k] translation on http://%HOST%:%TRANSLATE_PORT%/v1  (alias translategemma)
+echo        model  : %MODEL%
+echo.
+"%SERVER%" -m "%MODEL%" --alias translategemma --host %HOST% --port %TRANSLATE_PORT% ^
+    -c %TRANSLATE_CTX% -ngl %NGL% -np 1 --jinja %KVOPT% %THOPT% %EXTRA%
 exit /b %ERRORLEVEL%
 
 rem ---------------------------------------------------------------------------
 :model_missing
 echo [ia-k] model not found: %MODEL%
 echo        set MODELS_DIR or the *_MODEL variables in server\local.bat
+exit /b 1
+
+:settings_missing
+echo [ia-k] settings file not found: %IAK_SERVER_SETTINGS%
 exit /b 1
 
 :mmproj_missing

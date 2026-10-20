@@ -12,7 +12,7 @@
 | OCR | Tesseract, command line |
 | PDF, EPUB, images | PyMuPDF 1.x (2.0 pulls onnxruntime and more) |
 | DOCX | python-docx |
-| Storage | SQLite: documents, units, passages, FTS5, vectors as float32 BLOBs searched with numpy, analyses, settings |
+| Storage | SQLite: documents, units, passages, FTS5, vectors as float32 BLOBs searched with numpy, analyses, translations, settings |
 
 At start the application finds the IA-K folder from its own location (or
 `IAK_ROOT`; an AppImage counts from the `.AppImage` file), launches
@@ -27,11 +27,12 @@ Repository layout:
 ```
 app/                 interface: index.html, main.js, i18n.js (fr, en), style.css
 backend/iak/         engine: db, extract, ocr, chunk, library, search, embed,
-                     answer, analyze, servers, api, __main__ (command line)
+                     answer, analyze, translate, servers, api, __main__ (command line)
 backend/tests/       pytest, on generated documents and fake model servers
 src-tauri/           Rust: backend.rs (engine process, library folder), lib.rs
 config/              servers.example.toml
-server/              llama-server launchers (SERVERS.md)
+server/              llama-server launchers, start-servers.*, settings (SERVERS.md)
+serveurs-*.bat, .sh  servers of a use + IA-K in one go
 scripts/             smoke_test.py (model servers), make_portable.py (portable zip)
 setup_python.*       portable Python; iak.* command line
 .github/workflows/   ci.yml
@@ -80,7 +81,10 @@ on each system.
 `ubuntu-latest` and `windows-latest`: the engine tests (Tesseract with French
 data), the Rust tests, a release build and the portable zip, kept 30 days as
 the run's *Artifacts* (`ia-k-windows`, `ia-k-linux`). Check it locally with
-[actionlint](https://github.com/rhysd/actionlint).
+[actionlint](https://github.com/rhysd/actionlint). A macOS job (`macos-latest`,
+artifact `ia-k-mac`) is on the roadmap: it needs a macOS `setup_python`
+(python-build-standalone has `aarch64-apple-darwin` builds) and the
+`.app` bundle in the zip.
 
 ## Tests
 

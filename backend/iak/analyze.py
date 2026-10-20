@@ -75,18 +75,24 @@ def _escape(text: str, tag: str) -> str:
 
 def vision_client(host, api_key: str = "", vision_url: str | None = None,
                   chat_url: str | None = None) -> Client:
-    """The dedicated vision server if configured, else the chat server when it
-    was started with a vision projector."""
+    """The dedicated vision server when it answers, else the chat server when
+    it was started with a vision projector."""
     url = vision_url or getattr(host, "vision", None)
     if url:
-        return Client(url, api_key)
+        client = Client(url, api_key, timeout=900)
+        try:
+            client.model()
+            return client
+        except ServerError:
+            if vision_url:                      # asked for explicitly: say so
+                raise AnalysisError(f"vision server unavailable: {url}")
     url = chat_url or getattr(host, "chat", None)
     if not url:
         raise AnalysisError("no vision or chat server configured")
     client = Client(url, api_key)
     if client.props().get("vision") is False:
         raise AnalysisError("the chat server has no vision projector (mmproj): start "
-                            "it with vision, or configure a vision server")
+                            "it with vision, or start a vision server")
     return client
 
 

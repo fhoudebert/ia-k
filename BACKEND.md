@@ -30,6 +30,9 @@ interface uses.
 ./iak.sh summarize 3 [--refresh]                  # summary with [p. N] labels
 ./iak.sh compare 3 7 --question "dates"           # common points, differences
 ./iak.sh analyses 3                               # stored analyses
+./iak.sh translate 3 --to en --out doc3.en.md     # document, page by page (kept)
+./iak.sh translate --unit 42 --to la              # one page
+./iak.sh translate --text "Bonjour" --from fr --to de   # or --file text.txt
 ./iak.sh delete 3                                 # database backed up first
 ./iak.sh serve                                    # local API (below)
 ```
@@ -37,8 +40,8 @@ interface uses.
 Common options: `--library` (else `IAK_LIBRARY`, else `data/`),
 `--ocr-langs` (`IAK_OCR_LANGS`, default `fra+eng`), `--tesseract`
 (`IAK_TESSERACT`), `--lang fr|en` (`IAK_LANG`) for summaries and analyses,
-`--host` (a section of `config/servers.toml`), `--server`, `--embed-server`
-and `--vision-server` to give URLs directly.
+`--host` (a section of `config/servers.toml`), `--server`, `--embed-server`,
+`--vision-server` and `--translate-server` to give URLs directly.
 
 ## The library folder
 
@@ -111,6 +114,29 @@ suits exFAT keys that may be unplugged.
 - Results are stored with their task, language and model, and deleted with
   their document.
 
+## Translation
+
+- **Which model.** The translation server when it answers, otherwise the
+  chat server. TranslateGemma is recognised by its chat template (it wants
+  language codes) and gets, through raw completion (`/completion`), the exact
+  prompt it was trained on inside a Gemma turn, as in
+  [truchement](https://github.com/fhoudebert/transcribe); any other model
+  gets a plain instruction through the chat API.
+- **Pieces.** A text is cut on paragraphs, then sentences, into pieces of
+  about 3,000 characters (less with a small context); the paragraph
+  structure is kept. A translation much shorter than its piece is asked
+  again once, at a higher temperature.
+- **Languages.** Codes such as `fr`, `en`, `la`, `oc`; the interface lists
+  18 of them, TranslateGemma knows many more. `auto` detects the usual
+  European languages from frequent words; a document also uses its
+  metadata.
+- **Documents.** Translated unit by unit (page or section) into the
+  `translations` table, one per unit and target language, with a hash of the
+  source text: a unit corrected since is marked stale and translated again
+  by the next pass; the others are reused. Deleted with their document.
+  Export writes Markdown (`# title`, `## p. N`) or text, optionally with the
+  original before each translation.
+
 ## Local API
 
 The interface talks to the engine through an HTTP API:
@@ -127,8 +153,8 @@ The interface talks to the engine through an HTTP API:
 - **Lifetime.** With `--watch-stdin` (used by the application) the engine
   stops when its standard input closes, that is when the application ends,
   even abruptly.
-- **Jobs.** Import, embedding, re-extraction, page analysis, summaries and
-  comparisons run one at a time: the call returns `{"job": id}` (202) and
+- **Jobs.** Import, embedding, re-extraction, page analysis, summaries,
+  comparisons and translations run one at a time: the call returns `{"job": id}` (202) and
   `GET /api/jobs/<id>` gives status, progress and result.
 - **Errors.** `{"error": "..."}` with 400, 401 (token), 403 (host or origin),
   404, 409 (not configured, wrong embedding model, impossible task), 502
@@ -152,5 +178,10 @@ The interface talks to the engine through an HTTP API:
 | `POST /api/look` `{"unit_id": 42, "task": "error"}` or `"question"` | job |
 | `POST /api/summarize` `{"doc_id": 3}`, `POST /api/compare` `{"doc_ids": [3, 7]}` | jobs |
 | `GET /api/analyses[?doc=3]`, `GET /api/jobs`, `GET /api/jobs/<id>` | stored results, jobs |
+| `GET /api/languages` | languages offered for translation |
+| `POST /api/translate` `{"text", "src": "auto", "tgt": "en"}` | job: translated text, detected language |
+| `POST /api/translate/document` `{"doc_id"` or `"unit_id", "src", "tgt", "refresh"}` | job |
+| `GET /api/documents/<id>/translations?tgt=en` | each unit with its translation (or null) and whether it is stale |
+| `POST /api/documents/<id>/translations/export` `{"tgt", "path", "format": "md"\|"txt", "bilingual"}` | write the file |
 | `POST /api/embed` `{"rebuild": false}` | job |
 | `GET /api/settings`, `PUT /api/settings` `{"servers", "ocr_langs", "lang"}` | servers of this computer, OCR languages |

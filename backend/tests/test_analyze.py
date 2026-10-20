@@ -206,6 +206,6 @@ def test_schema_2_is_upgraded(tmp_path):
     old.commit()
     old.close()
     con = db.connect(path)
-    assert con.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert con.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     assert con.execute("SELECT count(*) FROM analyses").fetchone()[0] == 0
     con.close()

@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, analyze, answer, db, embed, ocr, search, servers
+from . import __version__, analyze, answer, db, embed, ocr, search, servers, translate
 from .library import Library
 
 CONTENT_TYPES = {
@@ -145,7 +145,7 @@ class App:
             except ApiError as exc:
                 job.status, job.error = "error", str(exc)
             except (analyze.AnalysisError, servers.ServerError, embed.EmbeddingMismatch,
-                    KeyError, OSError) as exc:
+                    translate.TranslateError, KeyError, OSError) as exc:
                 job.status, job.error = "error", str(exc)
             except Exception as exc:  # report, keep the worker alive
                 job.status, job.error = "error", f"{type(exc).__name__}: {exc}"
@@ -222,8 +222,54 @@ def job_compare(app: App, lib: Library, job: Job):
     return {"analysis": r.id, "text": r.text, "seconds": round(r.seconds, 1)}
 
 
+def _languages(p: dict, src_required: bool = True) -> tuple[str | None, str]:
+    src, tgt = (p.get("src") or "auto").strip(), (p.get("tgt") or "").strip()
+    if not re.match(r"^[a-z]{2,3}(-[A-Za-z]{2,4})?$", tgt):
+        raise ApiError(400, "choose the target language")
+    return (None if src == "auto" else src), tgt
+
+
+def job_translate(app: App, lib: Library, job: Job):
+    p = job.params
+    src, tgt = _languages(p)
+    t0 = time.perf_counter()
+    src = src or translate.detect_language(p["text"])
+    if not src:
+        raise translate.TranslateError("the language of the text could not be detected: choose it")
+    tr = translate.translator_for(app.host, app.host.api_key)
+    text = tr.translate(p["text"], src, tgt, _progress(job, "translate"))
+    return {"text": text, "src": src, "tgt": tgt, "model": tr.model, "format": tr.format,
+            "seconds": round(time.perf_counter() - t0, 1)}
+
+
+def job_translate_document(app: App, lib: Library, job: Job):
+    p = job.params
+    src, tgt = _languages(p)
+    t0 = time.perf_counter()
+    tr = translate.translator_for(app.host, app.host.api_key)
+    if p.get("unit_id"):
+        u = lib.con.execute("SELECT doc_id FROM units WHERE id=?", (p["unit_id"],)).fetchone()
+        if u is None:
+            raise KeyError(f"no unit {p['unit_id']}")
+        src = src or translate.document_language(lib, u["doc_id"])
+        if not src:
+            raise translate.TranslateError("the language of the document could not be "
+                                           "detected: choose it")
+        job.progress = {"step": "translate", "done": 0, "total": 1}
+        text, cached = translate.translate_unit(lib, tr, p["unit_id"], src, tgt,
+                                                p.get("refresh", False))
+        out = {"unit_id": p["unit_id"], "text": text, "cached": cached, "src": src, "tgt": tgt}
+    else:
+        out = translate.translate_document(lib, tr, p["doc_id"], src, tgt,
+                                           p.get("refresh", False), _progress(job, "translate"))
+        out["doc_id"] = p["doc_id"]
+    return {**out, "model": tr.model, "format": tr.format,
+            "seconds": round(time.perf_counter() - t0, 1)}
+
+
 JOBS = {"import": job_import, "embed": job_embed, "reindex": job_reindex,
-        "look": job_look, "summarize": job_summarize, "compare": job_compare}
+        "look": job_look, "summarize": job_summarize, "compare": job_compare,
+        "translate": job_translate, "translate_document": job_translate_document}
 
 
 # ---------------------------------------------------------------- views
@@ -380,7 +426,7 @@ class Handler(BaseHTTPRequestHandler):
     @route("GET", "/api/servers")
     def servers_info(self, query):
         out = {"host": self.app.host.name}
-        for role in ("chat", "embedding", "vision"):
+        for role in ("chat", "embedding", "vision", "translate"):
             url = getattr(self.app.host, role)
             info = {"url": url, "local": servers.is_local(url) if url else None}
             if url:
@@ -581,6 +627,75 @@ class Handler(BaseHTTPRequestHandler):
             rows = analyze.analyses(lib.con, int(doc[0]) if doc else None)
         self._json(200, [_row(r) for r in rows])
 
+    # -------------------------------------------------- translation
+    @route("GET", "/api/languages")
+    def languages(self, query):
+        self._json(200, [{"code": k, "name": v} for k, v in translate.LANGUAGES.items()])
+
+    @route("POST", "/api/translate")
+    def translate_(self, query):
+        body = self._body()
+        text = str(body.get("text") or "")
+        if not text.strip():
+            raise ApiError(400, "nothing to translate")
+        if len(text) > 200_000:
+            raise ApiError(400, "text too long: import it as a document")
+        _languages(body)
+        job = self.app.submit("translate", {"text": text, "src": body.get("src"),
+                                            "tgt": body.get("tgt")})
+        self._json(202, {"job": job.id})
+
+    @route("POST", "/api/translate/document")
+    def translate_document(self, query):
+        body = self._body()
+        _languages(body)
+        params = {"src": body.get("src"), "tgt": body.get("tgt"),
+                  "refresh": bool(body.get("refresh"))}
+        with self.app.library() as lib:
+            if body.get("unit_id"):
+                params["unit_id"] = int(body["unit_id"])
+                if lib.con.execute("SELECT 1 FROM units WHERE id=?",
+                                   (params["unit_id"],)).fetchone() is None:
+                    raise ApiError(404, "no such page")
+            else:
+                params["doc_id"] = int(body["doc_id"])
+                if lib.document(params["doc_id"]) is None:
+                    raise ApiError(404, "no such document")
+        job = self.app.submit("translate_document", params)
+        self._json(202, {"job": job.id})
+
+    @route("GET", r"/api/documents/(\d+)/translations")
+    def document_translations(self, doc_id, query):
+        tgt = (query.get("tgt") or [""])[0]
+        with self.app.library() as lib:
+            if lib.document(int(doc_id)) is None:
+                raise ApiError(404, "no such document")
+            rows = translate.translations(lib, int(doc_id), tgt)
+            langs = [r[0] for r in lib.con.execute(
+                "SELECT DISTINCT tgt FROM translations WHERE doc_id=?", (int(doc_id),))]
+            src = translate.document_language(lib, int(doc_id))
+        self._json(200, {"tgt": tgt, "src": src, "languages": langs, "units": rows})
+
+    @route("POST", r"/api/documents/(\d+)/translations/export")
+    def export_translation(self, doc_id, query):
+        body = self._body()
+        path, fmt = str(body.get("path") or ""), body.get("format", "md")
+        if not path:
+            raise ApiError(400, "choose where to save the file")
+        if fmt not in ("md", "txt"):
+            raise ApiError(400, "format is md or txt")
+        with self.app.library() as lib:
+            if lib.document(int(doc_id)) is None:
+                raise ApiError(404, "no such document")
+            try:
+                out = translate.export(lib, int(doc_id), str(body.get("tgt") or ""), path,
+                                       fmt, bool(body.get("bilingual")))
+            except translate.TranslateError as exc:
+                raise ApiError(409, str(exc))
+            except OSError as exc:
+                raise ApiError(400, f"cannot write {path}: {exc}")
+        self._json(200, {"path": str(out)})
+
     @route("POST", "/api/embed")
     def embed_(self, query):
         body = self._body()
@@ -600,7 +715,8 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {
             "computer": servers.computer_name(),
             "host": {"name": h.name, "chat": h.chat or "", "embedding": h.embedding or "",
-                     "vision": h.vision or "", "api_key_set": bool(h.api_key)},
+                     "vision": h.vision or "", "translate": h.translate or "",
+                     "api_key_set": bool(h.api_key)},
             "config": str(self.app.config) if self.app.config else None,
             "lang": self.app.lang,
             "ocr": {"langs": self.app.ocr_langs, "available": available,
@@ -613,7 +729,8 @@ class Handler(BaseHTTPRequestHandler):
         url_ok = lambda u: not u or re.match(r"^https?://[^\s/]+(/\S*)?$", u)
         if "servers" in body:
             srv = body["servers"] or {}
-            urls = {k: (srv.get(k) or "").strip() for k in ("chat", "embedding", "vision")}
+            urls = {k: (srv.get(k) or "").strip()
+                    for k in ("chat", "embedding", "vision", "translate")}
             bad = [k for k, u in urls.items() if not url_ok(u)]
             if bad:
                 raise ApiError(400, f"not an http(s) URL: {', '.join(bad)}")
@@ -621,7 +738,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(409, "no configuration file for the servers")
             key = srv.get("api_key")          # None keeps the stored key
             self.app.host = servers.save_host(self.app.config, urls["chat"],
-                                              urls["embedding"], urls["vision"], key)
+                                              urls["embedding"], urls["vision"], key,
+                                              translate=urls["translate"])
             self.app._embedder = None
         with self.app.library() as lib:
             if "ocr_langs" in body:

@@ -16,3 +16,11 @@ MODELS_DIR="${MODELS_DIR:-$HOME/ia/models}"
 # --- explicit paths ---
 # QWENVL_MODEL="$HOME/ia/models/Qwen3-VL-8B-Instruct-Q4_K_M.gguf"
 # QWENVL_MMPROJ="$HOME/ia/models/mmproj-Qwen3-VL-8B-Instruct-F16.gguf"
+
+# --- translation server (TranslateGemma) ---
+# TRANSLATE_PORT="${TRANSLATE_PORT:-8083}"
+# TRANSLATE_CTX="${TRANSLATE_CTX:-8192}"
+# TRANSLATE_MODEL="$HOME/ia/models/translategemma-12b-it-q4_k_m.gguf"
+
+# --- CPU threads of every server (empty = llama.cpp's choice) ---
+# THREADS="${THREADS:-8}"

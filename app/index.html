@@ -23,6 +23,7 @@
         <button data-view="library" data-i18n="nav.library"></button>
         <button data-view="search" data-i18n="nav.search"></button>
         <button data-view="ask" data-i18n="nav.ask"></button>
+        <button data-view="translate" data-i18n="nav.translate"></button>
         <button data-view="viewer" data-i18n="nav.viewer" hidden id="tab-viewer"></button>
         <button data-view="settings" data-i18n="nav.settings"></button>
       </nav>
@@ -109,6 +110,54 @@
       </form>
     </main>
 
+    <!-- translation -->
+    <main id="view-translate" class="view translate" hidden>
+      <div class="toolbar">
+        <div class="segmented" role="radiogroup">
+          <label><input type="radio" name="tr-mode" value="text" checked>
+            <span data-i18n="tr.mode.text"></span></label>
+          <label><input type="radio" name="tr-mode" value="doc">
+            <span data-i18n="tr.mode.doc"></span></label>
+        </div>
+        <select id="tr-src" data-i18n-title="tr.src"></select>
+        <button type="button" class="link" id="tr-swap" data-i18n-title="tr.swap">⇄</button>
+        <select id="tr-tgt" data-i18n-title="tr.tgt"></select>
+        <span class="spacer"></span>
+        <span class="muted" id="tr-engine"></span>
+      </div>
+      <!-- free text -->
+      <div id="tr-text-mode">
+        <div class="tr-columns">
+          <textarea id="tr-input" data-i18n-placeholder="tr.input" spellcheck="false"></textarea>
+          <textarea id="tr-output" readonly data-i18n-placeholder="tr.output"></textarea>
+        </div>
+        <div class="row">
+          <button class="primary" id="tr-run" data-i18n="tr.run"></button>
+          <button id="tr-copy" data-i18n="tr.copy"></button>
+          <span class="muted" id="tr-info"></span>
+        </div>
+      </div>
+      <!-- a document of the library -->
+      <div id="tr-doc-mode" hidden>
+        <div class="row">
+          <select id="tr-doc"></select>
+          <button class="primary" id="tr-doc-run" data-i18n="tr.doc_run"></button>
+          <label class="check"><input type="checkbox" id="tr-refresh">
+            <span data-i18n="tr.refresh"></span></label>
+          <span class="spacer"></span>
+          <select id="tr-format">
+            <option value="md">Markdown (.md)</option>
+            <option value="txt" data-i18n="tr.format_txt"></option>
+          </select>
+          <label class="check"><input type="checkbox" id="tr-bilingual">
+            <span data-i18n="tr.bilingual"></span></label>
+          <button id="tr-export" data-i18n="tr.export"></button>
+        </div>
+        <p class="muted" id="tr-doc-info"></p>
+        <ol id="tr-units" class="tr-units"></ol>
+      </div>
+    </main>
+
     <!-- settings -->
     <main id="view-settings" class="view settings" hidden>
       <section class="panel">
@@ -121,6 +170,8 @@
             <input name="embedding" placeholder="http://127.0.0.1:8081/v1" spellcheck="false"></label>
           <label><span data-i18n="settings.vision"></span>
             <input name="vision" placeholder="http://127.0.0.1:8082/v1" spellcheck="false"></label>
+          <label><span data-i18n="settings.translate"></span>
+            <input name="translate" placeholder="http://127.0.0.1:8083/v1" spellcheck="false"></label>
           <label><span data-i18n="settings.api_key"></span>
             <input name="api_key" type="password" autocomplete="off"></label>
           <div class="row">
@@ -158,6 +209,7 @@
         <button class="link" id="viewer-back">← <span data-i18n="viewer.back"></span></button>
         <h2 id="viewer-title"></h2>
         <span class="spacer"></span>
+        <button id="viewer-translate" data-i18n="viewer.translate"></button>
         <button id="viewer-summary" data-i18n="viewer.summary"></button>
         <button id="viewer-reextract" data-i18n="viewer.reextract"></button>
       </div>

@@ -13,6 +13,9 @@
     python -m iak summarize ID            summary of a document, with page labels
     python -m iak compare ID ID...        compare documents (from their summaries)
     python -m iak analyses [ID]           stored analyses
+    python -m iak translate ID --to en    translate a document page by page (kept),
+                                          or --text "..." / --file F.txt; --out FILE
+                                          writes the translated document
     python -m iak serve [--port N]        local API for the desktop interface
     python -m iak edit UNIT_ID FILE       replace a page's text (OCR correction)
     python -m iak reindex ID [--extract]  rebuild passages, or extract again
@@ -20,7 +23,7 @@
 
 The library folder is --library, or IAK_LIBRARY, or ./data. Servers come
 from config/servers.toml (--host to pick a section) unless given with
---server (chat), --embed-server and --vision-server. Answers are in --lang
+--server (chat), --embed-server, --vision-server and --translate-server. Answers are in --lang
 (IAK_LANG, default fr).
 """
 from __future__ import annotations
@@ -56,6 +59,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--embed-server", help="embedding server URL")
     ap.add_argument("--vision-server", help="vision server URL (default: the chat "
                     "server when it has vision)")
+    ap.add_argument("--translate-server", help="translation server URL (default: "
+                    "the chat server translates)")
     ap.add_argument("--lang", default=os.environ.get("IAK_LANG", "fr"),
                     help="language of summaries and analyses (fr, en)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -100,6 +105,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--question", default="", help="aspect to focus on")
     p = sub.add_parser("analyses")
     p.add_argument("id", type=int, nargs="?")
+    p = sub.add_parser("translate")
+    p.add_argument("id", type=int, nargs="?", help="document id (see list)")
+    p.add_argument("--to", required=True, help="target language code: fr, en, la...")
+    p.add_argument("--from", dest="src", help="source language (default: detected)")
+    p.add_argument("--text", help="translate this text instead of a document")
+    p.add_argument("--file", type=Path, help="translate this UTF-8 text file")
+    p.add_argument("--unit", type=int, help="only this page or section (unit id)")
+    p.add_argument("--refresh", action="store_true", help="ignore stored translations")
+    p.add_argument("--out", type=Path, help="write the translated document (.md or .txt)")
+    p.add_argument("--bilingual", action="store_true", help="--out with the original text")
     p = sub.add_parser("serve")
     p.add_argument("--port", type=int, default=int(os.environ.get("IAK_PORT", "0")),
                    help="port on 127.0.0.1 (default: a free one, announced on stdout)")
@@ -125,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
         host.embedding = args.embed_server
     if args.vision_server:
         host.vision = args.vision_server
+    if args.translate_server:
+        host.translate = args.translate_server
 
     if args.cmd == "serve":
         from . import api
@@ -311,6 +328,54 @@ def main(argv: list[str] | None = None) -> int:
             _out(res.text)
             took = f"{res.seconds:.1f} s" if res.seconds else "stored earlier"
             _out(f"\n(analysis #{res.id}, {res.task}, {took})")
+            return 0
+
+        if args.cmd == "translate":
+            from . import translate
+            try:
+                tr = translate.translator_for(host, host.api_key)
+                print(f"({tr.model}, {tr.format})", file=sys.stderr)
+                progress = lambda i, n: print(f"\r  {i}/{n}", end="", file=sys.stderr,
+                                              flush=True)
+                if args.text is not None or args.file:
+                    text = args.text if args.text is not None else \
+                        args.file.read_text(encoding="utf-8")
+                    src = args.src or translate.detect_language(text)
+                    if not src:
+                        _out("the language of the text could not be detected: use --from")
+                        return 1
+                    out = tr.translate(text, src, args.to, progress)
+                    print(file=sys.stderr)
+                    _out(out)
+                    return 0
+                if args.unit:
+                    u = lib.con.execute("SELECT doc_id FROM units WHERE id=?",
+                                        (args.unit,)).fetchone()
+                    if u is None:
+                        _out(f"no unit {args.unit}")
+                        return 1
+                    src = args.src or translate.document_language(lib, u["doc_id"])
+                    if not src:
+                        _out("the language of the document could not be detected: use --from")
+                        return 1
+                    text, _ = translate.translate_unit(lib, tr, args.unit, src, args.to,
+                                                       args.refresh)
+                    _out(text)
+                    return 0
+                if args.id is None:
+                    _out("give a document id, --unit, --text or --file")
+                    return 1
+                r = translate.translate_document(lib, tr, args.id, args.src, args.to,
+                                                 args.refresh, progress)
+                print(file=sys.stderr)
+                _out(f"document {args.id} ({r['src']} -> {r['tgt']}): {r['translated']} "
+                     f"translated, {r['cached']} already done")
+                if args.out:
+                    fmt = "txt" if args.out.suffix.lower() == ".txt" else "md"
+                    _out(f"written: {translate.export(lib, args.id, args.to, args.out, fmt, args.bilingual)}")
+            except (translate.TranslateError, servers.ServerError, KeyError) as exc:
+                _out(f"\n{exc}")
+                return 1
             return 0
 
         if args.cmd == "analyses":

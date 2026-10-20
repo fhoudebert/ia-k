@@ -41,7 +41,14 @@ class Host:
     chat: str | None = None
     embedding: str | None = None
     vision: str | None = None
+    translate: str | None = None
     api_key: str = ""
+
+
+# without config/servers.toml: the ports of the launchers (SERVERS.md); a
+# vision or translation server that does not answer falls back to the chat one
+DEFAULT_URLS = {"chat": "http://127.0.0.1:8080/v1", "embedding": "http://127.0.0.1:8081/v1",
+                "vision": "http://127.0.0.1:8082/v1", "translate": "http://127.0.0.1:8083/v1"}
 
 
 def computer_name() -> str:
@@ -53,8 +60,7 @@ def load_host(config: str | Path, name: str | None = None) -> Host:
     whose `match` contains the computer name, else [host.default]."""
     path = Path(config)
     if not path.exists():
-        return Host("default", chat="http://127.0.0.1:8080/v1",
-                    embedding="http://127.0.0.1:8081/v1")
+        return Host("default", **DEFAULT_URLS)
     with open(path, "rb") as fh:
         hosts = tomllib.load(fh).get("host", {})
     if name and name not in hosts:
@@ -65,7 +71,8 @@ def load_host(config: str | Path, name: str | None = None) -> Host:
                      if me in [str(m).lower() for m in v.get("match", [])]), "default")
     h = hosts.get(name, {})
     return Host(name, chat=h.get("chat") or None, embedding=h.get("embedding") or None,
-                vision=h.get("vision") or None, api_key=h.get("api_key", ""))
+                vision=h.get("vision") or None, translate=h.get("translate") or None,
+                api_key=h.get("api_key", ""))
 
 
 HEADER = """# IA-K - where to find the llama.cpp servers on each computer.
@@ -85,7 +92,7 @@ def dump_hosts(hosts: dict) -> str:
     out = [HEADER]
     for name, h in hosts.items():
         out.append(f"\n[host.{name}]")
-        for key in ("match", "chat", "embedding", "vision", "api_key"):
+        for key in ("match", "chat", "embedding", "vision", "translate", "api_key"):
             if h.get(key) not in (None, "", []):
                 out.append(f"{key} = {_toml_value(h[key])}")
     return "\n".join(out) + "\n"
@@ -93,7 +100,7 @@ def dump_hosts(hosts: dict) -> str:
 
 def save_host(config: str | Path, chat: str | None, embedding: str | None,
               vision: str | None, api_key: str | None = None,
-              name: str | None = None) -> Host:
+              name: str | None = None, translate: str | None = None) -> Host:
     """Write the servers of this computer into config (other computers'
     sections are kept; the previous file is saved as .bak). api_key None
     keeps the stored key, "" removes it."""
@@ -114,8 +121,10 @@ def save_host(config: str | Path, chat: str | None, embedding: str | None,
         if me.lower() not in [m.lower() for m in match]:
             match.append(me)
         section["match"] = match
-    for key, value in (("chat", chat), ("embedding", embedding), ("vision", vision)):
-        section[key] = (value or "").strip()
+    for key, value in (("chat", chat), ("embedding", embedding), ("vision", vision),
+                       ("translate", translate)):
+        if value is not None or key != "translate":
+            section[key] = (value or "").strip()
     if api_key is not None:
         section["api_key"] = api_key
     hosts[name] = section
@@ -160,14 +169,27 @@ class Client:
             raise ServerError(f"{url}: unreachable ({exc})") from exc
 
     def props(self) -> dict:
-        """llama-server properties: context size, vision support. {} elsewhere."""
+        """llama-server properties: context size, vision support, whether the
+        model is TranslateGemma (its template wants source/target codes).
+        {} elsewhere."""
         try:
             p = self._call(self.root + "/props", timeout=10)
         except ServerError:
             return {}
+        template = p.get("chat_template") or ""
         return {"n_ctx": (p.get("default_generation_settings") or {}).get("n_ctx"),
                 "vision": (p.get("modalities") or {}).get("vision"),
-                "model_path": p.get("model_path")}
+                "model_path": p.get("model_path"),
+                "translategemma": "source_lang_code" in template}
+
+    def complete(self, prompt: str, n_predict: int, temperature: float = 0.2,
+                 stop: list[str] | None = None) -> str:
+        """Raw completion (llama-server /completion), for prompts written by
+        hand in a model's own format."""
+        payload = {"prompt": prompt, "n_predict": n_predict, "temperature": temperature,
+                   "top_p": 0.95, "cache_prompt": True, "stop": stop or []}
+        data = self._call(self.root + "/completion", payload)
+        return data.get("content") or ""
 
     def model(self) -> str:
         data = self._call(self.v1 + "/models", timeout=10).get("data") or [{}]

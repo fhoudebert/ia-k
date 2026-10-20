@@ -15,9 +15,12 @@ computers, each with its own servers.
 | chat | 8080 | Gemma 4 26B-A4B or 12B, with its vision projector (`mmproj`) | answers, summaries, comparisons; page analysis when it has vision |
 | embedding | 8081 | EmbeddingGemma 300M | search by meaning |
 | vision | 8082 | optional, e.g. Qwen3-VL-8B | page analysis instead of the chat model |
+| translate | 8083 | optional, TranslateGemma 12B (or 4B) | translation |
 
 Search by keywords needs no server. Without an embedding server, search by
-meaning is off; without a chat server, questions and analyses are.
+meaning is off; without a chat server, questions and analyses are. Without a
+translation server, the chat model translates (TranslateGemma, made for it,
+translates better and faster).
 
 ## Getting llama.cpp and the models
 
@@ -33,13 +36,49 @@ meaning is off; without a chat server, questions and analyses are.
   - `lmstudio-community/embeddinggemma-300m-qat-GGUF`: `embeddinggemma-300m-qat-Q4_0.gguf`
   - optional: [`lmstudio-community/Qwen3-VL-8B-Instruct-GGUF`](https://huggingface.co/lmstudio-community/Qwen3-VL-8B-Instruct-GGUF):
     `Qwen3-VL-8B-Instruct-Q4_K_M.gguf` and `mmproj-Qwen3-VL-8B-Instruct-F16.gguf`
-  - for the translation steps to come: `translategemma-12b-it` (GGUF Q4_K_M)
+  - for translation: TranslateGemma 12B in GGUF, for instance
+    `NikolayKozloff/translategemma-12b-it-Q4_K_M-GGUF`:
+    `translategemma-12b-it-q4_k_m.gguf` (about 7 GB; the 4B is lighter and
+    less accurate)
 
 ## Starting them
 
-`server/` holds launchers for the reference laptop (Windows, models in
-`D:\ia\models`, llama.cpp in `D:\ia\llama-vulkan`); edit the paths at the top
-of each file:
+### Servers and IA-K in one go
+
+At the root of IA-K, one file per use starts the servers it needs, waits for
+them to answer (loading a model from a USB key can take a minute or two),
+starts IA-K, and stops the servers it started when IA-K is closed:
+
+| File (Windows / Linux) | Servers | For |
+|---|---|---|
+| `serveurs-baseConnaissance.bat` / `.sh` | `gemma26` (8080) + `embed` (8081) | library, search, questions, summaries, page analysis |
+| `serveurs-traduction.bat` / `.sh` | `translate` (8083) + `embed` (8081) | translation, search |
+
+A server already running on its port is used as it is. `--keep` leaves the
+servers running after IA-K, `--no-app` starts only the servers. On Windows
+each server has its own minimised window with its messages; on Linux they go
+to `data/server-<profile>.log`. Both files call
+`server/start-servers.bat PROFILE...` (or `.sh`), which can start any set of
+profiles, for instance `server\start-servers.bat qwenvl embed`.
+
+On a 32 GB laptop, use one file at a time: the 26B and TranslateGemma 12B do
+not fit in graphics memory together.
+
+On Windows their settings are read from `server/local.bat` when it exists,
+otherwise from **`server/local.hx370.bat`**, the reference laptop: llama.cpp
+in `D:\ia\llama-vulkan`, models in `D:\ia\models` (LM Studio layout), the 26B
+with its experts and vision on the CPU, KV cache in q8, micro-batch 512,
+context 8192, 8 threads, EmbeddingGemma on the CPU — the same choices as
+`Gemma-4-26-A4B-vulkan.bat` and `embeddinggemma-rag.bat`. For another
+computer, copy it to `server/local.bat` and edit the copy (`local.bat` is
+not versioned). On Linux they come from `server/local.sh` (copy
+`local.example.sh`). `IAK_SERVER_SETTINGS` can name another settings file.
+
+### One server at a time
+
+`server/` also holds single launchers for the reference laptop (Windows,
+models in `D:\ia\models`, llama.cpp in `D:\ia\llama-vulkan`); edit the paths
+at the top of each file:
 
 | File | Starts |
 |---|---|
@@ -47,23 +86,21 @@ of each file:
 | `gemma-4-12b-qat-vulkan.bat` | Gemma 4 12B on 8080, all on the iGPU |
 | `embeddinggemma-rag.bat` | EmbeddingGemma on 8081, **on the CPU** (see *Memory*) |
 | `qwen3-vl-8b-vulkan.bat` | Qwen3-VL-8B on 8082 (vision), instead of the 26B on a 32 GB laptop |
-| `llama-server.bat` / `llama-server.sh` | one launcher for all, with profiles `gemma12`, `gemma26`, `qwenvl`, `embed` and settings in `server/local.*` (copy `local.example.*`) |
-
-On the reference laptop the usual pair is `embeddinggemma-rag.bat` and
-`Gemma-4-26-A4B-vulkan.bat`, left open while IA-K runs.
+| `llama-server.bat` / `llama-server.sh` | one launcher for all, with profiles `gemma12`, `gemma26`, `qwenvl`, `embed`, `translate` and the settings above |
 
 The single launcher, for instance:
 
 ```
 server\llama-server.bat gemma26
 server\llama-server.bat embed
+server\llama-server.bat translate
 ./server/llama-server.sh gemma12 --verbose        # extra arguments go to llama-server
 ```
 
 | Setting (`local.bat` / `local.sh`) | Default | Effect |
 |---|---|---|
 | `MODELS_DIR`, `LLAMA_DIR` | `D:\ia\models`, `build\llama` | where the models and `llama-server` are |
-| `CTX` | 16384 | context, prompt + answer |
+| `CTX` | 16384 | context of the chat server, prompt + answer |
 | `NGL` | 99 | layers on the GPU |
 | `N_CPU_MOE` | 99 for gemma26 | experts of N layers kept on the CPU |
 | `MMPROJ_CPU` | 1 for gemma26 | vision projector on the CPU |
@@ -71,7 +108,14 @@ server\llama-server.bat embed
 | `KV_Q8` | 0 | 1 = KV cache in q8_0, about half its memory |
 | `UBATCH` | 1280 with vision | micro-batch; an image gets at most this many tokens |
 | `EMBED_NGL` | 0 | embedding server on the CPU (99 = on the GPU) |
-| `CHAT_PORT`, `EMBED_PORT`, `VISION_PORT` | 8080, 8081, 8082 | always bound to 127.0.0.1 |
+| `TRANSLATE_CTX` | 8192 | context of the translation server |
+| `THREADS` | llama.cpp's choice | CPU threads of every server |
+| `GEMMA26_MODEL`, `TRANSLATE_MODEL`, … | LM Studio layout under `MODELS_DIR` | explicit model files |
+| `CHAT_PORT`, `EMBED_PORT`, `VISION_PORT`, `TRANSLATE_PORT` | 8080, 8081, 8082, 8083 | always bound to 127.0.0.1 |
+
+The `translate` profile runs TranslateGemma with its own template
+(`--jinja`); IA-K recognises it and sends it the exact prompt the model was
+trained on, page by page or in pieces of about 3,000 characters.
 
 ## Telling IA-K where they are
 
@@ -82,6 +126,7 @@ In IA-K, *Settings*, or in `config/servers.toml` (start from
 [host.default]
 chat      = "http://127.0.0.1:8080/v1"
 embedding = "http://127.0.0.1:8081/v1"
+translate = "http://127.0.0.1:8083/v1"   # optional
 
 [host.office]
 match     = ["OFFICE-PC"]              # computer name (COMPUTERNAME, hostname)
@@ -90,7 +135,9 @@ embedding = "http://192.168.1.20:8081/v1"
 api_key   = "…"                        # when the servers run with --api-key
 ```
 
-IA-K reads each server's context size and vision support itself. The
+Without `config/servers.toml`, IA-K uses the usual ports above; a vision or
+translation server that is not running is simply replaced by the chat
+server. IA-K reads each server's context size and vision support itself. The
 semantic index works only with the embedding model that built it: serve the
 same EmbeddingGemma file on every computer (another quantisation of it is
 accepted; another model turns search by meaning off until the index is

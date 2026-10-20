@@ -20,7 +20,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE documents (
@@ -110,6 +110,21 @@ CREATE TABLE analyses (
     created_at  REAL NOT NULL
 );
 CREATE INDEX analyses_doc ON analyses(doc_id);
+
+-- schema 4: translations of pages and sections, one per target language
+CREATE TABLE translations (
+    id          INTEGER PRIMARY KEY,
+    doc_id      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    unit_id     INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+    src         TEXT NOT NULL,           -- language codes: fr, en, la...
+    tgt         TEXT NOT NULL,
+    model       TEXT NOT NULL DEFAULT '',
+    text        TEXT NOT NULL,
+    source_hash TEXT NOT NULL,           -- of units.text when translated: stale when it differs
+    created_at  REAL NOT NULL,
+    UNIQUE (unit_id, tgt)
+);
+CREATE INDEX translations_doc ON translations(doc_id, tgt);
 """
 
 # upgrades from each older schema version to the next
@@ -136,6 +151,22 @@ CREATE TABLE analyses (
     created_at  REAL NOT NULL
 );
 CREATE INDEX analyses_doc ON analyses(doc_id);
+""",
+    3: """
+-- schema 4: translations of pages and sections, one per target language
+CREATE TABLE translations (
+    id          INTEGER PRIMARY KEY,
+    doc_id      INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    unit_id     INTEGER NOT NULL REFERENCES units(id) ON DELETE CASCADE,
+    src         TEXT NOT NULL,           -- language codes: fr, en, la...
+    tgt         TEXT NOT NULL,
+    model       TEXT NOT NULL DEFAULT '',
+    text        TEXT NOT NULL,
+    source_hash TEXT NOT NULL,           -- of units.text when translated: stale when it differs
+    created_at  REAL NOT NULL,
+    UNIQUE (unit_id, tgt)
+);
+CREATE INDEX translations_doc ON translations(doc_id, tgt);
 """,
 }
 
