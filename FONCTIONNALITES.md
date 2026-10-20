@@ -33,6 +33,9 @@ ne part sur Internet.
 - **OCR** (Tesseract) des pages scannées, avec la confiance de lecture de
   chaque page ; langues réglables (`fra+eng`, `fra+frm` pour le moyen
   français…).
+- **Collections** : des groupes de documents nommés (par sujet, projet,
+  fonds…) ; un document peut appartenir à plusieurs collections, et une
+  collection peut limiter la recherche et les questions.
 - Visionneuse : la page à gauche, son texte à droite, **correction du texte**
   conservée même après une nouvelle extraction.
 - Sauvegarde automatique de la base avant chaque suppression ou mise à jour ;
@@ -44,7 +47,7 @@ ne part sur Internet.
 - **Réponses sourcées** : chaque affirmation renvoie au document, à la page
   et au passage ; un clic ouvre la page et **surligne le passage**.
 - Réponse écrite en direct ; **questions de suivi** (« et quand l'a-t-il
-  rendu ? ») ; filtres par type ou par document.
+  rendu ? ») ; filtres par collection, par type ou par document.
 - Si les documents ne contiennent pas la réponse, IA-K **le dit** au lieu
   d'inventer.
 - **Export en Markdown** : « Copier en Markdown » sur chaque réponse,

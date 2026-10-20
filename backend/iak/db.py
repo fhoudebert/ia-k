@@ -20,7 +20,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA = """
 CREATE TABLE documents (
@@ -129,6 +129,20 @@ CREATE INDEX translations_doc ON translations(doc_id, tgt);
 -- schema 5: page readings by the vision model, used or not as the page text
 ALTER TABLE analyses ADD COLUMN applied REAL;    -- when it became the page's text
 ALTER TABLE analyses ADD COLUMN score REAL;      -- word agreement with the text it was compared to, 0-1
+
+-- schema 6: collections, named groups of documents (a document may be in several)
+CREATE TABLE collections (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    created_at  REAL NOT NULL
+);
+CREATE TABLE collection_docs (
+    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    doc_id        INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    added_at      REAL NOT NULL,
+    PRIMARY KEY (collection_id, doc_id)
+);
+CREATE INDEX collection_docs_doc ON collection_docs(doc_id);
 """
 
 # upgrades from each older schema version to the next
@@ -176,6 +190,21 @@ CREATE INDEX translations_doc ON translations(doc_id, tgt);
 -- schema 5: page readings by the vision model, used or not as the page text
 ALTER TABLE analyses ADD COLUMN applied REAL;    -- when it became the page's text
 ALTER TABLE analyses ADD COLUMN score REAL;      -- word agreement with the text it was compared to, 0-1
+""",
+    5: """
+-- schema 6: collections, named groups of documents (a document may be in several)
+CREATE TABLE collections (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    created_at  REAL NOT NULL
+);
+CREATE TABLE collection_docs (
+    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    doc_id        INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    added_at      REAL NOT NULL,
+    PRIMARY KEY (collection_id, doc_id)
+);
+CREATE INDEX collection_docs_doc ON collection_docs(doc_id);
 """,
 }
 

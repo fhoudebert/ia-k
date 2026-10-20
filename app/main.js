@@ -27,6 +27,8 @@ const state = {
   waiters: new Map(),          // job id -> resolve
   history: [],                 // [{question, answer}] of the current conversation
   turns: [],                   // the same answers with their sources, for export
+  collections: [],             // [{id, name, n_docs}]
+  collection: null,            // id of the collection shown in the library, or null
   seenJobs: new Set(),         // finished jobs already taken into account
   started: false,              // first jobs poll done
   imageUrl: null,
@@ -205,7 +207,12 @@ function renderJobs() {
 // ------------------------------------------------------------------ library
 
 async function loadLibrary() {
-  state.documents = await get("/api/documents");
+  [state.documents, state.collections] = await Promise.all([get("/api/documents"),
+                                                            get("/api/collections")]);
+  if (state.collection && !state.collections.some((c) => c.id === state.collection)) {
+    state.collection = null;
+  }
+  renderCollections();
   renderLibrary();
   renderFilters();
   renderTranslateDocs();
@@ -214,6 +221,14 @@ async function loadLibrary() {
 
 /** Type and document lists of the search and question filters. */
 function renderFilters() {
+  for (const id of ["#search-coll", "#ask-coll"]) {
+    const sel = $(id);
+    const keep = sel.value;
+    sel.replaceChildren(el("option", { value: "" }, t("filter.all_colls")),
+      ...state.collections.map((c) => el("option", { value: String(c.id) }, c.name)));
+    sel.value = state.collections.some((c) => String(c.id) === keep) ? keep : "";
+    sel.hidden = !state.collections.length;
+  }
   const kinds = [...new Set(state.documents.map((d) => d.kind))].sort();
   for (const id of ["#search-kind", "#ask-kind"]) {
     const sel = $(id);
@@ -235,15 +250,130 @@ function renderFilters() {
 function filterOf(prefix) {
   const kind = $(`#${prefix}-kind`).value;
   const doc = $(`#${prefix}-doc`).value;
+  const coll = $(`#${prefix}-coll`).value;
   return { kinds: kind ? [kind] : null, doc_ids: doc ? [Number(doc)] : null,
-           label: [kind && kindLabel(kind), doc && $(`#${prefix}-doc`).selectedOptions[0].text]
+           collections: coll ? [Number(coll)] : null,
+           label: [coll && $(`#${prefix}-coll`).selectedOptions[0].text, kind && kindLabel(kind),
+                   doc && $(`#${prefix}-doc`).selectedOptions[0].text]
              .filter(Boolean).join(", ") };
 }
 
+// ------------------------------------------------------------------ collections
+
+function renderCollections() {
+  const chip = (id, label, n) => el("button", {
+    class: `coll-chip${state.collection === id ? " active" : ""}`,
+    onclick: () => { state.collection = id; renderCollections(); renderLibrary(); } },
+    label, el("span", { class: "n" }, String(n)));
+  $("#coll-chips").replaceChildren(chip(null, t("coll.all"), state.documents.length),
+    ...state.collections.map((c) => chip(c.id, c.name, c.n_docs)));
+  $("#coll-tools").hidden = !state.collection;
+  const target = $("#coll-target");
+  const keep = target.value;
+  target.replaceChildren(...state.collections.map((c) =>
+    el("option", { value: String(c.id) }, c.name)));
+  if (state.collections.some((c) => String(c.id) === keep)) target.value = keep;
+  else if (state.collection) target.value = String(state.collection);
+  updateSelection();
+}
+
+function currentCollection() {
+  return state.collections.find((c) => c.id === state.collection) || null;
+}
+
+/** The tools for the documents ticked in the list. */
+function updateSelection() {
+  const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
+  $("#coll-selection").hidden = !ids.length;
+  $("#coll-selected").textContent = t("coll.selected", { n: ids.length });
+  const hasColls = state.collections.length > 0;
+  $("#coll-target").hidden = $("#coll-add").hidden = !hasColls;
+  const cur = currentCollection();
+  $("#coll-remove").hidden = !cur;
+  if (cur) $("#coll-remove").textContent = t("coll.remove", { name: cur.name });
+  if (!hasColls) $("#coll-selected").textContent += ` — ${t("coll.none_yet")}`;
+}
+
+async function changeMembers(collectionId, add, remove) {
+  const r = await post(`/api/collections/${collectionId}/documents`, { add, remove });
+  const name = (state.collections.find((c) => c.id === collectionId) || {}).name || "";
+  toast(add.length ? t("coll.added", { n: r.added, name }) : t("coll.removed", { n: r.removed, name }));
+  state.selected.clear();
+  await loadLibrary();
+}
+
+async function createCollection(ev) {
+  ev.preventDefault();
+  const f = $("#coll-new");
+  const name = f.name.value.trim();
+  if (!name) { f.name.focus(); return; }
+  const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
+  try {
+    const c = await post("/api/collections", { name, doc_ids: ids });
+    f.hidden = true;
+    $("#coll-new-btn").hidden = false;
+    f.name.value = "";
+    state.selected.clear();
+    state.collection = c.id;
+    toast(t("coll.created", { name: c.name, n: c.doc_ids.length }));
+    await loadLibrary();
+  } catch (e) { fail(e); }
+}
+
+async function renameCollection() {
+  const cur = currentCollection();
+  if (!cur) return;
+  const f = $("#coll-new");
+  f.hidden = false;
+  $("#coll-new-btn").hidden = true;
+  f.name.value = cur.name;
+  f.dataset.rename = String(cur.id);
+  f.querySelector("button.primary").textContent = t("coll.rename_ok");
+  f.name.focus();
+  f.name.select();
+}
+
+async function submitCollectionForm(ev) {
+  const f = $("#coll-new");
+  if (!f.dataset.rename) return createCollection(ev);
+  ev.preventDefault();
+  try {
+    await request("PUT", `/api/collections/${f.dataset.rename}`, { name: f.name.value.trim() });
+    closeCollectionForm();
+    await loadLibrary();
+  } catch (e) { fail(e); }
+}
+
+function closeCollectionForm() {
+  const f = $("#coll-new");
+  f.hidden = true;
+  delete f.dataset.rename;
+  f.querySelector("button.primary").textContent = t("coll.create");
+  $("#coll-new-btn").hidden = false;
+}
+
+async function deleteCollection() {
+  const cur = currentCollection();
+  if (!cur) return;
+  const msg = t("coll.delete_confirm", { name: cur.name });
+  const ok = TAURI && TAURI.dialog.ask ? await TAURI.dialog.ask(msg, { kind: "warning" })
+                                       : window.confirm(msg);
+  if (!ok) return;
+  try {
+    await request("DELETE", `/api/collections/${cur.id}`);
+    state.collection = null;
+    await loadLibrary();
+  } catch (e) { fail(e); }
+}
+
 function renderLibrary() {
-  const docs = state.documents;
+  const docs = state.collection
+    ? state.documents.filter((d) => (d.collections || []).includes(state.collection))
+    : state.documents;
   $("#library-empty").hidden = docs.length > 0;
+  $("#library-empty").textContent = state.collection ? t("coll.empty") : t("lib.empty");
   $("#library-table").hidden = docs.length === 0;
+  const names = Object.fromEntries(state.collections.map((c) => [c.id, c.name]));
   const tbody = $("#library-rows");
   tbody.replaceChildren();
   for (const d of [...docs].reverse()) {
@@ -254,13 +384,16 @@ function renderLibrary() {
     box.addEventListener("change", () => {
       if (box.checked) state.selected.add(d.id); else state.selected.delete(d.id);
       updateCompare();
+      updateSelection();
     });
     const stateCell = el("td", { class: d.status === "error" ? "state-error" : "" },
       t(`lib.state.${d.status}`));
     if (d.error) stateCell.title = d.error;
     tbody.append(el("tr", {},
       el("td", {}, box),
-      el("td", { class: "name", onclick: () => openDoc(d.id) }, d.name),
+      el("td", { class: "name", onclick: () => openDoc(d.id) }, d.name,
+        ...(d.collections || []).filter((c) => names[c] && c !== state.collection)
+          .map((c) => el("span", { class: "coll-tag" }, names[c]))),
       el("td", {}, kindLabel(d.kind)),
       el("td", {}, added),
       stateCell,
@@ -646,6 +779,7 @@ async function runSearch(ev) {
   const mode = $("#search-mode").value;
   const f = filterOf("search");
   let url = `/api/search?q=${encodeURIComponent(q)}&mode=${mode}&n=30`;
+  if (f.collections) url += `&collection=${f.collections[0]}`;
   if (f.kinds) url += `&kind=${encodeURIComponent(f.kinds[0])}`;
   if (f.doc_ids) url += `&doc=${f.doc_ids[0]}`;
   try {
@@ -688,7 +822,7 @@ async function runAsk(ev) {
   };
   try {
     const body = { question, history: state.history.slice(-3),
-                   doc_ids: f.doc_ids, kinds: f.kinds };
+                   doc_ids: f.doc_ids, kinds: f.kinds, collections: f.collections };
     await streamAsk(body, {
       sources: (d) => { live.textContent = t("ask.found", { n: d.sent.length }); },
       token: (d) => { text += d.text; if (!frame) frame = requestAnimationFrame(paint); },
@@ -1328,6 +1462,7 @@ function wire() {
   $("#lang-switch").addEventListener("click", () => {
     setLang(getLang() === "fr" ? "en" : "fr");
     translatePage();
+    renderCollections();
     renderLibrary();
     renderFilters();
     renderJobs();
@@ -1342,6 +1477,22 @@ function wire() {
   });
   $("#import-btn").addEventListener("click", () => chooseFiles().catch(fail));
   $("#compare-btn").addEventListener("click", compareSelected);
+  $("#coll-new-btn").addEventListener("click", () => {
+    $("#coll-new").hidden = false; $("#coll-new-btn").hidden = true; $("#coll-new").name.focus(); });
+  $("#coll-new-cancel").addEventListener("click", closeCollectionForm);
+  $("#coll-new").addEventListener("submit", submitCollectionForm);
+  $("#coll-rename").addEventListener("click", renameCollection);
+  $("#coll-delete").addEventListener("click", deleteCollection);
+  $("#coll-add").addEventListener("click", () => {
+    const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
+    if (ids.length && $("#coll-target").value) {
+      changeMembers(Number($("#coll-target").value), ids, []).catch(fail);
+    }
+  });
+  $("#coll-remove").addEventListener("click", () => {
+    const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
+    if (ids.length && state.collection) changeMembers(state.collection, [], ids).catch(fail);
+  });
   $("#result-close").addEventListener("click", () => { $("#result-panel").hidden = true; });
   $("#search-form").addEventListener("submit", runSearch);
   $("#chat-export").addEventListener("click", () => exportConversation().catch(fail));

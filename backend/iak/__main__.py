@@ -15,6 +15,10 @@
     python -m iak summarize ID            summary of a document, with page labels
     python -m iak compare ID ID...        compare documents (from their summaries)
     python -m iak analyses [ID]           stored analyses
+    python -m iak collection [list|create NAME|add NAME ID...|remove NAME ID...|
+                              rename NAME NEW|delete NAME|show NAME]
+                                          named groups of documents (--collection
+                                          NAME limits search and ask to one)
     python -m iak export ANALYSIS [-o F]  an analysis (summary, comparison...) as Markdown
     python -m iak translate ID --to en    translate a document page by page (kept),
                                           or --text "..." / --file F.txt; --out FILE
@@ -88,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-n", type=int, default=10)
     p.add_argument("--doc", type=int, action="append", help="limit to document ID")
     p.add_argument("--kind", action="append", help="limit to a type (pdf, image...)")
+    p.add_argument("--collection", action="append", help="limit to a collection (name)")
     p.add_argument("--mode", choices=["auto", "hybrid", "sem", "kw"], default="auto")
     p = sub.add_parser("ask")
     p.add_argument("question")
@@ -97,6 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--budget", type=int, default=answer.DEFAULT_BUDGET_CHARS,
                    help="characters of passages sent to the model")
     p.add_argument("--md", type=Path, help="also write the answer and its sources as Markdown")
+    p.add_argument("--collection", action="append", help="limit to a collection (name)")
     p = sub.add_parser("look")
     p.add_argument("unit_id", type=int, help="unit (page) id, see the show command")
     p.add_argument("--task", default="describe",
@@ -119,6 +125,11 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("compare")
     p.add_argument("ids", type=int, nargs="+")
     p.add_argument("--question", default="", help="aspect to focus on")
+    p = sub.add_parser("collection")
+    p.add_argument("action", nargs="?", default="list",
+                   choices=("list", "show", "create", "add", "remove", "rename", "delete"))
+    p.add_argument("name", nargs="?", help="collection name")
+    p.add_argument("args", nargs="*", help="document ids (add, remove) or the new name (rename)")
     p = sub.add_parser("export")
     p.add_argument("analysis", type=int, help="analysis id (see analyses)")
     p.add_argument("-o", "--out", type=Path, help="file to write (default: printed)")
@@ -274,8 +285,56 @@ def main(argv: list[str] | None = None) -> int:
                 _out(u["text"])
             return 0
 
+        def collection_ids(names):
+            from . import collection
+            try:
+                return [collection.by_name(lib.con, n)["id"] for n in names] if names else None
+            except KeyError as exc:
+                raise SystemExit(str(exc).strip("'"))
+
+        if args.cmd == "collection":
+            from . import collection
+            try:
+                if args.action == "list":
+                    for c in collection.all_(lib.con):
+                        _out(f"{c['name']}  ({c['n_docs']} document(s))")
+                    return 0
+                if not args.name:
+                    _out("give the collection's name")
+                    return 1
+                if args.action == "create":
+                    c = collection.create(lib.con, args.name)
+                    if args.args:
+                        collection.add(lib.con, c["id"], [int(x) for x in args.args])
+                    _out(f"collection {c['name']} created")
+                    return 0
+                c = collection.by_name(lib.con, args.name)
+                if args.action == "show":
+                    for d in c["doc_ids"]:
+                        row = lib.document(d)
+                        _out(f"#{d:<5} {row['name']}")
+                elif args.action == "add":
+                    n = collection.add(lib.con, c["id"], [int(x) for x in args.args])
+                    _out(f"{n} document(s) added to {c['name']}")
+                elif args.action == "remove":
+                    n = collection.remove(lib.con, c["id"], [int(x) for x in args.args])
+                    _out(f"{n} document(s) removed from {c['name']}")
+                elif args.action == "rename":
+                    if len(args.args) != 1:
+                        _out("give the new name")
+                        return 1
+                    _out(f"renamed: {collection.rename(lib.con, c['id'], args.args[0])['name']}")
+                elif args.action == "delete":
+                    collection.delete(lib.con, c["id"])
+                    _out(f"collection {c['name']} deleted (its documents stay in the library)")
+            except (collection.CollectionError, KeyError, ValueError) as exc:
+                _out(str(exc).strip("'"))
+                return 1
+            return 0
+
         if args.cmd == "search":
-            filters = search.Filters(args.doc, args.kind)
+            filters = search.Filters(args.doc, args.kind,
+                                     collections=collection_ids(args.collection))
             try:
                 hits, used = lib.find(args.query, args.n, filters,
                                       embedder(args.mode in ("sem", "hybrid")), args.mode)
@@ -298,7 +357,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             if not servers.is_local(url):
                 _out(f"note: passages are sent to {url}, outside this computer")
-            filters = search.Filters(args.doc, args.kind)
+            filters = search.Filters(args.doc, args.kind,
+                                     collections=collection_ids(args.collection))
             try:
                 hits, used = lib.find(args.question, 20, filters,
                                       embedder(args.mode in ("sem", "hybrid")), args.mode)

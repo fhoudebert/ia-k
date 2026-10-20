@@ -20,7 +20,8 @@ interface uses.
 ./iak.sh status                                   # counts, semantic index, servers
 ./iak.sh show 3                                   # pages of document 3 with their text
 ./iak.sh search "atlas relieur"                   # hybrid search
-./iak.sh search "..." --mode kw|sem|hybrid --doc 3 --kind pdf
+./iak.sh search "..." --mode kw|sem|hybrid --doc 3 --kind pdf --collection "Archives"
+./iak.sh collection create "Archives" 3 7         # also: list, show, add, remove, rename, delete
 ./iak.sh ask "Où l'atlas a-t-il été envoyé ?"     # sourced answer
 ./iak.sh edit 42 corrected.txt                    # replace the text of unit 42 (OCR correction)
 ./iak.sh reindex 3 --extract                      # extract and OCR again
@@ -87,6 +88,13 @@ suits exFAT keys that may be unplugged.
   `title: <document> | text: …`, queries as `task: search result | query: …`.
 - **Cut-off.** Meaning search always has neighbours: hits under a cosine of
   0.10 or under half the best score are dropped.
+- **Filters.** A collection, a type or a document limit both searches. Meaning
+  search then scores only the passages the filters keep, so a small
+  collection in a big library is searched as well as the whole library.
+- **Collections.** `collections` and `collection_docs` (schema 6): names
+  unique whatever their case; a document can be in several; deleting a
+  collection leaves its documents, deleting a document takes it out of its
+  collections.
 - **One model per index.** The index records its embedding model (file name,
   dimension, vector of a probe sentence); another model is refused until
   `embed --rebuild`, another quantisation of the same model is accepted.
@@ -256,8 +264,11 @@ The interface talks to the engine through an HTTP API:
 | `GET /api/units/<id>`, `GET /api/units/<id>/image?max=1600` | text and word boxes; page as PNG |
 | `PUT /api/units/<id>/text` `{"text": "..."}` | OCR correction, reindexed |
 | `GET /api/passages/<id>/boxes` | rectangles of a passage's lines on its page |
-| `GET /api/search?q=&mode=auto\|hybrid\|sem\|kw&n=&doc=&kind=` | passages with citations |
-| `POST /api/ask` `{"question", "doc_ids", "kinds", "history"}` | sourced answer |
+| `GET /api/search?q=&mode=auto\|hybrid\|sem\|kw&n=&doc=&kind=&collection=` | passages with citations |
+| `POST /api/ask` `{"question", "doc_ids", "kinds", "collections", "history"}` | sourced answer |
+| `GET /api/collections`, `POST /api/collections` `{"name", "doc_ids"}` | collections with their counts; create one |
+| `GET`, `PUT` `{"name"}`, `DELETE /api/collections/<id>` | one collection: its documents, rename, delete |
+| `POST /api/collections/<id>/documents` `{"add": [ids], "remove": [ids]}` | put documents in it or take them out |
 | `POST /api/ask/stream` (same body) | server-sent events: `sources`, `token`…, `done` or `error` |
 | `POST /api/look` `{"unit_id": 42, "task": "error"}` or `"question"` | job |
 | `POST /api/summarize` `{"doc_id": 3}`, `POST /api/compare` `{"doc_ids": [3, 7]}` | jobs |

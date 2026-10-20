@@ -101,6 +101,14 @@ document's state, pages, OCR pages and passages; the *Jobs* panel shows
 imports and analyses in progress. From the list you can open, summarise or
 delete a document, and compare the documents you tick.
 
+**Collections.** Group documents by subject, project or source: tick
+documents, *+ New collection* (or *Add to the collection* for an existing
+one). A document can be in several collections; the chips above the list
+show one collection at a time, where documents can be removed from it, and
+the collection renamed or deleted (its documents stay in the library). In
+*Search* and *Questions*, a collection limits the passages to its documents,
+alone or with a type or a document.
+
 **Document.** The page on the left, its text on the right. OCR text can be
 corrected and saved; the correction is kept even if the document is read
 again. *Analyse the page* asks the model to describe it, transcribe it,
@@ -236,12 +244,13 @@ Done:
 12. Export of answers, conversations, summaries, comparisons and page
     analyses as Markdown, with their sources
 
+13. Collections (named groups of documents) to limit search and questions
+
 Next:
 
-13. **Collections** (named groups of documents) to limit search and questions.
+14. **Watched folders**: documents added to a folder imported by themselves.
 
 Later:
 
 - Other launchers by use, as needed.
-- Watched folders: documents added to a folder imported by themselves.
 - The engine frozen in the application (no `setup_python` step).

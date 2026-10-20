@@ -45,6 +45,26 @@
         <input id="compare-question" data-i18n-placeholder="compare.question" hidden>
         <button id="compare-btn" data-i18n="lib.compare" hidden></button>
       </div>
+      <div class="collections">
+        <div id="coll-chips" class="coll-chips"></div>
+        <form id="coll-new" class="coll-new" hidden>
+          <input name="name" data-i18n-placeholder="coll.name" maxlength="80" autocomplete="off">
+          <button class="primary" data-i18n="coll.create"></button>
+          <button type="button" class="link" id="coll-new-cancel">×</button>
+        </form>
+        <button class="link" id="coll-new-btn" data-i18n="coll.new"></button>
+        <span class="spacer"></span>
+        <span id="coll-tools" hidden>
+          <button class="link" id="coll-rename" data-i18n="coll.rename"></button>
+          <button class="link danger" id="coll-delete" data-i18n="coll.delete"></button>
+        </span>
+      </div>
+      <div id="coll-selection" class="coll-selection" hidden>
+        <span id="coll-selected"></span>
+        <select id="coll-target"></select>
+        <button id="coll-add" data-i18n="coll.add"></button>
+        <button id="coll-remove" class="link" hidden></button>
+      </div>
       <div id="drop-zone" class="drop-zone">
         <p id="library-empty" class="empty" data-i18n="lib.empty" hidden></p>
         <table id="library-table" class="table" hidden>
@@ -88,6 +108,7 @@
         <button class="primary" data-i18n="search.go"></button>
       </form>
       <div class="filters">
+        <select id="search-coll" class="filter-coll"></select>
         <select id="search-kind" class="filter-kind"></select>
         <select id="search-doc" class="filter-doc"></select>
       </div>
@@ -98,6 +119,7 @@
     <!-- questions -->
     <main id="view-ask" class="view" hidden>
       <div class="filters">
+        <select id="ask-coll" class="filter-coll"></select>
         <select id="ask-kind" class="filter-kind"></select>
         <select id="ask-doc" class="filter-doc"></select>
         <span class="spacer"></span>

@@ -32,8 +32,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, analyze, answer, book, db, embed, export, ocr, search,
-               servers, transcription, translate)
+from . import (__version__, analyze, answer, book, collection, db, embed, export, ocr,
+               search, servers, transcription, translate)
 from .library import Library
 
 CONTENT_TYPES = {
@@ -339,7 +339,8 @@ def _filters(q: dict) -> search.Filters:
         v = q.get(key)
         return [int(x) for x in v] if v else None
     return search.Filters(doc_ids=ints("doc"), kinds=q.get("kind") or None,
-                          folder=(q.get("folder") or [None])[0])
+                          folder=(q.get("folder") or [None])[0],
+                          collections=ints("collection"))
 
 
 def _book_source(lib: Library, doc_id: int) -> dict:
@@ -546,7 +547,11 @@ class Handler(BaseHTTPRequestHandler):
     def documents(self, query):
         with self.app.library() as lib:
             rows = lib.documents((query.get("kind") or [None])[0])
-        self._json(200, [_row(r) for r in rows])
+            colls = collection.of_documents(lib.con)
+        out = [_row(r) for r in rows]
+        for d in out:
+            d["collections"] = colls.get(d["id"], [])
+        self._json(200, out)
 
     @route("GET", r"/api/documents/(\d+)")
     def document(self, doc_id, query):
@@ -665,9 +670,11 @@ class Handler(BaseHTTPRequestHandler):
         mode = body.get("mode", "auto")
         doc_ids = body.get("doc_ids") or None
         kinds = body.get("kinds") or None
-        if doc_ids is not None and not all(isinstance(x, int) for x in doc_ids):
-            raise ApiError(400, "doc_ids must be a list of numbers")
-        filters = search.Filters(doc_ids=doc_ids, kinds=kinds)
+        colls = body.get("collections") or None
+        for name, v in (("doc_ids", doc_ids), ("collections", colls)):
+            if v is not None and not (isinstance(v, list) and all(isinstance(x, int) for x in v)):
+                raise ApiError(400, f"{name} must be a list of numbers")
+        filters = search.Filters(doc_ids=doc_ids, kinds=kinds, collections=colls)
         history = answer.clean_history(body.get("history"))
         with self.app.library() as lib:
             emb = self.app.embedder(required=mode in ("sem", "hybrid"))
@@ -729,6 +736,70 @@ class Handler(BaseHTTPRequestHandler):
         with self.app.library() as lib:
             rows = analyze.analyses(lib.con, int(doc[0]) if doc else None)
         self._json(200, [_row(r) for r in rows])
+
+    # -------------------------------------------------- collections
+    def _collection(self, lib, cid):
+        try:
+            return collection.get(lib.con, int(cid))
+        except KeyError:
+            raise ApiError(404, "no such collection")
+
+    @route("GET", "/api/collections")
+    def collections(self, query):
+        with self.app.library() as lib:
+            self._json(200, collection.all_(lib.con))
+
+    @route("POST", "/api/collections")
+    def collection_create(self, query):
+        body = self._body()
+        with self.app.library() as lib:
+            try:
+                c = collection.create(lib.con, body.get("name"))
+                if body.get("doc_ids"):
+                    collection.add(lib.con, c["id"], [int(x) for x in body["doc_ids"]])
+                    c = collection.get(lib.con, c["id"])
+            except collection.CollectionError as exc:
+                raise ApiError(409 if "exists" in str(exc) else 400, str(exc))
+            except KeyError as exc:
+                raise ApiError(404, str(exc).strip("'"))
+        self._json(201, c)
+
+    @route("GET", r"/api/collections/(\d+)")
+    def collection_info(self, cid, query):
+        with self.app.library() as lib:
+            self._json(200, self._collection(lib, cid))
+
+    @route("PUT", r"/api/collections/(\d+)")
+    def collection_rename(self, cid, query):
+        body = self._body()
+        with self.app.library() as lib:
+            self._collection(lib, cid)
+            try:
+                self._json(200, collection.rename(lib.con, int(cid), body.get("name")))
+            except collection.CollectionError as exc:
+                raise ApiError(409 if "exists" in str(exc) else 400, str(exc))
+
+    @route("DELETE", r"/api/collections/(\d+)")
+    def collection_delete(self, cid, query):
+        with self.app.library() as lib:
+            self._collection(lib, cid)
+            collection.delete(lib.con, int(cid))
+        self._json(200, {"deleted": int(cid)})
+
+    @route("POST", r"/api/collections/(\d+)/documents")
+    def collection_documents(self, cid, query):
+        """{"add": [document ids], "remove": [document ids]}"""
+        body = self._body()
+        with self.app.library() as lib:
+            self._collection(lib, cid)
+            try:
+                added = collection.add(lib.con, int(cid), [int(x) for x in body.get("add") or []])
+            except KeyError as exc:
+                raise ApiError(404, str(exc).strip("'"))
+            removed = collection.remove(lib.con, int(cid),
+                                        [int(x) for x in body.get("remove") or []])
+            out = self._collection(lib, cid)
+        self._json(200, {**out, "added": added, "removed": removed})
 
     # -------------------------------------------------- Markdown exports
     def _lang(self, value) -> str:
