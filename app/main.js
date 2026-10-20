@@ -25,6 +25,7 @@ const state = {
   doc: null, units: [], unit: null,
   jobs: [],
   waiters: new Map(),          // job id -> resolve
+  history: [],                 // [{question, answer}] of the current conversation
   seenJobs: new Set(),         // finished jobs already taken into account
   started: false,              // first jobs poll done
   imageUrl: null,
@@ -200,6 +201,35 @@ function renderJobs() {
 async function loadLibrary() {
   state.documents = await get("/api/documents");
   renderLibrary();
+  renderFilters();
+}
+
+/** Type and document lists of the search and question filters. */
+function renderFilters() {
+  const kinds = [...new Set(state.documents.map((d) => d.kind))].sort();
+  for (const id of ["#search-kind", "#ask-kind"]) {
+    const sel = $(id);
+    const keep = sel.value;
+    sel.replaceChildren(el("option", { value: "" }, t("filter.all_kinds")),
+      ...kinds.map((k) => el("option", { value: k }, kindLabel(k))));
+    sel.value = kinds.includes(keep) ? keep : "";
+  }
+  for (const id of ["#search-doc", "#ask-doc"]) {
+    const sel = $(id);
+    const keep = sel.value;
+    const docs = [...state.documents].sort((a, b) => a.name.localeCompare(b.name, getLang()));
+    sel.replaceChildren(el("option", { value: "" }, t("filter.all_docs")),
+      ...docs.map((d) => el("option", { value: String(d.id) }, d.name)));
+    sel.value = docs.some((d) => String(d.id) === keep) ? keep : "";
+  }
+}
+
+function filterOf(prefix) {
+  const kind = $(`#${prefix}-kind`).value;
+  const doc = $(`#${prefix}-doc`).value;
+  return { kinds: kind ? [kind] : null, doc_ids: doc ? [Number(doc)] : null,
+           label: [kind && kindLabel(kind), doc && $(`#${prefix}-doc`).selectedOptions[0].text]
+             .filter(Boolean).join(", ") };
 }
 
 function renderLibrary() {
@@ -449,8 +479,12 @@ async function runSearch(ev) {
   const q = $("#search-input").value.trim();
   if (!q) return;
   const mode = $("#search-mode").value;
+  const f = filterOf("search");
+  let url = `/api/search?q=${encodeURIComponent(q)}&mode=${mode}&n=30`;
+  if (f.kinds) url += `&kind=${encodeURIComponent(f.kinds[0])}`;
+  if (f.doc_ids) url += `&doc=${f.doc_ids[0]}`;
   try {
-    const res = await get(`/api/search?q=${encodeURIComponent(q)}&mode=${mode}&n=30`);
+    const res = await get(url);
     const modeName = t(`search.mode.${res.mode === "kw" ? "kw" : res.mode}`).toLowerCase();
     $("#search-count").textContent = res.hits.length
       ? t("search.count", { n: res.hits.length, mode: modeName }) : t("search.none");
@@ -473,7 +507,9 @@ async function runAsk(ev) {
   input.value = "";
   const chat = $("#chat");
   $("#chat-empty").hidden = true;
-  chat.append(el("div", { class: "msg user" }, question));
+  const f = filterOf("ask");
+  chat.append(el("div", { class: "msg user" }, question,
+    f.label ? el("span", { class: "scope" }, t("filter.scope", { what: f.label })) : null));
   const live = el("div", { class: "msg bot thinking" }, t("ask.thinking"));
   chat.append(live);
   live.scrollIntoView({ block: "end" });
@@ -486,10 +522,16 @@ async function runAsk(ev) {
     live.scrollIntoView({ block: "end" });
   };
   try {
-    await streamAsk(question, {
+    const body = { question, history: state.history.slice(-3),
+                   doc_ids: f.doc_ids, kinds: f.kinds };
+    await streamAsk(body, {
       sources: (d) => { live.textContent = t("ask.found", { n: d.sent.length }); },
       token: (d) => { text += d.text; if (!frame) frame = requestAnimationFrame(paint); },
-      done: (d) => { if (frame) cancelAnimationFrame(frame); live.replaceWith(answerMessage(d)); },
+      done: (d) => {
+        if (frame) cancelAnimationFrame(frame);
+        live.replaceWith(answerMessage(d));
+        state.history.push({ question, answer: d.status === "no_answer" ? "" : d.text });
+      },
       error: (d) => { throw new Error(d.error); },
     });
   } catch (e) {
@@ -499,11 +541,11 @@ async function runAsk(ev) {
 }
 
 /** POST /api/ask/stream and dispatch its server-sent events. */
-async function streamAsk(question, handlers) {
+async function streamAsk(body, handlers) {
   const r = await fetch(`${backend.url}/api/ask/stream`, {
     method: "POST",
     headers: { Authorization: `Bearer ${backend.token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) {
     let msg = `HTTP ${r.status}`;
@@ -720,6 +762,7 @@ function wire() {
     setLang(getLang() === "fr" ? "en" : "fr");
     translatePage();
     renderLibrary();
+    renderFilters();
     renderJobs();
     loadServers();
     if (state.doc) { loadAnalyses().catch(fail); if (state.unit) selectUnit(state.unit.id); }
@@ -733,6 +776,12 @@ function wire() {
   $("#compare-btn").addEventListener("click", compareSelected);
   $("#result-close").addEventListener("click", () => { $("#result-panel").hidden = true; });
   $("#search-form").addEventListener("submit", runSearch);
+  $("#chat-new").addEventListener("click", () => {
+    state.history = [];
+    $("#chat").replaceChildren($("#chat-empty"));
+    $("#chat-empty").hidden = false;
+    $("#ask-input").focus();
+  });
   $("#ask-form").addEventListener("submit", runAsk);
   $("#viewer-back").addEventListener("click", () => show("library"));
   $("#viewer-summary").addEventListener("click", () => state.doc && summarize(state.doc.id, state.doc.name));

@@ -34,6 +34,15 @@ from urllib.parse import parse_qs, urlparse
 from . import __version__, analyze, answer, db, embed, ocr, search, servers
 from .library import Library
 
+CONTENT_TYPES = {
+    ".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg", ".tif": "image/tiff", ".tiff": "image/tiff", ".bmp": "image/bmp",
+    ".webp": "image/webp", ".txt": "text/plain; charset=utf-8",
+    ".md": "text/markdown; charset=utf-8", ".markdown": "text/markdown; charset=utf-8",
+    ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8",
+    ".xhtml": "application/xhtml+xml", ".epub": "application/epub+zip",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
 TAURI_ORIGINS = {"tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"}
 MAX_BODY = 4 << 20
 
@@ -429,7 +438,10 @@ class Handler(BaseHTTPRequestHandler):
             path = lib.original_path(int(doc_id))
         if not path.exists():
             raise ApiError(404, f"original file not found: {path}")
-        ctype = mimetypes.guess_type(d["name"])[0] or "application/octet-stream"
+        # fixed types for the supported formats: on Windows, mimetypes reads
+        # the registry, which can say image/x-png or nothing at all
+        ctype = CONTENT_TYPES.get(Path(d["name"]).suffix.lower()) \
+            or mimetypes.guess_type(d["name"])[0] or "application/octet-stream"
         name = d["name"].replace('"', "")
         self._send(200, path.read_bytes(), ctype,
                    {"Content-Disposition": f'inline; filename="{name}"'})
@@ -496,20 +508,34 @@ class Handler(BaseHTTPRequestHandler):
             hits, used = lib.find(q, n, _filters(query), emb, mode)
         self._json(200, {"mode": used, "hits": [_hit(h) for h in hits]})
 
-    @route("POST", "/api/ask")
-    def ask(self, query):
-        body = self._body()
+    def _retrieve(self, body: dict):
+        """Passages for a question (and its follow-up context), with filters."""
         question = body.get("question", "")
         if not isinstance(question, str) or not question.strip():
             raise ApiError(400, "question is required")
         mode = body.get("mode", "auto")
-        filters = search.Filters(doc_ids=body.get("doc_ids"), kinds=body.get("kinds"))
-        t0 = time.perf_counter()
+        doc_ids = body.get("doc_ids") or None
+        kinds = body.get("kinds") or None
+        if doc_ids is not None and not all(isinstance(x, int) for x in doc_ids):
+            raise ApiError(400, "doc_ids must be a list of numbers")
+        filters = search.Filters(doc_ids=doc_ids, kinds=kinds)
+        history = answer.clean_history(body.get("history"))
         with self.app.library() as lib:
             emb = self.app.embedder(required=mode in ("sem", "hybrid"))
             hits, used = lib.find(question, 20, filters, emb, mode)
+            follow = answer.retrieval_query(question, history)
+            if follow:
+                more, _ = lib.find(follow, 20, filters, emb, mode)
+                hits = answer.fuse(hits, more)
+        return question, history, hits, used
+
+    @route("POST", "/api/ask")
+    def ask(self, query):
+        body = self._body()
+        t0 = time.perf_counter()
+        question, history, hits, used = self._retrieve(body)
         res = answer.ask(question, hits, self.app.chat(),
-                         int(body.get("budget", answer.DEFAULT_BUDGET_CHARS)))
+                         int(body.get("budget", answer.DEFAULT_BUDGET_CHARS)), history=history)
         src = lambda s: {"ref": s.ref, "passage_id": s.passage_id, "doc_id": s.doc_id,
                          "unit_id": s.unit_id, "doc_name": s.doc_name, "label": s.label,
                          "text": s.text}
@@ -625,15 +651,8 @@ class Handler(BaseHTTPRequestHandler):
     def ask_stream(self, query):
         """Server-sent events: sources, token..., done (or error)."""
         body = self._body()
-        question = body.get("question", "")
-        if not isinstance(question, str) or not question.strip():
-            raise ApiError(400, "question is required")
-        mode = body.get("mode", "auto")
-        filters = search.Filters(doc_ids=body.get("doc_ids"), kinds=body.get("kinds"))
         t0 = time.perf_counter()
-        with self.app.library() as lib:
-            emb = self.app.embedder(required=mode in ("sem", "hybrid"))
-            hits, used = lib.find(question, 20, filters, emb, mode)
+        question, history, hits, used = self._retrieve(body)
         chat = self.app.chat()
         # headers now: errors after this point are sent as an "error" event
         self.send_response(200)
@@ -657,7 +676,8 @@ class Handler(BaseHTTPRequestHandler):
                          "text": s.text}
         try:
             for kind, value in answer.ask_stream(
-                    question, hits, chat, int(body.get("budget", answer.DEFAULT_BUDGET_CHARS))):
+                    question, hits, chat, int(body.get("budget", answer.DEFAULT_BUDGET_CHARS)),
+                    history=history):
                 if kind == "sources":
                     emit("sources", {"search": used, "sent": [src(x) for x in value],
                                      "remote": not servers.is_local(self.app.host.chat)})

@@ -84,12 +84,22 @@
         </select>
         <button class="primary" data-i18n="search.go"></button>
       </form>
+      <div class="filters">
+        <select id="search-kind" class="filter-kind"></select>
+        <select id="search-doc" class="filter-doc"></select>
+      </div>
       <p id="search-count" class="muted"></p>
       <ol id="search-results" class="results"></ol>
     </main>
 
     <!-- questions -->
     <main id="view-ask" class="view" hidden>
+      <div class="filters">
+        <select id="ask-kind" class="filter-kind"></select>
+        <select id="ask-doc" class="filter-doc"></select>
+        <span class="spacer"></span>
+        <button class="link" id="chat-new" data-i18n="ask.new"></button>
+      </div>
       <div id="chat" class="chat">
         <p class="muted" id="chat-empty" data-i18n="ask.empty"></p>
       </div>

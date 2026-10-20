@@ -239,6 +239,7 @@ def test_pdf_without_tesseract_keeps_native_pages(lib, tmp_path, monkeypatch):
     doc.save(path)
     monkeypatch.setenv("IAK_TESSERACT", "")
     monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr("iak.ocr.WINDOWS_DEFAULTS", [])
     r = lib.import_file(path)
     assert r.status == "imported" and "OCR unavailable" in r.message
     assert search.search(lib.con, "reliure")

@@ -19,3 +19,14 @@ venv*/
 config/servers.toml
 # server logs
 *.log
+# portable folders made by scripts/make_portable.py
+dist/
+# desktop application build
+src-tauri/target/
+src-tauri/gen/
+node_modules/
+package-lock.json
+# per-key settings
+config/app.json
+config/servers.toml.bak
+config/servers.toml.tmp

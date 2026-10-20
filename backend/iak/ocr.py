@@ -28,6 +28,10 @@ class OcrResult:
     boxes: list[list] = field(default_factory=list)  # [x0, y0, x1, y1, word, conf] in pixels
 
 
+# usual install places on Windows (UB Mannheim installer, Chocolatey)
+WINDOWS_DEFAULTS = [r"C:\Program Files\Tesseract-OCR\tesseract.exe"]
+
+
 def find_tesseract(explicit: str | None = None) -> str:
     # a copy carried on the key (build/tesseract) comes first after explicit choices
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,7 +39,7 @@ def find_tesseract(explicit: str | None = None) -> str:
     candidates = [explicit, os.environ.get("IAK_TESSERACT"),
                   os.path.join(root, "build", "tesseract", exe), shutil.which("tesseract")]
     if os.name == "nt":
-        candidates += [r"C:\Program Files\Tesseract-OCR\tesseract.exe"]
+        candidates += WINDOWS_DEFAULTS
     for c in candidates:
         if c and os.path.isfile(c):
             return c

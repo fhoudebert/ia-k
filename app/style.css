@@ -183,3 +183,6 @@ button.cite { padding: 0 5px; font-size: 11px; border-radius: 4px; background: v
 .streaming .prose::after { content: "▍"; color: var(--accent); animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 .form p { margin: 0; }
+.filters { display: flex; gap: 8px; align-items: center; }
+.filters select { max-width: 320px; }
+.msg.user .scope { display: block; font-size: 11px; opacity: .8; margin-top: 2px; }

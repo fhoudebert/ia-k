@@ -66,11 +66,63 @@ def _escape(text: str) -> str:
     return re.sub(r"</?passage", lambda m: m.group(0).replace("<", "‹"), text, flags=re.I)
 
 
-def build_messages(question: str, sources: list[Source]) -> list[dict]:
+# a follow-up question keeps the last exchanges, shortened, without their
+# passages: enough to understand "and when?" or "the second one", little cost
+HISTORY_TURNS = 3
+HISTORY_ANSWER_CHARS = 1200
+
+
+def clean_history(history) -> list[dict]:
+    """[{"question", "answer"}] from the interface, checked and shortened.
+    Citation marks are removed: [S1] of an earlier answer is another passage."""
+    out = []
+    if not isinstance(history, list):
+        return out
+    for turn in history:
+        if not isinstance(turn, dict):
+            continue
+        q = str(turn.get("question") or "").strip()[:500]
+        a = re.sub(r"\[\s*S\d+(?:\s*[,;]\s*S\d+)*\s*\]", "", str(turn.get("answer") or ""))
+        a = a.strip()[:HISTORY_ANSWER_CHARS]
+        if q:
+            out.append({"question": q, "answer": a or NO_ANSWER})
+    return out[-HISTORY_TURNS:]
+
+
+def build_messages(question: str, sources: list[Source],
+                   history: list[dict] | None = None) -> list[dict]:
     blocks = [f'<passage id="{s.ref}" source="{_escape(s.doc_name)}, {s.label}">\n'
               f"{_escape(s.text)}\n</passage>" for s in sources]
-    user = "Passages:\n\n" + "\n\n".join(blocks) + f"\n\nQuestion: {question.strip()}"
-    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
+    msgs = [{"role": "system", "content": SYSTEM}]
+    for turn in clean_history(history):
+        msgs.append({"role": "user", "content": turn["question"]})
+        msgs.append({"role": "assistant", "content": turn["answer"]})
+    note = ("\n\n(Earlier messages give the context of this question; cite only the "
+            "passages above.)" if len(msgs) > 1 else "")
+    user = ("Passages:\n\n" + "\n\n".join(blocks)
+            + f"\n\nQuestion: {question.strip()}{note}")
+    msgs.append({"role": "user", "content": user})
+    return msgs
+
+
+def retrieval_query(question: str, history) -> str | None:
+    """Second query for a follow-up: the previous question with this one, so
+    that "and when did he return it?" still finds the atlas."""
+    turns = clean_history(history)
+    if not turns:
+        return None
+    return f"{turns[-1]['question']} {question.strip()}"
+
+
+def fuse(*lists: list[Hit], k: int = 60) -> list[Hit]:
+    """Merge ranked lists of hits by reciprocal rank (first list first on ties)."""
+    scores: dict[int, float] = {}
+    first: dict[int, Hit] = {}
+    for hits in lists:
+        for rank, h in enumerate(hits):
+            scores[h.passage_id] = scores.get(h.passage_id, 0.0) + 1.0 / (k + rank + 1)
+            first.setdefault(h.passage_id, h)
+    return sorted(first.values(), key=lambda h: -scores[h.passage_id])
 
 
 def check(raw: str, sent: list[Source]) -> Answer:
@@ -95,16 +147,16 @@ def check(raw: str, sent: list[Source]) -> Answer:
 
 
 def ask(question: str, hits: list[Hit], client, budget_chars: int = DEFAULT_BUDGET_CHARS,
-        max_passages: int = 8, max_tokens: int = 700) -> Answer:
+        max_passages: int = 8, max_tokens: int = 700, history=None) -> Answer:
     sent = select(hits, budget_chars, max_passages)
     if not sent:
         return Answer("", "no_answer", [], [])
-    raw = client.chat(build_messages(question, sent), max_tokens=max_tokens)
+    raw = client.chat(build_messages(question, sent, history), max_tokens=max_tokens)
     return check(raw, sent)
 
 
 def ask_stream(question: str, hits: list[Hit], client, budget_chars: int = DEFAULT_BUDGET_CHARS,
-               max_passages: int = 8, max_tokens: int = 700):
+               max_passages: int = 8, max_tokens: int = 700, history=None):
     """Like ask(), as events for a live display: ("sources", sent passages),
     then ("token", text) pieces, then ("done", Answer) with checked citations."""
     sent = select(hits, budget_chars, max_passages)
@@ -113,7 +165,8 @@ def ask_stream(question: str, hits: list[Hit], client, budget_chars: int = DEFAU
         return
     yield "sources", sent
     parts = []
-    for piece in client.chat_stream(build_messages(question, sent), max_tokens=max_tokens):
+    for piece in client.chat_stream(build_messages(question, sent, history),
+                                    max_tokens=max_tokens):
         parts.append(piece)
         yield "token", piece
     yield "done", check("".join(parts), sent)

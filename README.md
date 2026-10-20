@@ -54,10 +54,15 @@ Screens, in French or English:
   transcribe, explain an error, extract, free question) and the stored
   analyses. Opened from a search result or a citation, the passage is
   highlighted on the page image (from the word boxes kept at extraction).
-- **Search**: hybrid, keyword or meaning search; each result opens its page.
-- **Questions**: the answer appears as it is written, then its citations
-  `[S1]` become clickable and the sources are listed; a warning shows when
-  the chat server is not on this computer.
+- **Search**: hybrid, keyword or meaning search, limited to a type of
+  document or to one document if wished; each result opens its page.
+- **Questions**: a conversation: follow-up questions ("and when did he
+  return it?") are understood from the last three exchanges, which are sent
+  to the model with the new passages and also used to search. The answer
+  appears as it is written, then its citations `[S1]` become clickable and
+  the sources are listed. Questions can be limited to a type or a document;
+  "New conversation" starts afresh. A warning shows when the chat server is
+  not on this computer.
 - **Settings**: the model servers of this computer (written to
   `config/servers.toml`, in a section matched to the computer name; other
   computers' sections are kept, the previous file saved as `.bak`), an API
@@ -81,6 +86,15 @@ stored relative to the IA-K folder when it is inside it, so that it follows
 the key) or `IAK_LIBRARY` says otherwise. An AppImage counts from where the
 `.AppImage` file is.
 
+### Downloads and continuous integration
+
+Every push to GitHub runs `.github/workflows/ci.yml` on Linux and Windows:
+the backend tests (with Tesseract and its French data), the Rust tests, a
+release build, and the portable folder made by `scripts/make_portable.py`.
+The zips `ia-k-windows` and `ia-k-linux` are in the run's *Artifacts*
+(GitHub, Actions tab, kept 30 days). Unzip one on the key, run
+`setup_python`, add `config/servers.toml`, and start `ia-k`.
+
 ### Building
 
 Requirements: Rust (rustup), Node.js for the Tauri command line, and on
@@ -94,7 +108,13 @@ npm run build        # release: src-tauri/target/release/ia-k[.exe] and installe
 ```
 
 Copy `src-tauri/target/release/ia-k` (or `ia-k.exe`) to the root of the
-IA-K folder. Builds are made on each system (Windows on Windows).
+IA-K folder, or make the portable folder and its zip in `dist/`:
+
+```
+python scripts/make_portable.py --exe src-tauri/target/release/ia-k.exe --os windows
+```
+
+Builds are made on each system (Windows on Windows).
 
 For interface work in a browser, start the backend with
 `./iak.sh serve --allow-origin http://127.0.0.1:8899`, serve `app/` on that
@@ -259,6 +279,7 @@ The desktop interface talks to the backend through a local HTTP API:
 | `GET /api/search?q=&mode=auto|hybrid|sem|kw&n=&doc=&kind=` | passages with citations |
 | `POST /api/ask` `{"question": "...", "doc_ids": [...]}` | sourced answer |
 | `POST /api/ask/stream` (same body) | the same as server-sent events: `sources`, `token`…, `done` (or `error`) |
+| (both) `"history": [{"question", "answer"}]`, `"kinds": ["pdf"]` | follow-up context (last 3 kept), filters |
 | `GET /api/passages/<id>/boxes` | rectangles of a passage's lines on its page, in page units |
 | `GET /api/settings`, `PUT /api/settings` `{"servers": {...}, "ocr_langs": "fra+eng"}` | servers of this computer, OCR languages |
 | `POST /api/look` `{"unit_id": 42, "task": "error"}` or `"question"` | job |
@@ -414,5 +435,5 @@ licences (Gemma terms of use, Apache 2.0 for Qwen).
 4. Embeddings and hybrid search *(done, command line)*
 5. Document chat and image analysis *(done: command line and local API)*
 6. Tauri interface: library, viewer, search, chat, OCR correction, settings *(first version)*
-7. Windows and Linux builds, portable layout, documentation
+7. Windows and Linux builds, portable layout, documentation *(CI builds; to be checked on Windows)*
 8. Translation of documents (as in [truchement](https://github.com/fhoudebert/transcribe))
