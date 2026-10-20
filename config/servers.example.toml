@@ -1,0 +1,49 @@
+# IA-K - where to find the llama.cpp servers on each computer.
+#
+# The model servers belong to the computer that holds the models; IA-K, on a
+# USB key or a disk, only connects to them. Copy this file to
+# config/servers.toml (not versioned) and describe each computer you use.
+#
+# At start-up IA-K reads the computer name (COMPUTERNAME on Windows, hostname
+# on Linux) and takes the first [host.*] section whose `match` list contains
+# it, otherwise [host.default]. The host can also be chosen by hand in the
+# preferences.
+#
+# Roles:
+#   chat       document chat, summaries; also image questions when the
+#              server was started with a vision projector (mmproj)
+#   vision     optional dedicated vision server; when absent, images go to
+#              `chat` if it has vision, otherwise image analysis is disabled
+#   embedding  semantic search; see the note at the end
+#   translate  optional translation server (TranslateGemma); when absent or
+#              not answering, the chat server translates
+#
+# Context size and vision support are read from each server (/props), so
+# they are not repeated here. `api_key` is only needed when the server was
+# started with --api-key.
+
+[host.default]
+chat      = "http://127.0.0.1:8080/v1"
+embedding = "http://127.0.0.1:8081/v1"
+
+# Example: the Ryzen AI laptop, servers started by the .bat files in server/
+[host.hx370]
+match     = ["PC-HX370", "hx370"]
+chat      = "http://127.0.0.1:8080/v1"
+embedding = "http://127.0.0.1:8081/v1"
+vision    = "http://127.0.0.1:8082/v1"
+translate = "http://127.0.0.1:8083/v1"
+
+# Example: a server on the local network
+# [host.bureau]
+# match     = ["BUREAU-01"]
+# chat      = "http://192.168.1.20:8080/v1"
+# embedding = "http://192.168.1.20:8081/v1"
+# api_key   = "change-me"
+
+# Note on embeddings: the semantic index is only valid for the embedding
+# model that built it. IA-K records that model (name, dimension and a test
+# vector) in the index and compares it with the embedding server at start-up;
+# if they differ, semantic search is turned off for this session (keyword
+# search keeps working) until the index is rebuilt. Serve the same
+# EmbeddingGemma file on every computer.

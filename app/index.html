@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IA-K</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="main.js"></script>
+</head>
+<body>
+  <!-- shown until the Python backend is ready -->
+  <div id="boot" class="boot">
+    <img src="logo.png" alt="" class="boot-logo">
+    <p id="boot-message" data-i18n="app.starting"></p>
+    <p id="boot-detail" class="muted"></p>
+    <button id="boot-retry" hidden data-i18n="app.retry"></button>
+  </div>
+
+  <div id="app" hidden>
+    <header class="topbar">
+      <div class="brand"><img src="logo.png" alt=""> IA-K</div>
+      <nav class="tabs" role="tablist">
+        <button data-view="library" data-i18n="nav.library"></button>
+        <button data-view="search" data-i18n="nav.search"></button>
+        <button data-view="ask" data-i18n="nav.ask"></button>
+        <button data-view="translate" data-i18n="nav.translate"></button>
+        <button data-view="viewer" data-i18n="nav.viewer" hidden id="tab-viewer"></button>
+        <button data-view="settings" data-i18n="nav.settings"></button>
+      </nav>
+      <div class="servers" id="servers"></div>
+      <button class="link" id="lang-switch" data-i18n="lang.switch"></button>
+    </header>
+
+    <div id="remote-warning" class="banner warn" hidden data-i18n="server.remote"></div>
+    <div id="toast" class="toast" hidden></div>
+
+    <!-- library -->
+    <main id="view-library" class="view">
+      <div class="toolbar">
+        <button class="primary" id="import-btn" data-i18n="lib.import"></button>
+        <label class="check"><input type="checkbox" id="import-reference">
+          <span data-i18n="lib.reference"></span></label>
+        <span class="muted" data-i18n="lib.drop"></span>
+        <span class="spacer"></span>
+        <input id="compare-question" data-i18n-placeholder="compare.question" hidden>
+        <button id="compare-btn" data-i18n="lib.compare" hidden></button>
+      </div>
+      <div id="drop-zone" class="drop-zone">
+        <p id="library-empty" class="empty" data-i18n="lib.empty" hidden></p>
+        <table id="library-table" class="table" hidden>
+          <thead><tr>
+            <th></th>
+            <th data-i18n="lib.col.name"></th>
+            <th data-i18n="lib.col.kind"></th>
+            <th data-i18n="lib.col.added"></th>
+            <th data-i18n="lib.col.state"></th>
+            <th class="num" data-i18n="lib.col.units"></th>
+            <th class="num" data-i18n="lib.col.ocr"></th>
+            <th class="num" data-i18n="lib.col.passages"></th>
+            <th></th>
+          </tr></thead>
+          <tbody id="library-rows"></tbody>
+        </table>
+      </div>
+      <section class="panel" id="result-panel" hidden>
+        <div class="panel-head"><h3 id="result-title"></h3>
+          <button class="link close" id="result-close">×</button></div>
+        <div id="result-body" class="prose"></div>
+      </section>
+      <section class="jobs">
+        <h3 data-i18n="jobs.title"></h3>
+        <ul id="jobs-list"></ul>
+      </section>
+    </main>
+
+    <!-- search -->
+    <main id="view-search" class="view" hidden>
+      <form id="search-form" class="query">
+        <input id="search-input" data-i18n-placeholder="search.placeholder" autocomplete="off">
+        <select id="search-mode">
+          <option value="auto" data-i18n="search.mode.auto"></option>
+          <option value="hybrid" data-i18n="search.mode.hybrid"></option>
+          <option value="kw" data-i18n="search.mode.kw"></option>
+          <option value="sem" data-i18n="search.mode.sem"></option>
+        </select>
+        <button class="primary" data-i18n="search.go"></button>
+      </form>
+      <div class="filters">
+        <select id="search-kind" class="filter-kind"></select>
+        <select id="search-doc" class="filter-doc"></select>
+      </div>
+      <p id="search-count" class="muted"></p>
+      <ol id="search-results" class="results"></ol>
+    </main>
+
+    <!-- questions -->
+    <main id="view-ask" class="view" hidden>
+      <div class="filters">
+        <select id="ask-kind" class="filter-kind"></select>
+        <select id="ask-doc" class="filter-doc"></select>
+        <span class="spacer"></span>
+        <button class="link" id="chat-new" data-i18n="ask.new"></button>
+      </div>
+      <div id="chat" class="chat">
+        <p class="muted" id="chat-empty" data-i18n="ask.empty"></p>
+      </div>
+      <form id="ask-form" class="query">
+        <input id="ask-input" data-i18n-placeholder="ask.placeholder" autocomplete="off">
+        <button class="primary" data-i18n="ask.go"></button>
+      </form>
+    </main>
+
+    <!-- translation -->
+    <main id="view-translate" class="view translate" hidden>
+      <div class="toolbar">
+        <div class="segmented" role="radiogroup">
+          <label><input type="radio" name="tr-mode" value="text" checked>
+            <span data-i18n="tr.mode.text"></span></label>
+          <label><input type="radio" name="tr-mode" value="doc">
+            <span data-i18n="tr.mode.doc"></span></label>
+          <label><input type="radio" name="tr-mode" value="book">
+            <span data-i18n="tr.mode.book"></span></label>
+        </div>
+        <select id="tr-src" data-i18n-title="tr.src"></select>
+        <button type="button" class="link" id="tr-swap" data-i18n-title="tr.swap">⇄</button>
+        <select id="tr-tgt" data-i18n-title="tr.tgt"></select>
+        <span class="spacer"></span>
+        <span class="muted" id="tr-engine"></span>
+      </div>
+      <!-- free text -->
+      <div id="tr-text-mode">
+        <div class="tr-columns">
+          <textarea id="tr-input" data-i18n-placeholder="tr.input" spellcheck="false"></textarea>
+          <textarea id="tr-output" readonly data-i18n-placeholder="tr.output"></textarea>
+        </div>
+        <div class="row">
+          <button class="primary" id="tr-run" data-i18n="tr.run"></button>
+          <button id="tr-copy" data-i18n="tr.copy"></button>
+          <span class="muted" id="tr-info"></span>
+        </div>
+      </div>
+      <!-- a document of the library -->
+      <div id="tr-doc-mode" hidden>
+        <div class="row">
+          <select id="tr-doc"></select>
+          <button class="primary" id="tr-doc-run" data-i18n="tr.doc_run"></button>
+          <label class="check"><input type="checkbox" id="tr-refresh">
+            <span data-i18n="tr.refresh"></span></label>
+          <span class="spacer"></span>
+          <select id="tr-format">
+            <option value="md">Markdown (.md)</option>
+            <option value="txt" data-i18n="tr.format_txt"></option>
+          </select>
+          <label class="check"><input type="checkbox" id="tr-bilingual">
+            <span data-i18n="tr.bilingual"></span></label>
+          <button id="tr-export" data-i18n="tr.export"></button>
+        </div>
+        <p class="muted" id="tr-doc-info"></p>
+        <ol id="tr-units" class="tr-units"></ol>
+      </div>
+      <!-- a whole book, layout kept -->
+      <div id="tr-book-mode" hidden>
+        <section class="panel book-new">
+          <p class="muted" data-i18n="book.intro"></p>
+          <div class="row">
+            <select id="book-doc"></select>
+            <button type="button" id="book-file" data-i18n="book.file"></button>
+            <span id="book-file-name" class="muted"></span>
+          </div>
+          <div class="row">
+            <label class="check"><span data-i18n="book.passes"></span>
+              <select id="book-passes">
+                <option value="1" data-i18n="book.passes1"></option>
+                <option value="2" data-i18n="book.passes2" selected></option>
+                <option value="3" data-i18n="book.passes3"></option>
+              </select></label>
+            <label class="check"><input type="checkbox" id="book-trial">
+              <span data-i18n="book.trial"></span></label>
+            <span class="spacer"></span>
+            <button class="primary" id="book-start" data-i18n="book.start"></button>
+          </div>
+          <details>
+            <summary data-i18n="book.glossary"></summary>
+            <textarea id="book-glossary" rows="4" spellcheck="false"
+                      data-i18n-placeholder="book.glossary_hint"></textarea>
+          </details>
+        </section>
+        <p class="muted" id="book-empty" data-i18n="book.none"></p>
+        <ul id="book-list" class="book-list"></ul>
+      </div>
+    </main>
+
+    <!-- settings -->
+    <main id="view-settings" class="view settings" hidden>
+      <section class="panel">
+        <h3 data-i18n="settings.servers"></h3>
+        <p class="muted" id="settings-computer"></p>
+        <form id="servers-form" class="form">
+          <label><span data-i18n="settings.chat"></span>
+            <input name="chat" placeholder="http://127.0.0.1:8080/v1" spellcheck="false"></label>
+          <label><span data-i18n="settings.embedding"></span>
+            <input name="embedding" placeholder="http://127.0.0.1:8081/v1" spellcheck="false"></label>
+          <label><span data-i18n="settings.vision"></span>
+            <input name="vision" placeholder="http://127.0.0.1:8082/v1" spellcheck="false"></label>
+          <label><span data-i18n="settings.translate"></span>
+            <input name="translate" placeholder="http://127.0.0.1:8083/v1" spellcheck="false"></label>
+          <label><span data-i18n="settings.api_key"></span>
+            <input name="api_key" type="password" autocomplete="off"></label>
+          <div class="row">
+            <button class="primary" data-i18n="settings.save_servers"></button>
+            <button type="button" class="link" id="api-key-clear" data-i18n="settings.api_key_clear" hidden></button>
+          </div>
+        </form>
+        <div id="servers-status" class="status-list"></div>
+      </section>
+      <section class="panel">
+        <h3 data-i18n="settings.ocr"></h3>
+        <form id="ocr-form" class="form">
+          <label><span data-i18n="settings.ocr_langs"></span>
+            <input name="ocr_langs" spellcheck="false"></label>
+          <p class="muted"><span data-i18n="settings.ocr_available"></span> <span id="ocr-available"></span></p>
+          <p class="muted" data-i18n="settings.ocr_note"></p>
+          <div class="row"><button class="primary" data-i18n="settings.save_ocr"></button></div>
+        </form>
+      </section>
+      <section class="panel">
+        <h3 data-i18n="settings.library"></h3>
+        <p id="settings-library"></p>
+        <p class="muted" data-i18n="settings.library_note"></p>
+        <div class="row">
+          <button id="library-choose" data-i18n="settings.library_choose"></button>
+          <button id="library-default" class="link" data-i18n="settings.library_default"></button>
+        </div>
+      </section>
+      <p class="muted" id="settings-about"></p>
+    </main>
+
+    <!-- document viewer -->
+    <main id="view-viewer" class="view viewer" hidden>
+      <div class="viewer-head">
+        <button class="link" id="viewer-back">← <span data-i18n="viewer.back"></span></button>
+        <h2 id="viewer-title"></h2>
+        <span class="spacer"></span>
+        <button id="viewer-reread" data-i18n="viewer.reread"></button>
+        <button id="viewer-translate" data-i18n="viewer.translate"></button>
+        <button id="viewer-summary" data-i18n="viewer.summary"></button>
+        <button id="viewer-reextract" data-i18n="viewer.reextract"></button>
+      </div>
+      <form id="reread-panel" class="reread" hidden>
+        <span data-i18n="reread.title"></span>
+        <select name="pages">
+          <option value="low" data-i18n="reread.pages.low"></option>
+          <option value="ocr" data-i18n="reread.pages.ocr"></option>
+          <option value="all" data-i18n="reread.pages.all"></option>
+        </select>
+        <label class="check" id="reread-threshold-box"><span data-i18n="reread.threshold"></span>
+          <input name="threshold" type="number" min="1" max="100" value="80"></label>
+        <select name="method">
+          <option value="correct" data-i18n="reread.method.correct"></option>
+          <option value="transcribe" data-i18n="reread.method.transcribe"></option>
+        </select>
+        <label class="check"><input type="checkbox" name="replace">
+          <span data-i18n="reread.replace"></span></label>
+        <button class="primary" data-i18n="reread.start"></button>
+        <button type="button" class="link close" id="reread-close">×</button>
+      </form>
+      <div class="viewer-body">
+        <aside class="units">
+          <h4 data-i18n="viewer.units"></h4>
+          <ul id="unit-list"></ul>
+        </aside>
+        <section class="page">
+          <div class="page-wrap">
+            <img id="page-image" alt="">
+            <div id="page-marks" class="page-marks"></div>
+          </div>
+          <p id="page-no-image" class="muted" data-i18n="viewer.no_image" hidden></p>
+        </section>
+        <section class="side">
+          <div class="side-head">
+            <h4 data-i18n="viewer.text"></h4>
+            <span id="unit-badges"></span>
+          </div>
+          <textarea id="unit-text" spellcheck="false"></textarea>
+          <div class="row">
+            <button id="unit-save" data-i18n="viewer.save"></button>
+            <button id="unit-restore" class="link" data-i18n="viewer.restore" hidden></button>
+          </div>
+          <div class="analyse" id="analyse-box">
+            <h4 data-i18n="viewer.analyse"></h4>
+            <select id="look-task">
+              <option value="describe" data-i18n="viewer.task.describe"></option>
+              <option value="correct" data-i18n="viewer.task.correct"></option>
+              <option value="transcribe" data-i18n="viewer.task.transcribe"></option>
+              <option value="error" data-i18n="viewer.task.error"></option>
+              <option value="extract" data-i18n="viewer.task.extract"></option>
+              <option value="ask" data-i18n="viewer.task.ask"></option>
+            </select>
+            <input id="look-question" data-i18n-placeholder="viewer.question" hidden>
+            <button id="look-run" class="primary" data-i18n="viewer.run"></button>
+          </div>
+          <h4 data-i18n="viewer.analyses"></h4>
+          <div id="analyses" class="analyses"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>
