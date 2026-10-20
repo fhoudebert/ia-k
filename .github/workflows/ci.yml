@@ -1,0 +1,116 @@
+# IA-K: tests and builds on Linux and Windows.
+# - backend: Python tests (Tesseract with French data installed for the OCR tests)
+# - desktop: Rust tests, release build, portable folder as a downloadable zip
+# Runs on every push and pull request, and by hand (Actions > CI > Run workflow).
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Python packages (same versions as the portable Python)
+        run: |
+          python -m pip install --disable-pip-version-check -r backend/requirements.lock pytest
+
+      - name: Tesseract (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q tesseract-ocr tesseract-ocr-fra
+
+      # Without Tesseract the OCR tests are skipped, the others still run.
+      - name: Tesseract (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          choco install tesseract --no-progress -y
+          $dir = "C:\Program Files\Tesseract-OCR"
+          Invoke-WebRequest -Uri "https://github.com/tesseract-ocr/tessdata_fast/raw/main/fra.traineddata" -OutFile "$dir\tessdata\fra.traineddata"
+          Add-Content $env:GITHUB_PATH $dir
+          & "$dir\tesseract.exe" --list-langs
+
+      - name: Tests
+        working-directory: backend
+        env:
+          PYTHONUTF8: "1"
+        run: python -m pytest -q -p no:cacheprovider
+
+  desktop:
+    name: Desktop application (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            portable: linux
+            exe: src-tauri/target/release/ia-k
+          - os: windows-latest
+            portable: windows
+            exe: src-tauri/target/release/ia-k.exe
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Linux libraries for Tauri
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Tauri command line
+        run: npm install --no-audit --no-fund
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Build
+        run: npx tauri build --no-bundle
+
+      - name: Portable folder
+        run: python scripts/make_portable.py --exe ${{ matrix.exe }} --os ${{ matrix.portable }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ia-k-${{ matrix.portable }}
+          path: dist/ia-k-${{ matrix.portable }}.zip
+          if-no-files-found: error
+          retention-days: 30
