@@ -110,6 +110,8 @@ pub fn save_library(library: Option<&str>) -> Result<(), String> {
 fn find_python(root: &Path) -> PathBuf {
     let portable = if cfg!(windows) {
         root.join("build").join("python").join("windows").join("python.exe")
+    } else if cfg!(target_os = "macos") {
+        root.join("build").join("python").join("mac").join("bin").join("python3.12")
     } else {
         root.join("build").join("python").join("linux").join("bin").join("python3.12")
     };

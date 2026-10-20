@@ -28,7 +28,11 @@ translates better and faster).
   `llama-bXXXX-bin-win-vulkan-x64.zip` from the
   [releases](https://github.com/ggml-org/llama.cpp/releases). Linux: build with
   `cmake -B build -DGGML_VULKAN=ON` or take `llama-bXXXX-bin-ubuntu-vulkan-x64`.
-  Gemma 4 needs a recent build (tested: b11696).
+  macOS: `brew install llama.cpp`, or `llama-bXXXX-bin-macos-arm64.zip`; it
+  uses Metal, the Mac's graphics, whose memory is the main memory (not
+  measured on a Mac yet: 32 GB should hold the 26B, as on the reference
+  laptop). Gemma 4 needs a recent
+  build (tested: b11696).
 - Models (GGUF), for instance with LM Studio or from Hugging Face:
   - `lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF`: `gemma-4-26B-A4B-it-QAT-Q4_0.gguf`
     and `mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf`
@@ -72,8 +76,10 @@ with its experts and vision on the CPU, KV cache in q8, micro-batch 512,
 context 8192, 8 threads, EmbeddingGemma on the CPU — the same choices as
 `Gemma-4-26-A4B-vulkan.bat` and `embeddinggemma-rag.bat`. For another
 computer, copy it to `server/local.bat` and edit the copy (`local.bat` is
-not versioned). On Linux they come from `server/local.sh` (copy
-`local.example.sh`). `IAK_SERVER_SETTINGS` can name another settings file.
+not versioned). On Linux and macOS they come from `server/local.sh` (copy
+`local.example.sh`); models downloaded by LM Studio on a Mac are in
+`~/.lmstudio/models` (`MODELS_DIR`), and `llama-server` installed by Homebrew
+is found without `LLAMA_DIR`. `IAK_SERVER_SETTINGS` can name another settings file.
 
 ### One server at a time
 

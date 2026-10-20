@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  llama-server.sh - start a local llama.cpp server for IA-K (Linux)
+#  llama-server.sh - start a local llama.cpp server for IA-K (Linux, macOS)
 #
 #  Usage : server/llama-server.sh [profile] [extra llama-server options]
 #    gemma12  Gemma 4 12B QAT + vision projector   (default, port CHAT_PORT)

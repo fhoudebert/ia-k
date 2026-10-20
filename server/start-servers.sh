@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  start-servers.sh - start the model servers IA-K needs, then IA-K (Linux)
+#  start-servers.sh - start the model servers IA-K needs, then IA-K (Linux, macOS)
 #
 #  Usage : server/start-servers.sh PROFILE... [--keep] [--no-app]
 #    PROFILE   gemma12 gemma26 qwenvl embed translate (see llama-server.sh)
@@ -86,9 +86,13 @@ for p in "${PROFILES[@]}"; do
 done
 
 [ "$APP" = "1" ] || exit 0
-if [ ! -x "$ROOT/ia-k" ]; then
-    echo "ia-k not found in $ROOT" >&2
+# Linux: ia-k; macOS: the program inside IA-K.app (run directly, so that this
+# script waits for it to close)
+APP_EXE="$ROOT/ia-k"
+[ "$(uname -s)" = Darwin ] && APP_EXE="$ROOT/IA-K.app/Contents/MacOS/ia-k"
+if [ ! -x "$APP_EXE" ]; then
+    echo "IA-K not found: $APP_EXE" >&2
     exit 1
 fi
 echo "Starting IA-K..."
-"$ROOT/ia-k"
+"$APP_EXE"

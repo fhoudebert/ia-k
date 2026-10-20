@@ -4,6 +4,7 @@ application, for a key or a disk.
 
     python scripts/make_portable.py --exe src-tauri/target/release/ia-k.exe --os windows
     python scripts/make_portable.py --exe src-tauri/target/release/ia-k --os linux
+    python scripts/make_portable.py --exe src-tauri/target/universal-apple-darwin/release/bundle/macos/IA-K.app --os mac
 
 Result: dist/ia-k-<os>/ (and dist/ia-k-<os>.zip) holding the application,
 the backend, the setup scripts, the server launchers and the documentation.
@@ -22,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-COMMON = ["README.md", "SERVERS.md", "BACKEND.md", "DEVELOPERS.md", "LICENSE",
+COMMON = ["README.md", "FONCTIONNALITES.md", "SERVERS.md", "BACKEND.md", "DEVELOPERS.md", "LICENSE",
           "config/servers.example.toml", "scripts/smoke_test.py", "assets/icon.png",
           "assets/ia-k.png"]
 BY_OS = {
@@ -37,6 +38,9 @@ BY_OS = {
               "serveurs-baseConnaissance.sh", "serveurs-traduction.sh",
               "serveurs-vl.sh"],
 }
+# the same shell scripts on macOS
+BY_OS["mac"] = list(BY_OS["linux"])
+APP_NAME = {"windows": "ia-k.exe", "linux": "ia-k", "mac": "IA-K.app"}
 SKIP_DIRS = {"__pycache__", "tests", ".pytest_cache"}
 
 
@@ -54,14 +58,18 @@ def copy_tree(src: Path, dst: Path) -> None:
 
 
 def make(exe: Path, os_name: str, out: Path, zip_it: bool = True) -> Path:
-    if not exe.is_file():
+    if not (exe.is_dir() if os_name == "mac" else exe.is_file()):
         raise SystemExit(f"application not found: {exe}")
     folder = out / f"ia-k-{os_name}"
     if folder.exists():
         shutil.rmtree(folder)
     folder.mkdir(parents=True)
-    name = "ia-k.exe" if os_name == "windows" else "ia-k"
-    shutil.copy2(exe, folder / name)
+    name = APP_NAME[os_name]
+    if os_name == "mac":
+        # an application bundle: a folder, its permissions kept
+        shutil.copytree(exe, folder / name, symlinks=True)
+    else:
+        shutil.copy2(exe, folder / name)
     copy_tree(ROOT / "backend" / "iak", folder / "backend" / "iak")
     for f in ("requirements.lock", "requirements.txt", "pyproject.toml"):
         shutil.copy2(ROOT / "backend" / f, folder / "backend" / f)
@@ -71,8 +79,10 @@ def make(exe: Path, os_name: str, out: Path, zip_it: bool = True) -> Path:
             (folder / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, folder / rel)
     (folder / "data").mkdir()
-    if os_name == "linux":
-        for rel in [name, *[r for r in BY_OS["linux"] if r.endswith(".sh")]]:
+    if os_name in ("linux", "mac"):
+        exes = [r for r in BY_OS[os_name] if r.endswith(".sh")]
+        exes.append(f"{name}/Contents/MacOS/ia-k" if os_name == "mac" else name)
+        for rel in exes:
             p = folder / rel
             p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     if not zip_it:

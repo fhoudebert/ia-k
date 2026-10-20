@@ -1,6 +1,6 @@
 # IA-K
 
-![IA-K](assets/ia-k.png)
+![IA-K](assets/ia-k-512.png)
 
 IA-K is a personal, offline desktop assistant for your documents. Give it
 PDF files, scans, screenshots, EPUB, HTML, DOCX, TXT or Markdown: it reads
@@ -11,20 +11,22 @@ documents with TranslateGemma.
 
 - **Offline and private.** Everything runs on your computer with local
   language models; no document is sent anywhere.
-- **Portable.** IA-K lives on a USB key or a disk folder and runs on Windows
-  and Linux, from the same exFAT key if you like.
+- **Portable.** IA-K lives on a USB key or a disk folder and runs on
+  Windows, Linux and macOS, from the same exFAT key if you like.
 - **French and English** interface.
 - Open source, MIT licence.
 
-Other guides: [SERVERS.md](SERVERS.md) (running the language models with
-llama.cpp), [BACKEND.md](BACKEND.md) (command line, how documents are
+Other guides: [FONCTIONNALITES.md](FONCTIONNALITES.md) (the features in
+brief, in French), [SERVERS.md](SERVERS.md) (running the language models
+with llama.cpp), [BACKEND.md](BACKEND.md) (command line, how documents are
 handled, local API), [DEVELOPERS.md](DEVELOPERS.md) (building, tests,
 architecture).
 
 ## What you need
 
-- A Windows 10/11 or Linux computer (x86-64). The reference machine is a
-  laptop with a Ryzen AI 9 HX 370, its Radeon 890M and 32 GB of memory.
+- A Windows 10/11 or Linux computer (x86-64), or a Mac (macOS 11 or later,
+  Apple silicon or Intel). The reference machine is a laptop with a Ryzen AI
+  9 HX 370, its Radeon 890M and 32 GB of memory.
 - **Language model servers** on that computer (or on your network):
   [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` with
   Gemma 4 for answers and EmbeddingGemma for search by meaning. IA-K does
@@ -32,21 +34,27 @@ architecture).
   launchers.
 - **Tesseract** for scans and images: on Windows the
   [UB Mannheim installer](https://github.com/UB-Mannheim/tesseract/wiki)
-  (tick French), on Linux `sudo apt install tesseract-ocr tesseract-ocr-fra`.
+  (tick French), on Linux `sudo apt install tesseract-ocr tesseract-ocr-fra`,
+  on macOS `brew install tesseract tesseract-lang` ([Homebrew](https://brew.sh)).
   Without it, documents with real text still work.
 - About 300 MB on the key for each system, plus your documents.
 
 ## Installing on a key or a disk
 
-1. **Get IA-K.** Download `ia-k-windows.zip` or `ia-k-linux.zip` (GitHub,
-   *Actions* tab, last successful *CI* run, *Artifacts*), or build it
-   ([DEVELOPERS.md](DEVELOPERS.md)). Unzip it at the root of the key, for
-   instance `E:\ia-k` or `/media/me/KEY/ia-k`. Both zips can be unzipped in
-   the same folder: Windows and Linux then share the library.
+1. **Get IA-K.** Download `ia-k-windows.zip`, `ia-k-linux.zip` or
+   `ia-k-mac.zip` (GitHub, *Actions* tab, last successful *CI* run,
+   *Artifacts*), or build it ([DEVELOPERS.md](DEVELOPERS.md)). Unzip it at
+   the root of the key, for instance `E:\ia-k`, `/media/me/KEY/ia-k` or
+   `/Volumes/KEY/ia-k`. The zips can be unzipped in the same folder: the
+   systems then share the library.
 2. **Install its Python** (once per system, needs internet):
-   `setup_python.bat` on Windows, `./setup_python.sh` on Linux. It puts a
-   complete Python in `build\python\` without touching the computer; it can
-   be run again safely.
+   `setup_python.bat` on Windows, `./setup_python.sh` on Linux and macOS
+   (in the Terminal). It puts a complete Python in `build/python/` without
+   touching the computer; it can be run again safely.
+
+   On macOS, IA-K is not signed by an identified developer: before the first
+   start, run once in the Terminal `xattr -dr com.apple.quarantine
+   /Volumes/KEY/ia-k` (your folder), or right-click `IA-K.app` → *Open*.
 3. **Say where the model servers are.** With the usual ports (chat 8080,
    meaning 8081, vision 8082, translation 8083) there is nothing to do.
    Otherwise fill in *Settings*, or copy `config/servers.example.toml` to
@@ -65,14 +73,14 @@ architecture).
    Their settings (where llama.cpp and the models are, memory options) are
    those of the reference laptop, in `server/local.hx370.bat`; on another
    computer copy it to `server/local.bat` and edit the copy
-   ([SERVERS.md](SERVERS.md#starting-them)). IA-K alone is `ia-k.exe`, or
-   `./ia-k` on Linux.
+   ([SERVERS.md](SERVERS.md#starting-them)); on Linux and macOS, `server/local.sh`.
+   IA-K alone is `ia-k.exe`, `./ia-k` on Linux, `IA-K.app` on macOS.
 
 The folder then looks like this:
 
 ```
 ia-k/
-├── ia-k.exe  ia-k           the application (Windows, Linux)
+├── ia-k.exe  ia-k  IA-K.app the application (Windows, Linux, macOS)
 ├── backend/                 the engine (Python), started by the application
 ├── build/python/            portable Python, one folder per system
 ├── config/servers.toml      where the model servers are, per computer
@@ -179,6 +187,7 @@ Good to know:
 | "The documents do not allow an answer" | Nothing relevant was found: rephrase, check the document is indexed, or try *Search* first. |
 | Scans give no text | Tesseract is missing or lacks the language: *Settings* lists the installed languages. |
 | Linux key: "cannot run, mounted noexec" | Remount the key with the `exec` option. |
+| macOS: "IA-K cannot be opened" or "is damaged" | The download is quarantined: `xattr -dr com.apple.quarantine` on the IA-K folder, then open it again. |
 
 ## Licences
 
@@ -212,16 +221,18 @@ Done:
     read again to correct or replace Tesseract's text, page by page or for a
     whole document, with agreement, differences and going back
 
+11. macOS: `ia-k-mac` zip in the *Actions* tab (*Artifacts*), one
+    application for Apple silicon and Intel, `setup_python.sh` for macOS,
+    engine tests on macOS in CI
+
 Next:
 
-11. **macOS**: an `ia-k-mac` zip downloadable from the *Actions* tab
-    (*Artifacts*) like the Windows and Linux ones, built by CI on a macOS
-    runner, with a `setup_python` for macOS.
+12. **Export of answers, summaries and comparisons** (Markdown, with their
+    sources).
 
 Later:
 
 - Other launchers by use, as needed.
-- Export of answers, summaries and comparisons (Markdown, with their sources).
 - Collections (named groups of documents) to limit search and questions.
 - Watched folders: documents added to a folder imported by themselves.
 - The engine frozen in the application (no `setup_python` step).

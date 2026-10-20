@@ -62,7 +62,8 @@ Checked on a real exFAT volume: setup, command line and application.
 
 Requirements: Rust (rustup), Node.js for the Tauri command line, and on Linux
 `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`; on Windows the MSVC build
-tools (WebView2 is part of Windows 10 and 11).
+tools (WebView2 is part of Windows 10 and 11); on macOS the Xcode command
+line tools (`xcode-select --install`).
 
 ```
 npm install
@@ -70,6 +71,10 @@ npm run dev                                   # the application with its engine
 npm run build                                 # installers in src-tauri/target/release/bundle
 npx tauri build --no-bundle                   # only src-tauri/target/release/ia-k[.exe]
 python scripts/make_portable.py --exe src-tauri/target/release/ia-k.exe --os windows
+# macOS, for both processors (rustup target add aarch64-apple-darwin x86_64-apple-darwin)
+npx tauri build --target universal-apple-darwin --bundles app
+python scripts/make_portable.py --os mac \
+    --exe src-tauri/target/universal-apple-darwin/release/bundle/macos/IA-K.app
 ```
 
 `make_portable.py` assembles `dist/ia-k-<os>/` and its zip: the application,
@@ -80,13 +85,19 @@ on each system.
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push, on `ubuntu-22.04` /
-`ubuntu-latest` and `windows-latest`: the engine tests (Tesseract with French
-data), the Rust tests, a release build and the portable zip, kept 30 days as
-the run's *Artifacts* (`ia-k-windows`, `ia-k-linux`). Check it locally with
-[actionlint](https://github.com/rhysd/actionlint). A macOS job (`macos-latest`,
-artifact `ia-k-mac`) is on the roadmap: it needs a macOS `setup_python`
-(python-build-standalone has `aarch64-apple-darwin` builds) and the
-`.app` bundle in the zip.
+`ubuntu-latest`, `windows-latest` and `macos-latest`: the engine tests
+(Tesseract with French data), the Rust tests, a release build and the
+portable zip, kept 30 days as the run's *Artifacts* (`ia-k-windows`,
+`ia-k-linux`, `ia-k-mac`). Check it locally with
+[actionlint](https://github.com/rhysd/actionlint).
+
+macOS: one universal application (`--target universal-apple-darwin`, Apple
+silicon and Intel) bundled as `IA-K.app` (`--bundles app`), ad hoc signed
+(`signingIdentity "-"`): it is not notarised, so a downloaded copy is
+quarantined (README). The application finds the IA-K folder above
+`IA-K.app/Contents/MacOS/`, and the portable Python in `build/python/mac`
+(`setup_python.sh` picks the `aarch64-` or `x86_64-apple-darwin` build of
+python-build-standalone from the Mac it runs on).
 
 ## Tests
 

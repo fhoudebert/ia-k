@@ -11,6 +11,7 @@ import io
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 
@@ -30,6 +31,10 @@ class OcrResult:
 
 # usual install places on Windows (UB Mannheim installer, Chocolatey)
 WINDOWS_DEFAULTS = [r"C:\Program Files\Tesseract-OCR\tesseract.exe"]
+# an application started from the Finder does not get the Terminal's PATH:
+# Homebrew (Apple silicon, Intel) and MacPorts places
+MAC_DEFAULTS = ["/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract",
+                "/opt/local/bin/tesseract"]
 
 
 def find_tesseract(explicit: str | None = None) -> str:
@@ -40,11 +45,14 @@ def find_tesseract(explicit: str | None = None) -> str:
                   os.path.join(root, "build", "tesseract", exe), shutil.which("tesseract")]
     if os.name == "nt":
         candidates += WINDOWS_DEFAULTS
+    elif sys.platform == "darwin":
+        candidates += MAC_DEFAULTS
     for c in candidates:
         if c and os.path.isfile(c):
             return c
     raise OcrError("Tesseract not found: install it (Linux: tesseract-ocr and "
-                   "tesseract-ocr-fra packages) or set its path (IAK_TESSERACT)")
+                   "tesseract-ocr-fra packages; macOS: brew install tesseract "
+                   "tesseract-lang) or set its path (IAK_TESSERACT)")
 
 
 def available_langs(tesseract: str | None = None) -> list[str]:
