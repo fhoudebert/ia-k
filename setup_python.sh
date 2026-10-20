@@ -42,11 +42,34 @@ if [ ! -x "$PY" ]; then
     curl -fL --retry 3 -o "$TMP/py.tar.gz" "$URL"
     echo "$SHA256  $TMP/py.tar.gz" | sha256sum -c --quiet - \
         || { echo "checksum mismatch, download refused" >&2; exit 1; }
-    # Extract on the local disk, drop the symbolic links (exFAT and FAT32
-    # keys cannot hold them; they only give second names to files that are
-    # there anyway, e.g. python3 -> python3.12), then copy.
+    # Extract on the local disk and make the tree fit an exFAT or FAT32 key:
+    # - symbolic links dropped: those filesystems cannot hold them, and they
+    #   only give second names to files that are there anyway
+    #   (python3 -> python3.12);
+    # - share/terminfo dropped: it has names differing only by case (N/ and
+    #   n/...), which exFAT cannot tell apart; only the curses module, unused
+    #   by IA-K, reads it; share/man is not needed either.
     tar -xzf "$TMP/py.tar.gz" -C "$TMP"
     find "$TMP/python" -type l -delete
+    rm -rf "$TMP/python/share/terminfo" "$TMP/python/share/man"
+    # any other pair of names differing only by case would break the copy
+    collide="$("$TMP/python/bin/python3.12" - "$TMP/python" <<'PY'
+import os, sys
+seen = {}
+for d, dirs, files in os.walk(sys.argv[1]):
+    for n in dirs + files:
+        p = os.path.join(d, n)
+        k = p.lower()
+        if k in seen:
+            print(p)
+        seen[k] = p
+PY
+)"
+    if [ -n "$collide" ]; then
+        echo "names differing only by case, impossible on exFAT/FAT32:" >&2
+        echo "$collide" | head -5 >&2
+        exit 1
+    fi
     mkdir -p "$DEST"
     cp -r "$TMP/python/." "$DEST/"
     "$PY" -c "import encodings, sqlite3, ssl, pip._vendor.rich, pip._internal.cli.main" \

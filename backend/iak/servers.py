@@ -18,6 +18,23 @@ class ServerError(RuntimeError):
     pass
 
 
+MEMORY_HINT = ("the model server ran out of graphics memory: lower its context or "
+               "micro-batch, run the embedding server on the CPU, or give the iGPU more "
+               "memory (see SERVERS.md, \"Memory\")")
+
+
+def explain(message: str) -> str:
+    """Add a hint to llama-server errors that have a known remedy."""
+    low = message.lower()
+    if any(k in low for k in ("outofdevicememory", "out of memory", "failed to allocate",
+                              "allocatememory", "decode() failed", "failed to decode")):
+        return f"{message} — {MEMORY_HINT}"
+    if "exceeds the available context size" in low:
+        return (f"{message} — the passages and question are longer than the server's "
+                "context: start it with a larger --ctx-size, or send fewer passages")
+    return message
+
+
 @dataclass
 class Host:
     name: str
@@ -138,7 +155,7 @@ class Client:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", "replace")[:300]
-            raise ServerError(f"{url}: HTTP {exc.code} {body}") from exc
+            raise ServerError(explain(f"{url}: HTTP {exc.code} {body}")) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise ServerError(f"{url}: unreachable ({exc})") from exc
 
@@ -172,21 +189,30 @@ class Client:
             resp = urllib.request.urlopen(req, timeout=self.timeout)
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", "replace")[:300]
-            raise ServerError(f"chat: HTTP {exc.code} {body}") from exc
+            raise ServerError(explain(f"chat: HTTP {exc.code} {body}")) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise ServerError(f"chat: unreachable ({exc})") from exc
         with resp:
             for raw in resp:
                 line = raw.decode("utf-8", "replace").strip()
+                # llama-server reports a failure during generation (for example
+                # "decode() failed: ErrorOutOfDeviceMemory") inside the stream
+                if line.startswith("error:"):
+                    raise ServerError(explain(f"chat: {line[6:].strip()}"))
                 if not line.startswith("data:"):
                     continue
                 data = line[5:].strip()
                 if data == "[DONE]":
                     return
                 try:
-                    choice = (json.loads(data).get("choices") or [{}])[0]
+                    obj = json.loads(data)
                 except ValueError:
                     continue
+                if isinstance(obj, dict) and obj.get("error"):
+                    err = obj["error"]
+                    msg = err.get("message") if isinstance(err, dict) else str(err)
+                    raise ServerError(explain(f"chat: {msg}"))
+                choice = (obj.get("choices") or [{}])[0]
                 piece = (choice.get("delta") or {}).get("content")
                 if piece:
                     yield piece

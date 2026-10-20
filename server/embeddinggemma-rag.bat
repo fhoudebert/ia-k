@@ -1,7 +1,11 @@
 
 @echo off
 setlocal
-title EmbeddingGemma 300M - RAG Vulkan
+title EmbeddingGemma 300M - RAG (CPU)
+
+rem Runs on the CPU (--n-gpu-layers 0): the model is small, and the iGPU
+rem memory is needed by Gemma 4 26B-A4B (ErrorOutOfDeviceMemory otherwise).
+rem Put back 99 to use the iGPU when the chat model leaves room.
 
 set "LLAMA=D:\ia\llama-vulkan\llama-server.exe"
 set "MODEL=D:\ia\models\lmstudio-community\embeddinggemma-300m-qat-GGUF\embeddinggemma-300m-qat-Q4_0.gguf"
@@ -30,7 +34,7 @@ echo.
   --host 127.0.0.1 ^
   --port 8081 ^
   --ctx-size 2048 ^
-  --n-gpu-layers 99 ^
+  --n-gpu-layers 0 ^
   --threads 4 ^
   --embedding ^
   --pooling mean

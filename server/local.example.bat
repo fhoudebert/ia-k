@@ -8,7 +8,7 @@ rem set "LLAMA_DIR=D:\ia\llama.cpp"
 rem set "CHAT_PORT=8080"
 rem set "EMBED_PORT=8081"
 
-rem --- memory tuning (see README, "Testing a server") ---
+rem --- memory tuning (see SERVERS.md, "Memory") ---
 rem set "CTX=8192"
 rem set "KV_Q8=1"
 rem set "VISION=0"

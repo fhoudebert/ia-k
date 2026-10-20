@@ -24,6 +24,9 @@ set "LLAMA_DIR=%ROOT%\build\llama"
 set "HOST=127.0.0.1"
 set "CHAT_PORT=8080"
 set "EMBED_PORT=8081"
+rem embeddings on the CPU by default: the model is small, and the iGPU memory
+rem is better left to the chat model (99 = on the iGPU)
+set "EMBED_NGL=0"
 set "VISION_PORT=8082"
 rem context of the chat server (prompt + answer). 16384 leaves room for
 rem ~8000 tokens of retrieved passages; lower it to save memory.
@@ -52,7 +55,7 @@ if exist "%HERE%local.bat" call "%HERE%local.bat"
 rem --- model paths (defaults built from MODELS_DIR after local.bat) ----------
 if not defined GEMMA12_MODEL set "GEMMA12_MODEL=%MODELS_DIR%\lmstudio-community\gemma-4-12B-it-QAT-GGUF\gemma-4-12B-it-QAT-Q4_0.gguf"
 if not defined GEMMA26_MODEL set "GEMMA26_MODEL=%MODELS_DIR%\lmstudio-community\gemma-4-26B-A4B-it-QAT-GGUF\gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
-if not defined QWENVL_MODEL  set "QWENVL_MODEL=%MODELS_DIR%\PatataAliena\Qwen2.5-VL-7B-Instruct-Q4_K_M-GGUF\qwen2.5-vl-7b-instruct-q4_k_m.gguf"
+if not defined QWENVL_MODEL  set "QWENVL_MODEL=%MODELS_DIR%\lmstudio-community\Qwen3-VL-8B-Instruct-GGUF\Qwen3-VL-8B-Instruct-Q4_K_M.gguf"
 if not defined EMBED_MODEL   set "EMBED_MODEL=%MODELS_DIR%\lmstudio-community\embeddinggemma-300m-qat-GGUF\embeddinggemma-300m-qat-Q4_0.gguf"
 
 rem --- arguments ---------------------------------------------------------------
@@ -152,7 +155,7 @@ echo.
 rem 4 slots of 2048 tokens (the model's maximum input); a request may batch
 rem many passages at once.
 "%SERVER%" -m "%MODEL%" --alias embeddinggemma --embeddings --host %HOST% --port %EMBED_PORT% ^
-    -c 8192 -np 4 -b 2048 -ub 2048 -ngl %NGL% %EXTRA%
+    -c 8192 -np 4 -b 2048 -ub 2048 -ngl %EMBED_NGL% %EXTRA%
 exit /b %ERRORLEVEL%
 
 rem ---------------------------------------------------------------------------

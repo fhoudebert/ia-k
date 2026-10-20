@@ -5,7 +5,7 @@
 MODELS_DIR="${MODELS_DIR:-$HOME/ia/models}"
 # LLAMA_DIR="${LLAMA_DIR:-$HOME/llama.cpp/build/bin}"
 
-# --- memory tuning (see README, "Testing a server") ---
+# --- memory tuning (see SERVERS.md, "Memory") ---
 # CTX="${CTX:-8192}"
 # KV_Q8="${KV_Q8:-1}"
 # VISION="${VISION:-0}"

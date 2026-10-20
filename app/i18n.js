@@ -123,6 +123,8 @@ const TEXTS = {
     "analysis.running": "Analyse en cours… (cela peut prendre une minute)",
     "compare.question": "Aspect à comparer (facultatif)",
     "error.generic": "Erreur : {msg}",
+    "error.memory": "Le serveur de modèles a manqué de mémoire graphique. Passez le serveur d'embeddings sur le processeur, réduisez le contexte ou le micro-lot du serveur de chat, ou donnez plus de mémoire à la carte graphique (SERVERS.md, « Memory »).",
+    "error.details": "Détail : {msg}",
     "lang.switch": "English",
   },
   en: {
@@ -248,6 +250,8 @@ const TEXTS = {
     "analysis.running": "Analysing… (this can take a minute)",
     "compare.question": "Aspect to compare (optional)",
     "error.generic": "Error: {msg}",
+    "error.memory": "The model server ran out of graphics memory. Run the embedding server on the CPU, lower the chat server's context or micro-batch, or give the graphics more memory (SERVERS.md, “Memory”).",
+    "error.details": "Details: {msg}",
     "lang.switch": "Français",
   },
 };

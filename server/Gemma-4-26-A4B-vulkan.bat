@@ -57,6 +57,8 @@ rem Log kept next to this file: send the end of it if loading fails.
   --host 127.0.0.1 ^
   --port 8080 ^
   --ctx-size 8192 ^
+  --cache-type-k q8_0 ^
+  --cache-type-v q8_0 ^
   --n-gpu-layers 99 ^
   --n-cpu-moe %NCPUMOE% ^
   --threads 8 ^

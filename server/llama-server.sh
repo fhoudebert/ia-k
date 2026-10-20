@@ -24,6 +24,7 @@ LLAMA_DIR="${LLAMA_DIR:-$ROOT/build/llama}"
 HOST="${HOST:-127.0.0.1}"
 CHAT_PORT="${CHAT_PORT:-8080}"
 EMBED_PORT="${EMBED_PORT:-8081}"
+EMBED_NGL="${EMBED_NGL:-0}"     # embeddings on the CPU (99 = on the GPU)
 VISION_PORT="${VISION_PORT:-8082}"
 CTX="${CTX:-16384}"          # chat context (prompt + answer)
 NGL="${NGL:-99}"             # layers on the iGPU (99 = all)
@@ -35,7 +36,7 @@ UBATCH="${UBATCH:-}"         # prompt micro-batch (empty: 1280 with vision, else
 
 GEMMA12_MODEL="${GEMMA12_MODEL:-$MODELS_DIR/lmstudio-community/gemma-4-12B-it-QAT-GGUF/gemma-4-12B-it-QAT-Q4_0.gguf}"
 GEMMA26_MODEL="${GEMMA26_MODEL:-$MODELS_DIR/lmstudio-community/gemma-4-26B-A4B-it-QAT-GGUF/gemma-4-26B-A4B-it-QAT-Q4_0.gguf}"
-QWENVL_MODEL="${QWENVL_MODEL:-$MODELS_DIR/PatataAliena/Qwen2.5-VL-7B-Instruct-Q4_K_M-GGUF/qwen2.5-vl-7b-instruct-q4_k_m.gguf}"
+QWENVL_MODEL="${QWENVL_MODEL:-$MODELS_DIR/lmstudio-community/Qwen3-VL-8B-Instruct-GGUF/Qwen3-VL-8B-Instruct-Q4_K_M.gguf}"
 EMBED_MODEL="${EMBED_MODEL:-$MODELS_DIR/lmstudio-community/embeddinggemma-300m-qat-GGUF/embeddinggemma-300m-qat-Q4_0.gguf}"
 
 PROFILE="${1:-gemma12}"
@@ -73,7 +74,7 @@ case "$PROFILE" in
         # 4 slots of 2048 tokens (the model's maximum input)
         exec "$SERVER" -m "$EMBED_MODEL" --alias embeddinggemma --embeddings \
             --host "$HOST" --port "$EMBED_PORT" -c 8192 -np 4 -b 2048 -ub 2048 \
-            -ngl "$NGL" "${EXTRA[@]}"
+            -ngl "$EMBED_NGL" "${EXTRA[@]}"
         ;;
     *)
         echo "[ia-k] unknown profile: $PROFILE (expected gemma12 | gemma26 | qwenvl | embed)" >&2

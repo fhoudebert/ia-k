@@ -1,4 +1,4 @@
-// IA-K interface. Talks to the Python backend's local API (see README,
+// IA-K interface. Talks to the Python backend's local API (see BACKEND.md,
 // "Local API"); inside Tauri the URL and token come from the Rust side.
 // Text from documents is always inserted as text, never as HTML.
 import { t, getLang, setLang, translatePage } from "./i18n.js";
@@ -535,9 +535,21 @@ async function runAsk(ev) {
       error: (d) => { throw new Error(d.error); },
     });
   } catch (e) {
-    if (live.isConnected) live.replaceWith(el("div", { class: "msg bot" }, t("error.generic", { msg: e.message })));
+    if (live.isConnected) live.replaceWith(errorMessage(e.message));
   }
   chat.lastElementChild.scrollIntoView({ block: "end" });
+}
+
+/** An error in the conversation, explained when its cause is known. */
+function errorMessage(msg) {
+  const box = el("div", { class: "msg bot" });
+  if (/OutOfDeviceMemory|out of memory|graphics memory|failed to allocate/i.test(msg)) {
+    box.append(el("p", {}, t("error.memory")),
+               el("div", { class: "meta" }, t("error.details", { msg: msg.split(" — ")[0] })));
+  } else {
+    box.append(t("error.generic", { msg }));
+  }
+  return box;
 }
 
 /** POST /api/ask/stream and dispatch its server-sent events. */

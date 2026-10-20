@@ -22,11 +22,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-COMMON = ["README.md", "LICENSE", "config/servers.example.toml",
-          "scripts/smoke_test.py", "assets/icon.png"]
+COMMON = ["README.md", "SERVERS.md", "BACKEND.md", "DEVELOPERS.md", "LICENSE",
+          "config/servers.example.toml", "scripts/smoke_test.py", "assets/icon.png",
+          "assets/ia-k.png"]
 BY_OS = {
     "windows": ["iak.bat", "setup_python.bat", "server/llama-server.bat",
-                "server/local.example.bat"],
+                "server/local.example.bat", "server/Gemma-4-26-A4B-vulkan.bat",
+                "server/gemma-4-12b-qat-vulkan.bat", "server/embeddinggemma-rag.bat",
+                "server/qwen3-vl-8b-vulkan.bat"],
     "linux": ["iak.sh", "setup_python.sh", "server/llama-server.sh",
               "server/local.example.sh"],
 }

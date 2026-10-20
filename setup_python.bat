@@ -68,7 +68,7 @@ if exist "%ROOT%build\tesseract\tesseract.exe" (
 ) else (
     where tesseract.exe >nul 2>nul && echo Tesseract found in PATH
     where tesseract.exe >nul 2>nul || if exist "C:\Program Files\Tesseract-OCR\tesseract.exe" echo Tesseract: C:\Program Files\Tesseract-OCR
-    where tesseract.exe >nul 2>nul || if not exist "C:\Program Files\Tesseract-OCR\tesseract.exe" echo Tesseract not found: see README, "Portable setup"
+    where tesseract.exe >nul 2>nul || if not exist "C:\Program Files\Tesseract-OCR\tesseract.exe" echo Tesseract not found: see README, "What you need"
 )
 echo Done. Run IA-K with: iak.bat --help
 endlocal

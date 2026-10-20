@@ -14,9 +14,10 @@ import re
 from dataclasses import dataclass, field
 
 from .search import Hit
+from .servers import ServerError
 
 # about 4 characters per token; 2,500 tokens of passages keeps the wait
-# around 10-15 s on the target laptop (README, "Measured on the target laptop")
+# around 10-15 s on the target laptop (SERVERS.md, "Measured on the reference laptop")
 DEFAULT_BUDGET_CHARS = 10_000
 NO_ANSWER = "NO_ANSWER"
 
@@ -65,6 +66,11 @@ def select(hits: list[Hit], budget_chars: int = DEFAULT_BUDGET_CHARS,
 def _escape(text: str) -> str:
     return re.sub(r"</?passage", lambda m: m.group(0).replace("<", "‹"), text, flags=re.I)
 
+
+# An empty reply is a failure of the model server (generation stopped, or the
+# whole token budget spent in "thinking"), not "the documents do not answer".
+EMPTY = ("the model returned an empty answer: see the model server's log "
+         "(an error such as ErrorOutOfDeviceMemory, or thinking left on)")
 
 # a follow-up question keeps the last exchanges, shortened, without their
 # passages: enough to understand "and when?" or "the second one", little cost
@@ -152,6 +158,8 @@ def ask(question: str, hits: list[Hit], client, budget_chars: int = DEFAULT_BUDG
     if not sent:
         return Answer("", "no_answer", [], [])
     raw = client.chat(build_messages(question, sent, history), max_tokens=max_tokens)
+    if not (raw or "").strip():
+        raise ServerError(EMPTY)
     return check(raw, sent)
 
 
@@ -169,4 +177,6 @@ def ask_stream(question: str, hits: list[Hit], client, budget_chars: int = DEFAU
                                     max_tokens=max_tokens):
         parts.append(piece)
         yield "token", piece
+    if not "".join(parts).strip():
+        raise ServerError(EMPTY)
     yield "done", check("".join(parts), sent)
