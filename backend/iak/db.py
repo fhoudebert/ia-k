@@ -20,7 +20,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE documents (
@@ -106,7 +106,7 @@ CREATE TABLE analyses (
     lang        TEXT NOT NULL DEFAULT '',
     model       TEXT NOT NULL DEFAULT '',
     text        TEXT NOT NULL,
-    sources     TEXT NOT NULL DEFAULT '[]',  -- JSON: documents a comparison is about
+    sources     TEXT NOT NULL DEFAULT '[]',  -- JSON: documents a comparison is about; for a page reading {"truncated": bool}
     created_at  REAL NOT NULL
 );
 CREATE INDEX analyses_doc ON analyses(doc_id);
@@ -125,6 +125,10 @@ CREATE TABLE translations (
     UNIQUE (unit_id, tgt)
 );
 CREATE INDEX translations_doc ON translations(doc_id, tgt);
+
+-- schema 5: page readings by the vision model, used or not as the page text
+ALTER TABLE analyses ADD COLUMN applied REAL;    -- when it became the page's text
+ALTER TABLE analyses ADD COLUMN score REAL;      -- word agreement with the text it was compared to, 0-1
 """
 
 # upgrades from each older schema version to the next
@@ -147,7 +151,7 @@ CREATE TABLE analyses (
     lang        TEXT NOT NULL DEFAULT '',
     model       TEXT NOT NULL DEFAULT '',
     text        TEXT NOT NULL,
-    sources     TEXT NOT NULL DEFAULT '[]',  -- JSON: documents a comparison is about
+    sources     TEXT NOT NULL DEFAULT '[]',  -- JSON: documents a comparison is about; for a page reading {"truncated": bool}
     created_at  REAL NOT NULL
 );
 CREATE INDEX analyses_doc ON analyses(doc_id);
@@ -167,6 +171,11 @@ CREATE TABLE translations (
     UNIQUE (unit_id, tgt)
 );
 CREATE INDEX translations_doc ON translations(doc_id, tgt);
+""",
+    4: """
+-- schema 5: page readings by the vision model, used or not as the page text
+ALTER TABLE analyses ADD COLUMN applied REAL;    -- when it became the page's text
+ALTER TABLE analyses ADD COLUMN score REAL;      -- word agreement with the text it was compared to, 0-1
 """,
 }
 

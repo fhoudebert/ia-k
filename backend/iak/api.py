@@ -32,7 +32,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, analyze, answer, book, db, embed, ocr, search, servers, translate
+from . import (__version__, analyze, answer, book, db, embed, ocr, search, servers,
+               transcription, translate)
 from .library import Library
 
 CONTENT_TYPES = {
@@ -61,7 +62,8 @@ class Job:
     id: int
     kind: str
     params: dict
-    status: str = "queued"          # queued, running, done, error
+    status: str = "queued"          # queued, running, done, error, cancelled
+    cancel: bool = False            # asked to stop (jobs that can stop say so)
     progress: dict = field(default_factory=dict)
     result: object = None
     error: str = ""
@@ -69,7 +71,7 @@ class Job:
     finished: float | None = None
 
     def public(self) -> dict:
-        return {"id": self.id, "kind": self.kind, "status": self.status,
+        return {"id": self.id, "kind": self.kind, "status": self.status, "cancel": self.cancel,
                 "progress": self.progress, "result": self.result, "error": self.error,
                 "created": self.created, "finished": self.finished}
 
@@ -141,11 +143,14 @@ class App:
     def _worker(self) -> None:
         while True:
             job = self._queue.get()
+            if job.cancel:
+                job.status, job.finished = "cancelled", time.time()
+                continue
             job.status = "running"
             try:
                 with self.library() as lib:
                     job.result = JOBS[job.kind](self, lib, job)
-                job.status = "done"
+                job.status = "cancelled" if job.cancel else "done"
             except ApiError as exc:
                 job.status, job.error = "error", str(exc)
             except (analyze.AnalysisError, servers.ServerError, embed.EmbeddingMismatch,
@@ -226,6 +231,37 @@ def job_compare(app: App, lib: Library, job: Job):
     return {"analysis": r.id, "text": r.text, "seconds": round(r.seconds, 1)}
 
 
+def job_vectors(app: App, lib: Library, job: Job):
+    return _embed_if_possible(app, lib, job)
+
+
+def job_read(app: App, lib: Library, job: Job):
+    """Read pages again with the vision model: one page, or a document."""
+    p = job.params
+    client = analyze.vision_client(app.host, app.host.api_key)
+    t0 = time.perf_counter()
+    if p.get("unit_id"):
+        job.progress = {"step": "read", "done": 0, "total": 1}
+        r = transcription.read_page(lib, client, p["unit_id"], p.get("method", "correct"),
+                                    p.get("max_side", transcription.DEFAULT_SIDE))
+        out = {"analysis": r.id, "unit_id": r.unit_id, "method": r.method, "text": r.text,
+               "score": r.score, "truncated": r.truncated}
+        if p.get("replace"):
+            transcription.apply(lib, r.id)
+            out["replaced"] = 1
+    else:
+        out = transcription.read_document(
+            lib, client, p["doc_id"], p.get("method", "correct"), p.get("pages", "low"),
+            p.get("threshold", transcription.LOW_CONFIDENCE), bool(p.get("replace")),
+            bool(p.get("refresh")), _progress(job, "read"), lambda: job.cancel,
+            p.get("max_side", transcription.DEFAULT_SIDE))
+        out["doc_id"] = p["doc_id"]
+    out["seconds"] = round(time.perf_counter() - t0, 1)
+    if out.get("replaced"):
+        out.update(_embed_if_possible(app, lib, job))
+    return out
+
+
 def _languages(p: dict, src_required: bool = True) -> tuple[str | None, str]:
     src, tgt = (p.get("src") or "auto").strip(), (p.get("tgt") or "").strip()
     if not re.match(r"^[a-z]{2,3}(-[A-Za-z]{2,4})?$", tgt):
@@ -273,7 +309,8 @@ def job_translate_document(app: App, lib: Library, job: Job):
 
 JOBS = {"import": job_import, "embed": job_embed, "reindex": job_reindex,
         "look": job_look, "summarize": job_summarize, "compare": job_compare,
-        "translate": job_translate, "translate_document": job_translate_document}
+        "translate": job_translate, "translate_document": job_translate_document,
+        "read": job_read, "vectors": job_vectors}
 
 
 # ---------------------------------------------------------------- views
@@ -534,9 +571,11 @@ class Handler(BaseHTTPRequestHandler):
         boxes = (query.get("boxes") or ["0"])[0] == "1"
         with self.app.library() as lib:
             rows = [_row(u) for u in lib.units(int(doc_id))]
+            readers = transcription.readers(lib, int(doc_id))
         for r in rows:
             if not boxes:
                 r.pop("boxes", None)
+            r["reader"] = readers.get(r["id"])
         self._json(200, rows)
 
     @route("GET", r"/api/documents/(\d+)/original")
@@ -690,6 +729,76 @@ class Handler(BaseHTTPRequestHandler):
         with self.app.library() as lib:
             rows = analyze.analyses(lib.con, int(doc[0]) if doc else None)
         self._json(200, [_row(r) for r in rows])
+
+    # -------------------------------------------------- page readings (vision)
+    @route("POST", "/api/read")
+    def read_pages(self, query):
+        body = self._body()
+        method = body.get("method", "correct")
+        if method not in transcription.METHODS:
+            raise ApiError(400, "method is transcribe or correct")
+        params = {"method": method, "replace": bool(body.get("replace")),
+                  "refresh": bool(body.get("refresh"))}
+        if body.get("max_side"):
+            params["max_side"] = max(512, min(int(body["max_side"]), 3000))
+        with self.app.library() as lib:
+            if body.get("unit_id"):
+                params["unit_id"] = int(body["unit_id"])
+                if lib.con.execute("SELECT 1 FROM units WHERE id=?",
+                                   (params["unit_id"],)).fetchone() is None:
+                    raise ApiError(404, "no such page")
+            else:
+                params["doc_id"] = int(body["doc_id"])
+                params["pages"] = body.get("pages", "low")
+                params["threshold"] = float(body.get("threshold") or
+                                            transcription.LOW_CONFIDENCE)
+                try:
+                    n = len(transcription.select_pages(lib, params["doc_id"], params["pages"],
+                                                       params["threshold"]))
+                except KeyError:
+                    raise ApiError(404, "no such document")
+                except analyze.AnalysisError as exc:
+                    raise ApiError(409, str(exc))
+                if not n:
+                    raise ApiError(409, "no page to read with these settings")
+        job = self.app.submit("read", params)
+        self._json(202, {"job": job.id})
+
+    @route("POST", r"/api/analyses/(\d+)/apply")
+    def apply_reading(self, analysis_id, query):
+        with self.app.library() as lib:
+            unit = transcription.apply(lib, int(analysis_id))
+        job = self.app.submit("vectors", {})
+        self._json(200, {"unit": unit, "job": job.id})
+
+    @route("GET", r"/api/analyses/(\d+)/diff")
+    def reading_diff(self, analysis_id, query):
+        """Differences between a page's text now and a reading of it."""
+        with self.app.library() as lib:
+            a = lib.con.execute("SELECT a.text, u.text AS current FROM analyses a JOIN units u"
+                                " ON u.id=a.unit_id WHERE a.id=?",
+                                (int(analysis_id),)).fetchone()
+        if a is None:
+            raise ApiError(404, "no such page reading")
+        self._json(200, {"ops": transcription.diff(a["current"], a["text"]),
+                         "score": transcription.agreement(a["current"], a["text"]),
+                         "same": a["current"] == a["text"]})
+
+    @route("POST", r"/api/units/(\d+)/restore")
+    def restore_unit(self, unit_id, query):
+        with self.app.library() as lib:
+            transcription.restore(lib, int(unit_id))
+        job = self.app.submit("vectors", {})
+        self._json(200, {"unit": int(unit_id), "job": job.id})
+
+    @route("POST", r"/api/jobs/(\d+)/cancel")
+    def cancel_job(self, job_id, query):
+        j = self.app.jobs.get(int(job_id))
+        if j is None:
+            raise ApiError(404, "no such job")
+        if j.status in ("queued", "running"):
+            j.cancel = True
+        self._json(200, j.public())
 
     # -------------------------------------------------- translation
     @route("GET", "/api/languages")

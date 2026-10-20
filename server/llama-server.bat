@@ -33,6 +33,11 @@ set "VISION_PORT=8082"
 set "TRANSLATE_PORT=8083"
 rem context of the translation server
 set "TRANSLATE_CTX=8192"
+rem vision server (qwenvl): a page image takes up to the micro-batch in
+rem tokens, so it gets its own, larger one; the context holds the image, the
+rem OCR text to correct and the reading
+set "QWENVL_UBATCH=2048"
+set "QWENVL_CTX=12288"
 rem CPU threads (empty = llama.cpp's choice)
 set "THREADS="
 rem context of the chat server (prompt + answer). 16384 leaves room for
@@ -125,6 +130,10 @@ goto chat
 :p_qwenvl
 set "MODEL=%QWENVL_MODEL%"
 set "MMPROJ=%QWENVL_MMPROJ%"
+if defined QWENVL_UBATCH set "UBATCH=%QWENVL_UBATCH%"
+if defined QWENVL_CTX set "CTX=%QWENVL_CTX%"
+rem a dense model: no experts to keep on the CPU
+set "N_CPU_MOE="
 set "ALIAS=vision"
 set "PORT=%VISION_PORT%"
 set "VISION=1"

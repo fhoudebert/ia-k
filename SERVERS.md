@@ -53,6 +53,7 @@ starts IA-K, and stops the servers it started when IA-K is closed:
 |---|---|---|
 | `serveurs-baseConnaissance.bat` / `.sh` | `gemma26` (8080) + `embed` (8081) | library, search, questions, summaries, page analysis |
 | `serveurs-traduction.bat` / `.sh` | `translate` (8083) + `embed` (8081) | translation, search |
+| `serveurs-vl.bat` / `.sh` | `qwenvl` (8082) + `embed` (8081) | reading difficult scans again, page analysis, search |
 
 A server already running on its port is used as it is. `--keep` leaves the
 servers running after IA-K, `--no-app` starts only the servers. On Windows
@@ -61,8 +62,8 @@ to `data/server-<profile>.log`. Both files call
 `server/start-servers.bat PROFILE...` (or `.sh`), which can start any set of
 profiles, for instance `server\start-servers.bat qwenvl embed`.
 
-On a 32 GB laptop, use one file at a time: the 26B and TranslateGemma 12B do
-not fit in graphics memory together.
+On a 32 GB laptop, use one file at a time: the 26B, TranslateGemma 12B and
+Qwen3-VL-8B do not fit in graphics memory together.
 
 On Windows their settings are read from `server/local.bat` when it exists,
 otherwise from **`server/local.hx370.bat`**, the reference laptop: llama.cpp
@@ -109,6 +110,7 @@ server\llama-server.bat translate
 | `UBATCH` | 1280 with vision | micro-batch; an image gets at most this many tokens |
 | `EMBED_NGL` | 0 | embedding server on the CPU (99 = on the GPU) |
 | `TRANSLATE_CTX` | 8192 | context of the translation server |
+| `QWENVL_UBATCH`, `QWENVL_CTX` | 2048, 12288 | micro-batch and context of the vision server: a page image gets up to the micro-batch in tokens; the context holds the image, the OCR text to correct and the reading |
 | `THREADS` | llama.cpp's choice | CPU threads of every server |
 | `GEMMA26_MODEL`, `TRANSLATE_MODEL`, … | LM Studio layout under `MODELS_DIR` | explicit model files |
 | `CHAT_PORT`, `EMBED_PORT`, `VISION_PORT`, `TRANSLATE_PORT` | 8080, 8081, 8082, 8083 | always bound to 127.0.0.1 |

@@ -58,7 +58,9 @@ architecture).
      Gemma 4 26B-A4B and EmbeddingGemma, for the library, search and
      questions;
    - `serveurs-traduction.bat` (`./serveurs-traduction.sh`): TranslateGemma
-     and EmbeddingGemma, for translation.
+     and EmbeddingGemma, for translation;
+   - `serveurs-vl.bat` (`./serveurs-vl.sh`): Qwen3-VL-8B and EmbeddingGemma,
+     to read difficult scans again (below).
 
    Their settings (where llama.cpp and the models are, memory options) are
    those of the reference laptop, in `server/local.hx370.bat`; on another
@@ -97,6 +99,21 @@ again. *Analyse the page* asks the model to describe it, transcribe it,
 explain an error on a screenshot, extract names, dates and amounts, or answer
 a question of yours. When you arrive from a search or a citation, the passage
 is highlighted in yellow on the page.
+
+**Reading pages again.** When Tesseract reads a scan badly (old print,
+columns, tables, handwriting), the vision model can do better. In *Analyse
+the page*, *Correct the OCR text from the image* gives it the page and
+Tesseract's text to correct; *Transcribe* has it read the image alone. The
+reading is shown with its agreement with the page's text: a low figure on a
+page Tesseract read well is a reason to look at *Differences* (word by word)
+before *Use as the page's text*. Nothing is replaced until you choose to, and
+*Restore the extracted text* goes back. *Read pages again…* does it for a whole
+document: the poor OCR pages (confidence below 80 %), every OCR page or every
+page, proposing readings or replacing the text directly — never on pages you
+corrected by hand. Pages already read are not read again, so a cancelled run
+goes on where it stopped. Pages whose text comes from the model are marked
+·VL in the list. Best with Qwen3-VL-8B (`serveurs-vl.bat`); Gemma 4 with its
+vision projector works too.
 
 **Search.** Type words or a question. *Automatic* combines words and meaning:
 "who repaired the damaged map?" finds "the binder mended the atlas spoilt by
@@ -190,19 +207,19 @@ Done:
    [truchement](https://github.com/fhoudebert/transcribe): paragraph groups
    sized to the server's context, revision passes, layout, notes and table
    of contents kept, glossary, resumable after a pause or a shutdown
+10. [Qwen3-VL-8B](https://huggingface.co/lmstudio-community/Qwen3-VL-8B-Instruct-GGUF)
+    as dedicated vision model (`serveurs-vl.bat`): difficult scans and tables
+    read again to correct or replace Tesseract's text, page by page or for a
+    whole document, with agreement, differences and going back
 
 Next:
 
-10. **[Qwen3-VL-8B](https://huggingface.co/lmstudio-community/Qwen3-VL-8B-Instruct-GGUF)
-    as dedicated vision model** (`serveurs-vl.bat`, with EmbeddingGemma):
-    transcription of difficult scans and tables to correct or replace
-    Tesseract's text, page by page or for a whole document.
+11. **macOS**: an `ia-k-mac` zip downloadable from the *Actions* tab
+    (*Artifacts*) like the Windows and Linux ones, built by CI on a macOS
+    runner, with a `setup_python` for macOS.
 
 Later:
 
-- **macOS**: an `ia-k-mac` zip downloadable from the *Actions* tab
-  (*Artifacts*) like the Windows and Linux ones, built by CI on a macOS
-  runner, with a `setup_python` for macOS.
 - Other launchers by use, as needed.
 - Export of answers, summaries and comparisons (Markdown, with their sources).
 - Collections (named groups of documents) to limit search and questions.

@@ -188,6 +188,10 @@ function renderJobs() {
     }
     if (p.file && j.status === "running") li.append(el("span", { class: "muted" }, p.file.split(/[\\/]/).pop()));
     if (j.error) li.append(el("span", { class: "status-error" }, j.error));
+    if ((j.status === "queued" || (j.status === "running" && j.kind === "read")) && !j.cancel) {
+      li.append(el("button", { class: "link", onclick: () =>
+        post(`/api/jobs/${j.id}/cancel`).then(pollJobs, fail) }, t("jobs.cancel")));
+    }
     if (j.status === "done" && j.kind === "import" && j.result) {
       const c = { imported: 0, duplicate: 0, error: 0 };
       j.result.files.forEach((f) => { c[f.status] = (c[f.status] || 0) + 1; });
@@ -355,16 +359,32 @@ async function openDoc(docId, unitId = null, passageId = null) {
     state.units = units;
     $("#tab-viewer").hidden = false;
     $("#viewer-title").textContent = doc.name;
-    const ul = $("#unit-list");
-    ul.replaceChildren(...units.map((u) => el("li", {
-      class: u.source === "ocr" ? "ocr" : "", dataset: { id: u.id }, title: u.label,
-      onclick: () => selectUnit(u.id) }, u.label)));
+    renderUnitList();
     const hasPages = doc.kind === "pdf" || doc.kind === "image";
     $("#analyse-box").hidden = !hasPages;
+    $("#viewer-reread").hidden = !hasPages;
+    $("#reread-panel").hidden = true;
     show("viewer");
     await selectUnit(unitId || (units[0] && units[0].id), passageId);
     await loadAnalyses();
   } catch (e) { fail(e); }
+}
+
+function renderUnitList() {
+  const current = state.unit ? state.unit.id : null;
+  $("#unit-list").replaceChildren(...state.units.map((u) => el("li", {
+    class: [u.source === "ocr" ? "ocr" : "", u.reader ? "vl" : "",
+            u.id === current ? "active" : ""].filter(Boolean).join(" "),
+    dataset: { id: u.id }, title: u.label, onclick: () => selectUnit(u.id) }, u.label)));
+}
+
+/** Units of the open document again (after a page text changed). */
+async function refreshUnits() {
+  if (!state.doc) return;
+  const keep = state.unit ? state.unit.id : null;
+  state.units = await get(`/api/documents/${state.doc.id}/units`);
+  renderUnitList();
+  if (keep) await selectUnit(keep);
 }
 
 async function selectUnit(unitId, passageId = null) {
@@ -381,7 +401,9 @@ async function selectUnit(unitId, passageId = null) {
     badges.push(el("span", { class: u.ocr_conf < 70 ? "badge warn" : "badge" },
       t("viewer.conf", { conf: Math.round(u.ocr_conf) })));
   }
-  if (u.edited) badges.push(el("span", { class: "badge" }, t("viewer.edited")));
+  if (u.reader) badges.push(el("span", { class: "badge" }, t("viewer.read_by", { model: u.reader.model || "?" })));
+  else if (u.edited) badges.push(el("span", { class: "badge" }, t("viewer.edited")));
+  $("#unit-restore").hidden = !u.edited;
   $("#unit-badges").replaceChildren(...badges);
   const img = $("#page-image");
   $("#page-marks").replaceChildren();
@@ -423,7 +445,9 @@ async function saveUnit() {
     await request("PUT", `/api/units/${u.id}/text`, { text: $("#unit-text").value });
     u.text = $("#unit-text").value;
     u.edited = 1;
+    u.reader = null;                 // corrected by hand: no longer the model's text
     toast(t("viewer.saved"));
+    renderUnitList();
     await selectUnit(u.id);
   } catch (e) { fail(e); }
 }
@@ -440,10 +464,96 @@ async function loadAnalyses() {
       dateStyle: "short", timeStyle: "short" });
     const what = a.task === "summary" ? t("lib.summary")
       : (t(`viewer.task.${a.task}`) + (a.question ? ` : ${a.question}` : ""));
-    box.append(el("div", { class: "analysis" },
-      el("div", { class: "meta" }, [what, unit ? unit.label : null, when].filter(Boolean).join(" · ")),
-      markdown(a.text)));
+    const reading = a.task === "transcribe" || a.task === "correct";
+    const meta = [what, unit ? unit.label : null, a.model || null, when];
+    if (reading && a.score !== null && a.score !== undefined) {
+      meta.push(t("reading.score", { pct: Math.round(a.score * 100) }));
+    }
+    const item = el("div", { class: reading ? "analysis reading" : "analysis" },
+      el("div", { class: "meta" }, meta.filter(Boolean).join(" · ")));
+    if (reading) {
+      item.append(el("div", { class: "text" }, a.text));
+      if (a.sources && a.sources.truncated) item.append(el("p", { class: "badge warn" }, t("reading.truncated")));
+      if (unit) item.append(readingActions(a, unit, item));
+    } else {
+      item.append(markdown(a.text));
+    }
+    box.append(item);
   }
+}
+
+/** Buttons of a page reading: use it as the page text, show the differences. */
+function readingActions(a, unit, item) {
+  const current = unit.reader && unit.reader.id === a.id;
+  const bar = el("div", { class: "reading-actions" });
+  if (current) bar.append(el("span", { class: "badge" }, t("reading.current")));
+  else {
+    bar.append(el("button", { class: "primary", onclick: async () => {
+      try {
+        await post(`/api/analyses/${a.id}/apply`);
+        toast(t("reading.applied", { page: unit.label }));
+        await refreshUnits();
+        if (state.unit && state.unit.id !== unit.id) await selectUnit(unit.id);
+        await loadAnalyses();
+      } catch (e) { fail(e); }
+    } }, t("reading.apply")));
+  }
+  bar.append(el("button", { onclick: async (ev) => {
+    const old = item.querySelector(".diff");
+    if (old) { old.remove(); ev.target.textContent = t("reading.diff"); return; }
+    try {
+      const d = await get(`/api/analyses/${a.id}/diff`);
+      const box = el("div", { class: "diff" });
+      if (d.same) box.append(t("reading.same"));
+      else {
+        box.append(el("div", { class: "meta" }, t("reading.diff_legend")));
+        for (const [op, text] of d.ops) {
+          box.append(op === "=" ? text : el(op === "+" ? "ins" : "del", {}, text));
+        }
+      }
+      item.append(box);
+      ev.target.textContent = t("reading.diff_hide");
+    } catch (e) { fail(e); }
+  } }, t("reading.diff")));
+  if (state.unit && state.unit.id !== unit.id) {
+    bar.append(el("button", { class: "link", onclick: () => selectUnit(unit.id) }, t("reading.show_page")));
+  }
+  return bar;
+}
+
+async function restoreUnit() {
+  const u = state.unit;
+  if (!u) return;
+  const ok = TAURI && TAURI.dialog.ask
+    ? await TAURI.dialog.ask(t("viewer.restore_confirm"), { kind: "warning" })
+    : window.confirm(t("viewer.restore_confirm"));
+  if (!ok) return;
+  try {
+    await post(`/api/units/${u.id}/restore`);
+    toast(t("viewer.restored"));
+    await refreshUnits();
+    await loadAnalyses();
+  } catch (e) { fail(e); }
+}
+
+async function startReread(ev) {
+  ev.preventDefault();
+  if (!state.doc) return;
+  const f = $("#reread-panel");
+  try {
+    const { job } = await post("/api/read", {
+      doc_id: state.doc.id, pages: f.pages.value, threshold: Number(f.threshold.value) || 80,
+      method: f.method.value, replace: f.replace.checked });
+    f.hidden = true;
+    toast(t("reread.started"));
+    const docId = state.doc.id;
+    const done = await waitJob(job);
+    if (done.status === "error") { fail(done.error); return; }
+    const r = done.result || {};
+    toast(t("reread.done", { read: r.read || 0, replaced: r.replaced || 0, kept: r.kept_edited || 0 })
+          + (done.status === "cancelled" ? ` — ${t("jobs.status.cancelled")}` : ""));
+    if (state.doc && state.doc.id === docId) { await refreshUnits(); await loadAnalyses(); }
+  } catch (e) { fail(e); }
 }
 
 async function runLook() {
@@ -457,7 +567,10 @@ async function runLook() {
   const pending = el("p", { class: "thinking" }, t("analysis.running"));
   $("#analyses").prepend(pending);
   try {
-    const { job } = await post("/api/look", { unit_id: u.id, task, question, lang: getLang() });
+    // reading the page again: a proposal for its text
+    const { job } = task === "correct" || task === "transcribe"
+      ? await post("/api/read", { unit_id: u.id, method: task })
+      : await post("/api/look", { unit_id: u.id, task, question, lang: getLang() });
     const done = await waitJob(job);
     if (done.status === "error") fail(done.error);
     await loadAnalyses();
@@ -1183,6 +1296,13 @@ function wire() {
   $("#viewer-summary").addEventListener("click", () => state.doc && summarize(state.doc.id, state.doc.name));
   $("#viewer-reextract").addEventListener("click", reextract);
   $("#unit-save").addEventListener("click", saveUnit);
+  $("#unit-restore").addEventListener("click", restoreUnit);
+  $("#viewer-reread").addEventListener("click", () => { $("#reread-panel").hidden = !$("#reread-panel").hidden; });
+  $("#reread-close").addEventListener("click", () => { $("#reread-panel").hidden = true; });
+  $("#reread-panel").addEventListener("submit", startReread);
+  $("#reread-panel").pages.addEventListener("change", () => {
+    $("#reread-threshold-box").hidden = $("#reread-panel").pages.value !== "low";
+  });
   $("#look-run").addEventListener("click", runLook);
   $("#servers-form").addEventListener("submit", saveServers);
   $("#api-key-clear").addEventListener("click", () => saveServers(null, true));

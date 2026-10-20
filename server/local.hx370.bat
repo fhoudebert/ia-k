@@ -23,6 +23,11 @@ set "KV_Q8=1"
 set "UBATCH=512"
 set "THREADS=8"
 
+rem --- vision server (Qwen3-VL-8B, serveurs-vl.bat): a page image gets up to
+rem     2048 tokens to be read in detail; run it without the 26B
+set "QWENVL_UBATCH=2048"
+set "QWENVL_CTX=12288"
+
 rem --- embedding server (EmbeddingGemma 300M) on the CPU, as in
 rem     embeddinggemma-rag.bat
 set "EMBED_NGL=0"

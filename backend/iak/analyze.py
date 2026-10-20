@@ -79,7 +79,8 @@ def vision_client(host, api_key: str = "", vision_url: str | None = None,
     it was started with a vision projector."""
     url = vision_url or getattr(host, "vision", None)
     if url:
-        client = Client(url, api_key, timeout=900)
+        # a dense page read on a slow computer can take long
+        client = Client(url, api_key, timeout=1800)
         try:
             client.model()
             return client
@@ -89,7 +90,7 @@ def vision_client(host, api_key: str = "", vision_url: str | None = None,
     url = chat_url or getattr(host, "chat", None)
     if not url:
         raise AnalysisError("no vision or chat server configured")
-    client = Client(url, api_key)
+    client = Client(url, api_key, timeout=1800)
     if client.props().get("vision") is False:
         raise AnalysisError("the chat server has no vision projector (mmproj): start "
                             "it with vision, or start a vision server")
@@ -127,6 +128,11 @@ def look(lib, client: Client, unit_id: int, task: str = "describe",
         raise AnalysisError("the 'ask' task needs a question")
     if task != "ask" and task not in TASKS:
         raise AnalysisError(f"unknown task {task}: {', '.join([*TASKS, 'ask'])}")
+    if task == "transcribe":
+        # a page reading that can become the page's text (transcription.py)
+        from . import transcription
+        r = transcription.read_page(lib, client, unit_id, "transcribe")
+        return Result(r.id, r.method, r.text, r.seconds)
     png = render_unit(lib, unit_id)
     unit = lib.con.execute("SELECT doc_id, text, source FROM units WHERE id=?",
                            (unit_id,)).fetchone()

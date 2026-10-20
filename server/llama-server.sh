@@ -34,6 +34,11 @@ EMBED_NGL="${EMBED_NGL:-0}"     # embeddings on the CPU (99 = on the GPU)
 VISION_PORT="${VISION_PORT:-8082}"
 TRANSLATE_PORT="${TRANSLATE_PORT:-8083}"
 TRANSLATE_CTX="${TRANSLATE_CTX:-8192}"
+# vision server (qwenvl): a page image takes up to the micro-batch in tokens,
+# so it gets its own, larger one; the context holds the image, the OCR text
+# to correct and the reading
+QWENVL_UBATCH="${QWENVL_UBATCH:-2048}"
+QWENVL_CTX="${QWENVL_CTX:-12288}"
 THREADS="${THREADS:-}"         # CPU threads (empty = llama.cpp's choice)
 CTX="${CTX:-16384}"          # chat context (prompt + answer)
 NGL="${NGL:-99}"             # layers on the iGPU (99 = all)
@@ -78,7 +83,8 @@ case "$PROFILE" in
     gemma12) MODEL="$GEMMA12_MODEL"; MMPROJ="${GEMMA12_MMPROJ:-}"; ALIAS=gemma-4-12b; PORT="$CHAT_PORT" ;;
     gemma26) MODEL="$GEMMA26_MODEL"; MMPROJ="${GEMMA26_MMPROJ:-}"; ALIAS=gemma-4-26b-a4b; PORT="$CHAT_PORT"
              N_CPU_MOE="${N_CPU_MOE:-99}"; MMPROJ_CPU="${MMPROJ_CPU:-1}" ;;
-    qwenvl)  MODEL="$QWENVL_MODEL";  MMPROJ="${QWENVL_MMPROJ:-}";  ALIAS=vision; PORT="$VISION_PORT"; VISION=1 ;;
+    qwenvl)  MODEL="$QWENVL_MODEL";  MMPROJ="${QWENVL_MMPROJ:-}";  ALIAS=vision; PORT="$VISION_PORT"; VISION=1
+             UBATCH="$QWENVL_UBATCH"; CTX="$QWENVL_CTX"; N_CPU_MOE="" ;;
     embed)
         need_file "$EMBED_MODEL"
         echo "[ia-k] embeddings on http://$HOST:$EMBED_PORT/v1  (alias embeddinggemma)"

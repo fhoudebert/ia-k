@@ -10,6 +10,8 @@
     python -m iak look UNIT_ID [--task T] read a page or image with the vision model
                                           (describe, transcribe, error, extract,
                                           or --ask "question")
+    python -m iak reread ID [--pages low|ocr|all] [--method correct|transcribe] [--replace]
+                                          read pages again with the vision model
     python -m iak summarize ID            summary of a document, with page labels
     python -m iak compare ID ID...        compare documents (from their summaries)
     python -m iak analyses [ID]           stored analyses
@@ -99,6 +101,16 @@ def main(argv: list[str] | None = None) -> int:
                    choices=[*analyze.TASKS, "ask"])
     p.add_argument("--ask", default="", help="free question about the page (task ask)")
     p.add_argument("--no-ocr", action="store_true", help="do not give the OCR text")
+    p = sub.add_parser("reread")
+    p.add_argument("id", type=int, help="document id (PDF or image)")
+    p.add_argument("--pages", choices=("low", "ocr", "all"), default="low",
+                   help="low: OCR pages below --threshold (default); ocr: every OCR page")
+    p.add_argument("--threshold", type=float, default=80, help="OCR confidence, 0-100")
+    p.add_argument("--method", choices=("correct", "transcribe"), default="correct",
+                   help="correct the OCR text from the image (default), or read the image alone")
+    p.add_argument("--replace", action="store_true",
+                   help="make each reading the page's text (pages corrected by hand are kept)")
+    p.add_argument("--refresh", action="store_true", help="read pages already read again")
     p = sub.add_parser("summarize")
     p.add_argument("id", type=int)
     p.add_argument("--refresh", action="store_true", help="ignore a stored summary")
@@ -306,6 +318,33 @@ def main(argv: list[str] | None = None) -> int:
                 for s in res.sources:
                     _out(f"  [{s.ref}] {s.doc_name}, {s.label}")
             _out(f"\n({len(res.sent)} passages sent, {used} search, {dt:.1f} s)")
+            return 0
+
+        if args.cmd == "reread":
+            from . import transcription
+            try:
+                client = analyze.vision_client(host, host.api_key, args.vision_server,
+                                               args.server)
+                r = transcription.read_document(
+                    lib, client, args.id, args.method, args.pages, args.threshold,
+                    args.replace, args.refresh,
+                    lambda i, n: print(f"\r  page {i}/{n}", end="", flush=True))
+            except (analyze.AnalysisError, servers.ServerError, KeyError) as exc:
+                _out(f"\n{exc}")
+                return 1
+            print()
+            for rid in r["readings"]:
+                a = lib.con.execute("SELECT a.score, u.label FROM analyses a JOIN units u"
+                                    " ON u.id=a.unit_id WHERE a.id=?", (rid,)).fetchone()
+                score = "-" if a["score"] is None else f"{a['score']:.0%}"
+                _out(f"  {a['label']:<10} reading #{rid}  agreement with the text: {score}")
+            _out(f"{r['pages']} page(s): {r['read']} read, {r['skipped']} already read, "
+                 f"{r['replaced']} replaced, {r['kept_edited']} kept (corrected by hand)"
+                 + (f", {r['truncated']} cut short" if r["truncated"] else ""))
+            if r["replaced"]:
+                emb = embedder()
+                if emb:
+                    lib.embed_pending(emb)
             return 0
 
         if args.cmd in ("look", "summarize", "compare"):

@@ -27,6 +27,7 @@ interface uses.
 ./iak.sh embed [--rebuild]                        # vectors for search by meaning
 ./iak.sh look 42 --task describe|transcribe|error|extract   # page analysis
 ./iak.sh look 42 --ask "Quel est le montant total ?"
+./iak.sh reread 3 [--pages low|ocr|all] [--method correct|transcribe] [--replace]
 ./iak.sh summarize 3 [--refresh]                  # summary with [p. N] labels
 ./iak.sh compare 3 7 --question "dates"           # common points, differences
 ./iak.sh analyses 3                               # stored analyses
@@ -116,6 +117,34 @@ suits exFAT keys that may be unplugged.
 - Results are stored with their task, language and model, and deleted with
   their document.
 
+## Reading pages again
+
+`iak/transcription.py`, for PDF pages and images.
+
+- **Methods.** `correct`: the vision model gets the page image (1,600 pixels
+  on its longest side) and the page's text in `<ocr>` tags, and corrects it;
+  `transcribe`: it reads the image alone. Both ask for the original spelling
+  kept, line breaks and paragraphs, columns in order, tables in Markdown,
+  `[?]` for unreadable words; up to 3,000 tokens per page (when correcting,
+  about one and a half times the OCR text). Repetition is discouraged
+  (presence penalty 1.5, as Qwen recommends for Qwen3-VL) and a line repeated
+  at the end is dropped: small vision models can loop.
+- **Readings.** Stored as analyses (task `correct` or `transcribe`) with
+  their model, their agreement with the page's text at the time (share of
+  words in common, whatever their order, 0-1: `score`) and whether the answer was cut by
+  the token limit. *Apply* makes a reading the page's text (`applied`, the
+  page reindexed, its vectors computed in the background); the extracted
+  text stays in `text_extracted` and *restore* puts it back. The units list
+  says which pages have a model's text (`reader`); a page corrected by hand
+  afterwards no longer counts as one.
+- **A document.** Pages: `low` (OCR pages below the confidence threshold, 80
+  by default, or nearly empty), `ocr`, `all`. Pages already read by the same
+  model with the same method are skipped (unless `refresh`), so a cancelled
+  job goes on where it stopped; with `replace`, pages corrected by hand are
+  kept.
+- **Server.** The vision server when it answers, else the chat server when
+  it has a vision projector.
+
 ## Translation
 
 - **Which model.** The translation server when it answers, otherwise the
@@ -191,9 +220,11 @@ The interface talks to the engine through an HTTP API:
 - **Lifetime.** With `--watch-stdin` (used by the application) the engine
   stops when its standard input closes, that is when the application ends,
   even abruptly.
-- **Jobs.** Import, embedding, re-extraction, page analysis, summaries,
-  comparisons and translations run one at a time: the call returns `{"job": id}` (202) and
-  `GET /api/jobs/<id>` gives status, progress and result.
+- **Jobs.** Import, embedding, re-extraction, page analysis and readings,
+  summaries, comparisons and translations run one at a time: the call returns
+  `{"job": id}` (202) and `GET /api/jobs/<id>` gives status, progress and
+  result. A queued job can be cancelled; a reading of several pages stops
+  between two pages.
 - **Errors.** `{"error": "..."}` with 400, 401 (token), 403 (host or origin),
   404, 409 (not configured, wrong embedding model, impossible task), 502
   (model server).
@@ -216,6 +247,10 @@ The interface talks to the engine through an HTTP API:
 | `POST /api/look` `{"unit_id": 42, "task": "error"}` or `"question"` | job |
 | `POST /api/summarize` `{"doc_id": 3}`, `POST /api/compare` `{"doc_ids": [3, 7]}` | jobs |
 | `GET /api/analyses[?doc=3]`, `GET /api/jobs`, `GET /api/jobs/<id>` | stored results, jobs |
+| `POST /api/read` `{"unit_id"` or `"doc_id", "pages", "threshold", "method", "replace", "refresh"}` | job: page readings by the vision model |
+| `GET /api/analyses/<id>/diff`, `POST /api/analyses/<id>/apply` | word differences with the page's text; use a reading as the text |
+| `POST /api/units/<id>/restore` | back to the extracted text |
+| `POST /api/jobs/<id>/cancel` | cancel a queued job, or stop a reading between two pages |
 | `GET /api/languages` | languages offered for translation |
 | `POST /api/translate` `{"text", "src": "auto", "tgt": "en"}` | job: translated text, detected language |
 | `POST /api/translate/document` `{"doc_id"` or `"unit_id", "src", "tgt", "refresh"}` | job |

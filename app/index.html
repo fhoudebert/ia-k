@@ -241,10 +241,29 @@
         <button class="link" id="viewer-back">← <span data-i18n="viewer.back"></span></button>
         <h2 id="viewer-title"></h2>
         <span class="spacer"></span>
+        <button id="viewer-reread" data-i18n="viewer.reread"></button>
         <button id="viewer-translate" data-i18n="viewer.translate"></button>
         <button id="viewer-summary" data-i18n="viewer.summary"></button>
         <button id="viewer-reextract" data-i18n="viewer.reextract"></button>
       </div>
+      <form id="reread-panel" class="reread" hidden>
+        <span data-i18n="reread.title"></span>
+        <select name="pages">
+          <option value="low" data-i18n="reread.pages.low"></option>
+          <option value="ocr" data-i18n="reread.pages.ocr"></option>
+          <option value="all" data-i18n="reread.pages.all"></option>
+        </select>
+        <label class="check" id="reread-threshold-box"><span data-i18n="reread.threshold"></span>
+          <input name="threshold" type="number" min="1" max="100" value="80"></label>
+        <select name="method">
+          <option value="correct" data-i18n="reread.method.correct"></option>
+          <option value="transcribe" data-i18n="reread.method.transcribe"></option>
+        </select>
+        <label class="check"><input type="checkbox" name="replace">
+          <span data-i18n="reread.replace"></span></label>
+        <button class="primary" data-i18n="reread.start"></button>
+        <button type="button" class="link close" id="reread-close">×</button>
+      </form>
       <div class="viewer-body">
         <aside class="units">
           <h4 data-i18n="viewer.units"></h4>
@@ -263,11 +282,15 @@
             <span id="unit-badges"></span>
           </div>
           <textarea id="unit-text" spellcheck="false"></textarea>
-          <button id="unit-save" data-i18n="viewer.save"></button>
+          <div class="row">
+            <button id="unit-save" data-i18n="viewer.save"></button>
+            <button id="unit-restore" class="link" data-i18n="viewer.restore" hidden></button>
+          </div>
           <div class="analyse" id="analyse-box">
             <h4 data-i18n="viewer.analyse"></h4>
             <select id="look-task">
               <option value="describe" data-i18n="viewer.task.describe"></option>
+              <option value="correct" data-i18n="viewer.task.correct"></option>
               <option value="transcribe" data-i18n="viewer.task.transcribe"></option>
               <option value="error" data-i18n="viewer.task.error"></option>
               <option value="extract" data-i18n="viewer.task.extract"></option>

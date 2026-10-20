@@ -240,7 +240,10 @@ class Client:
                     yield piece
 
     def chat(self, messages: list[dict], max_tokens: int = 700, temperature: float = 0.2,
-             thinking: bool = False) -> str:
+             thinking: bool = False, info: dict | None = None,
+             extra: dict | None = None) -> str:
+        """The answer's text; `info`, when given, receives finish_reason
+        ("length" when max_tokens cut it); `extra` adds sampling settings."""
         payload = {
             "model": "",
             "messages": messages,
@@ -248,9 +251,12 @@ class Client:
             "temperature": temperature,
             "cache_prompt": True,
             "chat_template_kwargs": {"enable_thinking": thinking},
+            **(extra or {}),
         }
         data = self._call(self.v1 + "/chat/completions", payload)
         try:
+            if info is not None:
+                info["finish_reason"] = data["choices"][0].get("finish_reason")
             return data["choices"][0]["message"].get("content") or ""
         except (KeyError, IndexError, TypeError) as exc:
             raise ServerError(f"unexpected answer: {str(data)[:200]}") from exc

@@ -31,10 +31,11 @@ BY_OS = {
                 "server/gemma-4-12b-qat-vulkan.bat", "server/embeddinggemma-rag.bat",
                 "server/qwen3-vl-8b-vulkan.bat", "server/start-servers.bat",
                 "server/local.hx370.bat", "serveurs-baseConnaissance.bat",
-                "serveurs-traduction.bat"],
+                "serveurs-traduction.bat", "serveurs-vl.bat"],
     "linux": ["iak.sh", "setup_python.sh", "server/llama-server.sh",
               "server/local.example.sh", "server/start-servers.sh",
-              "serveurs-baseConnaissance.sh", "serveurs-traduction.sh"],
+              "serveurs-baseConnaissance.sh", "serveurs-traduction.sh",
+              "serveurs-vl.sh"],
 }
 SKIP_DIRS = {"__pycache__", "tests", ".pytest_cache"}
 
