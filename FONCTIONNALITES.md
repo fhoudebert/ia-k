@@ -33,6 +33,12 @@ ne part sur Internet.
 - **OCR** (Tesseract) des pages scannées, avec la confiance de lecture de
   chaque page ; langues réglables (`fra+eng`, `fra+frm` pour le moyen
   français…).
+- **Dossiers** : « Importer un dossier… » (ou déposer un dossier sur la
+  fenêtre) référence tous ses documents, sous-dossiers compris, dans une
+  collection du nom du dossier. Un dossier **surveillé** est examiné chaque
+  minute : les fichiers ajoutés ou modifiés y sont importés tout seuls. Un
+  dossier situé sur la clé est retrouvé d'un ordinateur à l'autre, quelle que
+  soit la lettre du lecteur.
 - **Collections** : des groupes de documents nommés (par sujet, projet,
   fonds…) ; un document peut appartenir à plusieurs collections, et une
   collection peut limiter la recherche et les questions.
@@ -87,8 +93,11 @@ ne part sur Internet.
   pages corrigées depuis signalées, export Markdown ou texte (avec
   l'original si souhaité).
 - **Livre entier, mise en forme conservée** : EPUB → EPUB (italiques, notes,
-  liens, table des matières), PDF → Markdown (titres, paragraphes recollés,
-  en-têtes et numéros de page retirés), DOCX, HTML, TXT, Markdown.
+  liens, table des matières), DOCX → DOCX, HTML → HTML. Un PDF (titres,
+  paragraphes recollés, en-têtes et numéros de page retirés) revient en PDF
+  au format A5 des liseuses, ou au choix en EPUB, HTML, Word, RTF, Markdown
+  ou texte ; de même pour les scans, TXT et Markdown. Une traduction finie
+  peut être réenregistrée dans un autre format sans rien retraduire.
   - 1 à 3 passes : traduction, révision bilingue, relecture finale ;
   - glossaire facultatif (« terme = traduction ») ;
   - essai sur les premiers blocs ;

@@ -29,6 +29,7 @@ const state = {
   turns: [],                   // the same answers with their sources, for export
   collections: [],             // [{id, name, n_docs}]
   collection: null,            // id of the collection shown in the library, or null
+  folders: [],                 // followed folders
   seenJobs: new Set(),         // finished jobs already taken into account
   started: false,              // first jobs poll done
   imageUrl: null,
@@ -166,7 +167,7 @@ async function pollJobs() {
     // the library changes with these jobs, whoever started them
     if (finished && !state.seenJobs.has(job.id)) {
       state.seenJobs.add(job.id);
-      if (state.started && ["import", "reindex", "embed"].includes(job.kind)) libraryChanged = true;
+      if (state.started && ["import", "reindex", "embed", "scan"].includes(job.kind)) libraryChanged = true;
     }
   }
   state.started = true;
@@ -198,7 +199,12 @@ function renderJobs() {
     if (j.status === "done" && j.kind === "import" && j.result) {
       const c = { imported: 0, duplicate: 0, error: 0 };
       j.result.files.forEach((f) => { c[f.status] = (c[f.status] || 0) + 1; });
+      (j.result.folders || []).forEach((f) => {
+        c.imported += f.imported; c.duplicate += f.duplicates; c.error += f.errors; });
       li.append(el("span", { class: "muted" }, t("import.result", c)));
+    }
+    if (j.status === "done" && j.kind === "scan" && j.result) {
+      li.append(el("span", { class: "muted" }, scanSummary(j.result)));
     }
     ul.append(li);
   }
@@ -207,8 +213,9 @@ function renderJobs() {
 // ------------------------------------------------------------------ library
 
 async function loadLibrary() {
-  [state.documents, state.collections] = await Promise.all([get("/api/documents"),
-                                                            get("/api/collections")]);
+  [state.documents, state.collections, state.folders] = await Promise.all([
+    get("/api/documents"), get("/api/collections"), get("/api/folders")]);
+  renderFolders();
   if (state.collection && !state.collections.some((c) => c.id === state.collection)) {
     state.collection = null;
   }
@@ -422,6 +429,96 @@ async function chooseFiles() {
       "bmp", "webp", "docx", "txt", "md", "markdown", "html", "htm", "xhtml", "epub"] }],
   });
   if (picked) importPaths(Array.isArray(picked) ? picked : [picked]);
+}
+
+// ------------------------------------------------------------------ folders
+
+function scanSummary(r) {
+  if (!r.available) return t("folder.absent");
+  const parts = [t("folder.scan_found", { n: r.found })];
+  if (r.imported) parts.push(t("folder.scan_new", { n: r.imported }));
+  if (r.changed) parts.push(t("folder.scan_changed", { n: r.changed }));
+  if (r.errors) parts.push(t("folder.scan_errors", { n: r.errors }));
+  if (r.waiting) parts.push(t("folder.scan_waiting", { n: r.waiting }));
+  if (r.gone) parts.push(t("folder.scan_gone", { n: r.gone }));
+  return parts.join(" · ");
+}
+
+function renderFolders() {
+  const ul = $("#folders");
+  ul.hidden = !state.folders.length;
+  ul.replaceChildren(...state.folders.map((f) => {
+    const when = f.last_scan ? new Date(f.last_scan * 1000).toLocaleString(getLang(), {
+      dateStyle: "short", timeStyle: "short" }) : "—";
+    const status = !f.available ? el("span", { class: "badge warn" }, t("folder.absent"))
+      : el("span", { class: f.watch ? "badge ok" : "badge" }, t(f.watch ? "folder.watched" : "folder.once"));
+    const coll = state.collections.find((c) => c.name === f.collection);
+    return el("li", {},
+      el("button", { class: "link coll-link", title: t("folder.show"), onclick: () => {
+        if (coll) { state.collection = coll.id; renderCollections(); renderLibrary(); }
+      } }, f.collection || "—"),
+      el("span", { class: "path", title: f.full_path }, f.full_path),
+      status,
+      el("span", { class: "muted" }, t("folder.files", { n: f.files, when })),
+      el("span", { class: "spacer" }),
+      f.available ? el("button", { class: "link", onclick: () => scanFolder(f).catch(fail) },
+        t("folder.scan")) : null,
+      el("button", { class: "link", onclick: () => request("PUT", `/api/folders/${f.id}`,
+        { watch: !f.watch }).then(loadLibrary, fail) },
+        t(f.watch ? "folder.unwatch" : "folder.rewatch")),
+      el("button", { class: "link danger", onclick: () => unfollow(f).catch(fail) },
+        t("folder.remove")));
+  }));
+}
+
+async function chooseFolder() {
+  if (!TAURI || !TAURI.dialog) { toast(t("tr.export_desktop"), true); return; }
+  const path = await TAURI.dialog.open({ directory: true, multiple: false });
+  if (path) openFolderForm(Array.isArray(path) ? path[0] : path);
+}
+
+function openFolderForm(path) {
+  const f = $("#folder-form");
+  f.dataset.path = path;
+  $("#folder-path").textContent = path;
+  f.name.value = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  f.copy.checked = false;
+  f.hidden = false;
+  f.name.focus();
+}
+
+async function followFolder(ev) {
+  ev.preventDefault();
+  const f = $("#folder-form");
+  try {
+    const r = await post("/api/folders", { path: f.dataset.path, name: f.name.value.trim(),
+      recursive: f.recursive.checked, watch: f.watch.checked, copy: f.copy.checked });
+    f.hidden = true;
+    toast(t("folder.added", { name: r.collection }));
+    await loadLibrary();
+    const done = await waitJob(r.job);
+    if (done.status === "error") fail(done.error);
+    else toast(`${r.collection} : ${scanSummary(done.result)}`);
+    const c = state.collections.find((x) => x.name === r.collection);
+    if (c) { state.collection = c.id; renderCollections(); renderLibrary(); }
+  } catch (e) { fail(e); }
+}
+
+async function scanFolder(f) {
+  const { job } = await post(`/api/folders/${f.id}/scan`);
+  toast(t("folder.scanning", { name: f.collection }));
+  const done = await waitJob(job);
+  if (done.status === "error") fail(done.error);
+  else toast(`${f.collection} : ${scanSummary(done.result)}`);
+}
+
+async function unfollow(f) {
+  const msg = t("folder.remove_confirm", { path: f.full_path, name: f.collection });
+  const ok = TAURI && TAURI.dialog.ask ? await TAURI.dialog.ask(msg, { kind: "warning" })
+                                       : window.confirm(msg);
+  if (!ok) return;
+  await request("DELETE", `/api/folders/${f.id}`);
+  await loadLibrary();
 }
 
 async function importPaths(paths) {
@@ -1165,6 +1262,7 @@ function duration(sec) {
 function renderBookDocs() {
   const sel = $("#book-doc");
   if (!sel) return;
+  setTimeout(updateBookFormat);
   const keep = sel.value;
   const docs = [...state.documents].sort((a, b) => a.name.localeCompare(b.name, getLang()));
   sel.replaceChildren(el("option", { value: "" }, t("book.choose_doc")),
@@ -1180,6 +1278,19 @@ async function chooseBookFile() {
   books.file = path;
   $("#book-doc").value = "";
   $("#book-file-name").textContent = path.split(/[\\/]/).pop();
+  updateBookFormat();
+}
+
+/** EPUB, HTML and DOCX books keep their layout, so their format: the
+ * choice is for books read as a flat text (PDF, scans, TXT, Markdown). */
+function updateBookFormat() {
+  const doc = state.documents.find((d) => String(d.id) === $("#book-doc").value);
+  const kind = doc ? doc.kind : (books.file || "").split(".").pop().toLowerCase();
+  const fixed = ["epub", "html", "htm", "xhtml", "docx"].includes(kind);
+  $("#book-format-box").hidden = fixed;
+  const auto = $("#book-format").options[0];
+  auto.textContent = t("book.fmt_auto") + ({ pdf: " (PDF)", image: " (PDF)", txt: " (TXT)",
+                                             md: " (Markdown)" }[kind] || "");
 }
 
 async function startBook() {
@@ -1187,7 +1298,8 @@ async function startBook() {
   if (!docId && !books.file) { $("#book-doc").focus(); return; }
   const { src, tgt } = trLanguages();
   const body = { src, tgt, passes: Number($("#book-passes").value),
-                 glossary: $("#book-glossary").value, limit: $("#book-trial").checked ? 3 : 0 };
+                 glossary: $("#book-glossary").value, limit: $("#book-trial").checked ? 3 : 0,
+                 format: $("#book-format-box").hidden ? "auto" : $("#book-format").value };
   if (docId) body.doc_id = Number(docId); else body.path = books.file;
   try {
     await post("/api/books", body);
@@ -1249,6 +1361,7 @@ function renderBooks(logs = {}) {
         await post(`/api/books/${b.id}/resume`); await loadBooks(); }, "primary"));
     }
     if (b.output_ready) {
+      if ((b.formats || []).length > 1) actions.append(formatSelect(b));
       actions.append(bookAction(t("book.save"), () => saveBook(b, false), "primary"),
         bookAction(t("book.import"), async () => {
           const { job } = await post(`/api/books/${b.id}/import`);
@@ -1287,14 +1400,26 @@ function renderBooks(logs = {}) {
   }));
 }
 
+/** Format to save a finished book in (written again from its translations). */
+function formatSelect(b) {
+  books.formats = books.formats || {};
+  const sel = el("select", { class: "book-fmt", title: t("book.format"),
+                             onchange: () => { books.formats[b.id] = sel.value; } },
+    ...b.formats.map((f) => el("option", { value: f },
+      { docx: "Word (DOCX)", md: "Markdown", txt: t("book.fmt_txt") }[f] || f.toUpperCase())));
+  sel.value = books.formats[b.id] || b.out_format || b.formats[0];
+  return sel;
+}
+
 async function saveBook(b, partial) {
   if (!TAURI) { toast(t("tr.export_desktop"), true); return; }
   const name = partial ? b.partial : b.output;
-  const ext = name.split(".").pop();
-  const path = await TAURI.dialog.save({ defaultPath: name,
+  const current = name.split(".").pop();
+  const ext = (!partial && books.formats && books.formats[b.id]) || current;
+  const path = await TAURI.dialog.save({ defaultPath: name.replace(/\.[^.]+$/, `.${ext}`),
                                          filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
   if (!path) return;
-  const r = await post(`/api/books/${b.id}/save`, { path, partial });
+  const r = await post(`/api/books/${b.id}/save`, { path, partial, format: ext });
   toast(t("tr.exported", { path: r.path }));
 }
 
@@ -1463,6 +1588,7 @@ function wire() {
     setLang(getLang() === "fr" ? "en" : "fr");
     translatePage();
     renderCollections();
+    renderFolders();
     renderLibrary();
     renderFilters();
     renderJobs();
@@ -1477,6 +1603,9 @@ function wire() {
   });
   $("#import-btn").addEventListener("click", () => chooseFiles().catch(fail));
   $("#compare-btn").addEventListener("click", compareSelected);
+  $("#folder-btn").addEventListener("click", () => chooseFolder().catch(fail));
+  $("#folder-form").addEventListener("submit", followFolder);
+  $("#folder-cancel").addEventListener("click", () => { $("#folder-form").hidden = true; });
   $("#coll-new-btn").addEventListener("click", () => {
     $("#coll-new").hidden = false; $("#coll-new-btn").hidden = true; $("#coll-new").name.focus(); });
   $("#coll-new-cancel").addEventListener("click", closeCollectionForm);
@@ -1562,6 +1691,7 @@ function wire() {
   $("#book-file").addEventListener("click", () => chooseBookFile().catch(fail));
   $("#book-doc").addEventListener("change", () => {
     if ($("#book-doc").value) { books.file = null; $("#book-file-name").textContent = ""; }
+    updateBookFormat();
   });
   $("#book-start").addEventListener("click", startBook);
   $("#look-task").addEventListener("change", () => {

@@ -19,6 +19,9 @@
                               rename NAME NEW|delete NAME|show NAME]
                                           named groups of documents (--collection
                                           NAME limits search and ask to one)
+    python -m iak folder add PATH [--copy] [--no-watch]  a folder's documents, in a
+                                          collection named after it (also list,
+                                          scan [ID], watch ID, unwatch ID, remove ID)
     python -m iak export ANALYSIS [-o F]  an analysis (summary, comparison...) as Markdown
     python -m iak translate ID --to en    translate a document page by page (kept),
                                           or --text "..." / --file F.txt; --out FILE
@@ -130,6 +133,16 @@ def main(argv: list[str] | None = None) -> int:
                    choices=("list", "show", "create", "add", "remove", "rename", "delete"))
     p.add_argument("name", nargs="?", help="collection name")
     p.add_argument("args", nargs="*", help="document ids (add, remove) or the new name (rename)")
+    p = sub.add_parser("folder")
+    p.add_argument("action", nargs="?", default="list",
+                   choices=("list", "add", "scan", "watch", "unwatch", "remove"))
+    p.add_argument("target", nargs="?", help="folder path (add) or id")
+    p.add_argument("--copy", action="store_true",
+                   help="copy the files into the library (default: only referenced)")
+    p.add_argument("--no-recursive", action="store_true", help="not the subfolders")
+    p.add_argument("--no-watch", action="store_true",
+                   help="import once; the application will not watch the folder")
+    p.add_argument("--name", help="collection name (default: the folder's name)")
     p = sub.add_parser("export")
     p.add_argument("analysis", type=int, help="analysis id (see analyses)")
     p.add_argument("-o", "--out", type=Path, help="file to write (default: printed)")
@@ -155,6 +168,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--glossary", type=Path, help="text file of 'term = translation' lines")
     p.add_argument("--limit", type=int, default=0, help="trial: only the first N units")
     p.add_argument("--fresh", action="store_true", help="forget earlier results")
+    p.add_argument("--format", default="auto",
+                   choices=("auto", "pdf", "epub", "html", "docx", "rtf", "md", "txt"),
+                   help="for a PDF, scan, TXT or Markdown book (default: as the original); "
+                        "EPUB, HTML and DOCX books keep their format")
     p.add_argument("-o", "--out", type=Path, help="copy the translated book here")
     p = sub.add_parser("serve")
     p.add_argument("--port", type=int, default=int(os.environ.get("IAK_PORT", "0")),
@@ -291,6 +308,61 @@ def main(argv: list[str] | None = None) -> int:
                 return [collection.by_name(lib.con, n)["id"] for n in names] if names else None
             except KeyError as exc:
                 raise SystemExit(str(exc).strip("'"))
+
+        if args.cmd == "folder":
+            from . import folders
+
+            def report(res):
+                if not res["available"]:
+                    _out(f"  folder not found on this computer: {res['path']}")
+                    return
+                _out(f"  {res['found']} file(s): {res['imported']} imported, "
+                     f"{res['duplicates']} already in the library, {res['unchanged']} unchanged, "
+                     f"{res['changed']} changed, {res['errors']} error(s)"
+                     + (f", {res['waiting']} still being written" if res["waiting"] else "")
+                     + (f", {res['gone']} gone" if res["gone"] else ""))
+                for m in res["messages"]:
+                    _out(f"    {m}")
+
+            def progress(i, n):
+                print(f"\r  {i}/{n}", end="", file=sys.stderr, flush=True)
+            try:
+                if args.action == "list":
+                    for f in folders.all_(lib.con):
+                        state = ("watched" if f["watch"] else "imported once") + \
+                            ("" if f["available"] else ", not found here")
+                        _out(f"#{f['id']:<4} {f['full_path']}  -> collection {f['collection']} "
+                             f"({f['files']} files, {state})")
+                    return 0
+                if not args.target:
+                    _out("give the folder (add) or its id")
+                    return 1
+                if args.action == "add":
+                    f = folders.add(lib, args.target, args.copy, not args.no_recursive,
+                                    not args.no_watch, args.name)
+                    _out(f"folder #{f['id']} followed, collection {f['collection']}")
+                    res = folders.scan(lib, f["id"], progress)
+                    print(file=sys.stderr)
+                    report(res)
+                elif args.action == "scan":
+                    res = folders.scan(lib, int(args.target), progress)
+                    print(file=sys.stderr)
+                    report(res)
+                elif args.action in ("watch", "unwatch"):
+                    folders.update(lib, int(args.target), watch=args.action == "watch")
+                    _out(f"folder #{args.target}: {'watched' if args.action == 'watch' else 'no longer watched'}")
+                    return 0
+                elif args.action == "remove":
+                    folders.remove(lib, int(args.target))
+                    _out(f"folder #{args.target} no longer followed (its documents stay)")
+                    return 0
+            except (folders.FolderError, KeyError, ValueError) as exc:
+                _out(str(exc).strip("'"))
+                return 1
+            emb = embedder()
+            if emb and embed.pending(lib.con):
+                lib.embed_pending(emb)
+            return 0
 
         if args.cmd == "collection":
             from . import collection
@@ -532,7 +604,13 @@ def main(argv: list[str] | None = None) -> int:
                 src = info["doc_language"]
             info.pop("doc_language", None)
             glossary = args.glossary.read_text(encoding="utf-8-sig") if args.glossary else ""
+            try:
+                book.output_format(info["kind"], args.format)
+            except book.BookError as exc:
+                _out(str(exc))
+                return 1
             job = book.prepare(lib.folder, {**info, "src": src, "tgt": args.to,
+                                            "format": args.format,
                                             "passes": args.passes, "glossary": glossary,
                                             "limit": args.limit, "fresh": args.fresh})
             job.echo = _out

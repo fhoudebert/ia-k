@@ -13,7 +13,7 @@
 | PDF, EPUB, images | PyMuPDF 1.x (2.0 pulls onnxruntime and more) |
 | DOCX | python-docx |
 | EPUB and HTML rewriting | Beautiful Soup 4 on lxml (books) |
-| Storage | SQLite: documents, units, passages, FTS5, vectors as float32 BLOBs searched with numpy, analyses, translations, collections, settings |
+| Storage | SQLite: documents, units, passages, FTS5, vectors as float32 BLOBs searched with numpy, analyses, translations, collections, folders, settings |
 
 At start the application finds the IA-K folder from its own location (or
 `IAK_ROOT`; an AppImage counts from the `.AppImage` file), launches
@@ -27,9 +27,9 @@ Repository layout:
 
 ```
 app/                 interface: index.html, main.js, i18n.js (fr, en), style.css
-backend/iak/         engine: db, extract, ocr, chunk, library, collection, search, embed,
-                     answer, analyze, transcription, translate, book, export, servers, api,
-                     __main__ (command line)
+backend/iak/         engine: db, extract, ocr, chunk, library, collection, folders, search, embed,
+                     answer, analyze, transcription, translate, book, bookformats,
+                     export, servers, api, __main__ (command line)
 backend/tests/       pytest, on generated documents and fake model servers
 src-tauri/           Rust: backend.rs (engine process, library folder), lib.rs
 config/              servers.example.toml

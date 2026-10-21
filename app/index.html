@@ -38,6 +38,7 @@
     <main id="view-library" class="view">
       <div class="toolbar">
         <button class="primary" id="import-btn" data-i18n="lib.import"></button>
+        <button id="folder-btn" data-i18n="folder.import"></button>
         <label class="check"><input type="checkbox" id="import-reference">
           <span data-i18n="lib.reference"></span></label>
         <span class="muted" data-i18n="lib.drop"></span>
@@ -45,6 +46,25 @@
         <input id="compare-question" data-i18n-placeholder="compare.question" hidden>
         <button id="compare-btn" data-i18n="lib.compare" hidden></button>
       </div>
+      <form id="folder-form" class="panel folder-form" hidden>
+        <div class="row"><strong data-i18n="folder.follow"></strong>
+          <span id="folder-path" class="muted"></span></div>
+        <div class="row">
+          <label class="check"><span data-i18n="folder.collection"></span>
+            <input name="name" maxlength="80" autocomplete="off"></label>
+          <label class="check"><input type="checkbox" name="recursive" checked>
+            <span data-i18n="folder.recursive"></span></label>
+          <label class="check"><input type="checkbox" name="watch" checked>
+            <span data-i18n="folder.watch"></span></label>
+          <label class="check"><input type="checkbox" name="copy">
+            <span data-i18n="folder.copy"></span></label>
+        </div>
+        <p class="muted" data-i18n="folder.note"></p>
+        <div class="row">
+          <button class="primary" data-i18n="folder.add"></button>
+          <button type="button" class="link" id="folder-cancel" data-i18n="folder.cancel"></button>
+        </div>
+      </form>
       <div class="collections">
         <div id="coll-chips" class="coll-chips"></div>
         <form id="coll-new" class="coll-new" hidden>
@@ -59,6 +79,7 @@
           <button class="link danger" id="coll-delete" data-i18n="coll.delete"></button>
         </span>
       </div>
+      <ul id="folders" class="folders" hidden></ul>
       <div id="coll-selection" class="coll-selection" hidden>
         <span id="coll-selected"></span>
         <select id="coll-target"></select>
@@ -198,6 +219,17 @@
                 <option value="1" data-i18n="book.passes1"></option>
                 <option value="2" data-i18n="book.passes2" selected></option>
                 <option value="3" data-i18n="book.passes3"></option>
+              </select></label>
+            <label class="check" id="book-format-box"><span data-i18n="book.format"></span>
+              <select id="book-format">
+                <option value="auto" data-i18n="book.fmt_auto"></option>
+                <option value="pdf">PDF</option>
+                <option value="epub">EPUB</option>
+                <option value="html">HTML</option>
+                <option value="docx">Word (DOCX)</option>
+                <option value="rtf">RTF</option>
+                <option value="md">Markdown</option>
+                <option value="txt" data-i18n="book.fmt_txt"></option>
               </select></label>
             <label class="check"><input type="checkbox" id="book-trial">
               <span data-i18n="book.trial"></span></label>

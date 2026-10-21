@@ -101,6 +101,18 @@ document's state, pages, OCR pages and passages; the *Jobs* panel shows
 imports and analyses in progress. From the list you can open, summarise or
 delete a document, and compare the documents you tick.
 
+**Folders.** *Import a folder…* (or drop a folder on the window) brings in
+all the documents of a folder and its subfolders, in a collection named
+after it. By default the files are only referenced: they stay where they
+are, IA-K keeps their text, pages and analyses. A *watched* folder is looked
+at every minute while IA-K runs: files added or changed there are imported
+by themselves (a changed file replaces its document, unless you corrected
+it). A file deleted from the folder leaves its document in the library. A
+folder on the key that holds IA-K is found again on another computer,
+whatever its drive letter; one that is not on this computer is simply
+skipped. *Look now*, *Stop watching* and *Stop following* are in the list of
+folders.
+
 **Collections.** Group documents by subject, project or source: tick
 documents, *+ New collection* (or *Add to the collection* for an existing
 one). A document can be in several collections; the chips above the list
@@ -162,11 +174,14 @@ the viewer, *Translate the page* does it for the page shown. Translation uses
 TranslateGemma when its server runs, and otherwise the chat model.
 
 *Book* translates a whole book and keeps its layout: an EPUB comes back as
-an EPUB with its italics, notes, links and table of contents; a PDF as
-Markdown (headings found from the font sizes, running heads and page numbers
-removed, paragraphs joined across pages; pages read by OCR in the library
-are taken from there); DOCX, HTML, text and Markdown files in their own
-format. Choose a library document or a file, the languages and the quality
+an EPUB with its italics, notes, links and table of contents; DOCX and HTML
+files in their own format. A PDF (headings found from the font sizes,
+running heads and page numbers removed, paragraphs joined across pages;
+pages read by OCR in the library are taken from there) comes back as a PDF
+laid out on A5 pages, the size of an e-reader, or, as you choose, as EPUB,
+HTML, Word, RTF, Markdown or text; so do scans, text and Markdown files. A
+finished translation can be saved again in another of these formats, without
+translating anything again. Choose a library document or a file, the languages and the quality
 (1 pass, 2 with a revision, 3 with a final proofreading), and optionally a
 glossary (`term = translation` per line). Paragraphs are sent in groups so
 the model keeps the context. Everything translated is saved at once: *Pause*,
@@ -246,9 +261,16 @@ Done:
 
 13. Collections (named groups of documents) to limit search and questions
 
+14. Folders: a whole folder referenced (or copied) as a collection named
+    after it; watched folders, whose new or changed files are imported by
+    themselves
+
 Next:
 
-14. **Watched folders**: documents added to a folder imported by themselves.
+15. **Documents in full text**: in an EPUB or a PDF made of images of text,
+    replace those images by their text (OCR or vision model), leaving the
+    illustrations, to get a light, searchable document an e-reader can
+    reflow.
 
 Later:
 

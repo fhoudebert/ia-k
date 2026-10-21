@@ -20,7 +20,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE documents (
@@ -143,6 +143,29 @@ CREATE TABLE collection_docs (
     PRIMARY KEY (collection_id, doc_id)
 );
 CREATE INDEX collection_docs_doc ON collection_docs(doc_id);
+
+-- schema 7: folders followed by the library (watched or imported once)
+CREATE TABLE folders (
+    id            INTEGER PRIMARY KEY,
+    path          TEXT NOT NULL UNIQUE,  -- absolute, or relative to the IA-K folder when on its drive
+    collection_id INTEGER REFERENCES collections(id) ON DELETE SET NULL,
+    copy          INTEGER NOT NULL DEFAULT 0,   -- 1: files copied into the library, 0: referenced
+    recursive     INTEGER NOT NULL DEFAULT 1,
+    watch         INTEGER NOT NULL DEFAULT 1,   -- new files imported by themselves
+    created_at    REAL NOT NULL,
+    last_scan     REAL,
+    last_result   TEXT NOT NULL DEFAULT '{}'    -- JSON: counts of the last scan
+);
+CREATE TABLE folder_files (
+    folder_id     INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    rel_path      TEXT NOT NULL,         -- with "/" separators
+    size          INTEGER NOT NULL,
+    mtime         REAL NOT NULL,
+    doc_id        INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+    status        TEXT NOT NULL,         -- imported, duplicate, error
+    PRIMARY KEY (folder_id, rel_path)
+);
+CREATE INDEX folder_files_doc ON folder_files(doc_id);
 """
 
 # upgrades from each older schema version to the next
@@ -205,6 +228,30 @@ CREATE TABLE collection_docs (
     PRIMARY KEY (collection_id, doc_id)
 );
 CREATE INDEX collection_docs_doc ON collection_docs(doc_id);
+""",
+    6: """
+-- schema 7: folders followed by the library (watched or imported once)
+CREATE TABLE folders (
+    id            INTEGER PRIMARY KEY,
+    path          TEXT NOT NULL UNIQUE,  -- absolute, or relative to the IA-K folder when on its drive
+    collection_id INTEGER REFERENCES collections(id) ON DELETE SET NULL,
+    copy          INTEGER NOT NULL DEFAULT 0,   -- 1: files copied into the library, 0: referenced
+    recursive     INTEGER NOT NULL DEFAULT 1,
+    watch         INTEGER NOT NULL DEFAULT 1,   -- new files imported by themselves
+    created_at    REAL NOT NULL,
+    last_scan     REAL,
+    last_result   TEXT NOT NULL DEFAULT '{}'    -- JSON: counts of the last scan
+);
+CREATE TABLE folder_files (
+    folder_id     INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    rel_path      TEXT NOT NULL,         -- with "/" separators
+    size          INTEGER NOT NULL,
+    mtime         REAL NOT NULL,
+    doc_id        INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+    status        TEXT NOT NULL,         -- imported, duplicate, error
+    PRIMARY KEY (folder_id, rel_path)
+);
+CREATE INDEX folder_files_doc ON folder_files(doc_id);
 """,
 }
 

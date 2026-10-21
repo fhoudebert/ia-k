@@ -22,6 +22,8 @@ interface uses.
 ./iak.sh search "atlas relieur"                   # hybrid search
 ./iak.sh search "..." --mode kw|sem|hybrid --doc 3 --kind pdf --collection "Archives"
 ./iak.sh collection create "Archives" 3 7         # also: list, show, add, remove, rename, delete
+./iak.sh folder add ~/Documents/Archives          # its documents, in a collection "Archives"
+./iak.sh folder scan 1                            # also: list, watch, unwatch, remove; --copy
 ./iak.sh ask "Où l'atlas a-t-il été envoyé ?"     # sourced answer
 ./iak.sh edit 42 corrected.txt                    # replace the text of unit 42 (OCR correction)
 ./iak.sh reindex 3 --extract                      # extract and OCR again
@@ -39,6 +41,7 @@ interface uses.
 ./iak.sh translate --text "Bonjour" --from fr --to de   # or --file text.txt
 ./iak.sh book candide.epub --to en [--passes 1|2|3] [--glossary g.txt] [--limit 3] [-o out.epub]
 ./iak.sh book --doc 3 --to en                     # a library document; resumable
+./iak.sh book scan.pdf --to fr --format epub       # pdf (default for a PDF), epub, html, docx, rtf, md, txt
 ./iak.sh delete 3                                 # database backed up first
 ./iak.sh serve                                    # local API (below)
 ```
@@ -140,6 +143,32 @@ comparison, the agreement of a page reading. Names and passages are escaped
 so that they cannot become Markdown markup; files are written through a
 temporary file.
 
+## Folders
+
+`iak/folders.py`, tables `folders` and `folder_files` (schema 7).
+
+- **Following a folder.** Its documents (subfolders included, unless
+  `recursive` is off) are imported, referenced by default or copied, into a
+  collection named after the folder (an existing collection of that name is
+  used). Hidden files, Office temporary files (`~$…`), partial downloads,
+  AppleDouble files (`._…`) and system folders (`$RECYCLE.BIN`, `__MACOSX`…)
+  are left out.
+- **Scans.** Each file is known by its relative path, size and date: a scan
+  imports only what is new or changed. A file changed in the last 5 seconds
+  is left for the next scan (still being written). A changed file comes in as
+  a new document; the old one is deleted (database backed up first) when it
+  came from this file and has no correction by hand. A deleted file leaves
+  its document; the folder forgets it.
+- **Watching.** While the engine runs, a thread looks at the watched folders
+  every `IAK_WATCH_SECONDS` (60; 0 turns it off): a cheap fingerprint (number
+  of files, total size, latest date) decides whether a scan job is queued.
+  Scans are jobs like imports; their vectors are computed after them.
+- **Paths.** A folder on the drive or key that holds IA-K is stored relative
+  to the IA-K folder, so the key's folders are found again under another
+  drive letter or mount point; a referenced document whose recorded path is
+  gone is looked for through its folder. A folder absent from this computer
+  is skipped.
+
 ## Reading pages again
 
 `iak/transcription.py`, for PDF pages and images.
@@ -202,8 +231,16 @@ temporary file.
   numbers, with paragraphs joined across pages and hyphenation removed; for a
   library PDF, pages read by OCR or corrected are taken from the library. An
   image or a document whose original is gone is translated from the
-  library's text, as Markdown; so is an EPUB, DOCX or HTML whose text was
-  corrected in IA-K.
+  library's text; so is an EPUB, DOCX or HTML whose text was corrected in
+  IA-K.
+- **Formats.** EPUB, HTML and DOCX books are written back in their format,
+  layout kept. Books read as a flat text (PDF, library text, TXT, Markdown)
+  are written by `iak/bookformats.py` as PDF (the default for a PDF: A5
+  pages laid out by MuPDF from HTML, fonts embedded for Latin, Greek,
+  Cyrillic, Hebrew and CJK scripts, page numbers; Arabic is not shaped well),
+  EPUB 3 (chapters at the headings, navigation and NCX), HTML, DOCX, RTF,
+  Markdown or text. `render` writes a translated book again in another
+  format from its cache, without the model.
 - **Segments and units.** Each paragraph, heading, list item or cell is a
   segment; consecutive segments are sent together, as
   `<seg n="1">…</seg>` (up to 2,500 characters, less with a small context),
@@ -259,7 +296,7 @@ The interface talks to the engine through an HTTP API:
 | `GET /api/documents/<id>/units[?boxes=1]` | pages or sections with their text |
 | `GET /api/documents/<id>/original` | the original file |
 | `DELETE /api/documents/<id>` | remove (database backed up first) |
-| `POST /api/import` `{"paths": [...], "reference": false}` | job |
+| `POST /api/import` `{"paths": [...], "reference": false}` | job; a folder among the paths is followed (not watched) |
 | `POST /api/documents/<id>/reindex` `{"extract": true}` | job |
 | `GET /api/units/<id>`, `GET /api/units/<id>/image?max=1600` | text and word boxes; page as PNG |
 | `PUT /api/units/<id>/text` `{"text": "..."}` | OCR correction, reindexed |
@@ -267,6 +304,8 @@ The interface talks to the engine through an HTTP API:
 | `GET /api/search?q=&mode=auto\|hybrid\|sem\|kw&n=&doc=&kind=&collection=` | passages with citations |
 | `POST /api/ask` `{"question", "doc_ids", "kinds", "collections", "history"}` | sourced answer |
 | `GET /api/collections`, `POST /api/collections` `{"name", "doc_ids"}` | collections with their counts; create one |
+| `GET /api/folders`, `POST /api/folders` `{"path", "copy", "recursive", "watch", "name"}` | followed folders; follow one (its first scan is a job) |
+| `PUT /api/folders/<id>` `{"watch", "copy", "recursive"}`, `POST /api/folders/<id>/scan`, `DELETE /api/folders/<id>` | settings; scan now (job); stop following |
 | `GET`, `PUT` `{"name"}`, `DELETE /api/collections/<id>` | one collection: its documents, rename, delete |
 | `POST /api/collections/<id>/documents` `{"add": [ids], "remove": [ids]}` | put documents in it or take them out |
 | `POST /api/ask/stream` (same body) | server-sent events: `sources`, `token`…, `done` or `error` |

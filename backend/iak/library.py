@@ -175,7 +175,15 @@ class Library:
             raise KeyError(f"no document {doc_id}")
         if row["stored_path"]:
             return self.folder / row["stored_path"]
-        return Path(row["source_path"])
+        source = Path(row["source_path"])
+        if not source.exists():
+            # referenced from a followed folder: maybe under another drive
+            # letter or mount point on this computer
+            from . import folders
+            moved = folders.original_for(self.con, doc_id)
+            if moved is not None:
+                return moved
+        return source
 
     # ------------------------------------------------------------------ delete
 

@@ -57,8 +57,29 @@ DEFAULT_MAX_CHARS = 2500
 MAX_SEGS_PER_UNIT = 30
 FORMATS = {".epub": "epub", ".pdf": "pdf", ".txt": "txt", ".md": "md", ".markdown": "md",
            ".html": "html", ".htm": "html", ".xhtml": "html", ".docx": "docx"}
-OUTPUT_EXT = {"epub": ".epub", "pdf": ".md", "units": ".md", "txt": ".txt", "md": ".md",
-              "html": ".html", "docx": ".docx"}
+# books read as a flat text can be written in any of bookformats.FORMATS; the
+# others (EPUB, HTML, DOCX) come back in their own format, layout kept
+FLAT = ("pdf", "units", "txt", "md")
+DEFAULT_FORMAT = {"pdf": "pdf", "units": "pdf", "txt": "txt", "md": "md",
+                  "epub": "epub", "html": "html", "docx": "docx"}
+
+
+def output_format(kind: str, fmt: str | None) -> str:
+    """The format a book of this kind is written in ("auto": as the original)."""
+    from . import bookformats
+    if not fmt or fmt == "auto":
+        return DEFAULT_FORMAT[kind]
+    if kind in FLAT and fmt in bookformats.FORMATS:
+        return fmt
+    if fmt == DEFAULT_FORMAT[kind]:
+        return fmt
+    raise BookError(f"a {kind} book is translated into {DEFAULT_FORMAT[kind]} only, "
+                    "to keep its layout")
+
+
+def formats_for(kind: str) -> list[str]:
+    from . import bookformats
+    return list(bookformats.FORMATS) if kind in FLAT else [DEFAULT_FORMAT[kind]]
 
 
 class BookError(RuntimeError):
@@ -1085,15 +1106,45 @@ def _group_markdown_lists(paras: list[Para]) -> list[str]:
 
 
 class FlatBook:
-    """PDF -> Markdown, Markdown -> Markdown, TXT -> TXT."""
+    """A book read as a flat text (PDF, scan, TXT, Markdown), written in any
+    of bookformats.FORMATS (by default PDF for a PDF, the same for the
+    others)."""
 
-    def __init__(self, kind: str, paras: list[Para], name: str, max_chars: int) -> None:
+    def __init__(self, kind: str, paras: list[Para], name: str, max_chars: int,
+                 tgt: str = "") -> None:
         self.kind = kind
         self.paras = paras
+        self.title = Path(name).stem
+        self.tgt = tgt
         segs = [p.segment() for p in paras if p.kind != "code" and _LETTER.search(p.text)]
         self.chapters = [(name, group_units(segs, max_chars))]
 
-    def write(self, out: Path) -> None:
+    def blocks(self) -> list[tuple[str, str]]:
+        out = []
+        for p in self.paras:
+            text = p.out if p.out is not None else p.text
+            prefix = p.prefix.strip()
+            if p.kind == "code":
+                out.append(("code", text))
+            elif p.kind in ("h1", "h2"):
+                out.append((p.kind, text))
+            elif prefix.startswith("#"):
+                out.append(("h1" if prefix == "#" else "h2", text))
+            elif prefix.startswith(">"):
+                out.append(("quote", text))
+            elif prefix:
+                out.append(("li", text))
+            else:
+                out.append(("p", text))
+        return out
+
+    def write(self, out: Path, fmt: str | None = None) -> None:
+        fmt = fmt or DEFAULT_FORMAT[self.kind]
+        if fmt not in ("md", "txt") or (fmt == "md" and self.kind != "md") \
+                or (fmt == "txt" and self.kind != "txt"):
+            from . import bookformats
+            bookformats.write(self.blocks(), fmt, self.title, self.tgt, out)
+            return
         if self.kind == "md":
             lines = _group_markdown_lists(self.paras)
         else:
@@ -1164,13 +1215,20 @@ def open_book(path: Path | None, kind: str, tgt: str, max_chars: int,
         return DocxBook(path, max_chars)
     if kind in ("pdf", "units"):
         return FlatBook(kind, pdf_paragraphs(path if kind == "pdf" else None, page_texts,
-                                             n_pages), name, max_chars)
+                                             n_pages), name, max_chars, tgt)
     text = path.read_text(encoding="utf-8-sig", errors="replace")
     if kind == "md":
-        return FlatBook("md", markdown_paragraphs(text), name, max_chars)
+        return FlatBook("md", markdown_paragraphs(text), name, max_chars, tgt)
     paras = [Para("p", re.sub(r"\s+", " ", p).strip())
              for p in re.split(r"\n\s*\n", text) if p.strip()]
-    return FlatBook("txt", paras, name, max_chars)
+    return FlatBook("txt", paras, name, max_chars, tgt)
+
+
+def write_book(book, out: Path, fmt: str) -> None:
+    if isinstance(book, FlatBook):
+        book.write(out, fmt)
+    else:
+        book.write(out)
 
 
 def book_sample(book, limit: int = 6000) -> str:
@@ -1276,6 +1334,7 @@ class Job:
         d["output_ready"] = bool(self.output and self.output.exists()
                                  and self.data.get("status") == "done")
         d["partial_ready"] = bool(self.partial and self.partial.exists())
+        d["formats"] = formats_for(self.data["kind"]) if self.data.get("kind") else []
         return d
 
 
@@ -1339,7 +1398,8 @@ def run_job(job: Job, translator: translate.Translator, should_pause) -> str:
             f"language")
     stem = Path(d.get("name") or "book").stem
     trial = ".trial" if limit and limit < full_units else ""
-    out_name = f"{stem}.{tgt}{trial}{OUTPUT_EXT[kind]}"
+    fmt = output_format(kind, d.get("format"))
+    out_name = f"{stem}.{tgt}{trial}.{fmt}"
     job.save(src=src, src_detected=d.get("src") in (None, "", "auto"), mode=client.fmt,
              model=translator.model, n_ctx=client.n_ctx, block_chars=max_chars,
              units=len(plan), done_units=already, chars=total,
@@ -1377,8 +1437,8 @@ def run_job(job: Job, translator: translate.Translator, should_pause) -> str:
         partial = None
         if i_done:
             try:
-                partial = job.folder / f"{stem}.{tgt}.partial{OUTPUT_EXT[kind]}"
-                book.write(partial)
+                partial = job.folder / f"{stem}.{tgt}.partial.{fmt}"
+                write_book(book, partial, fmt)
             except Exception as exc:  # noqa: BLE001 - the pause must not fail
                 log(f"  (partial book not written: {exc})")
                 partial = None
@@ -1396,14 +1456,14 @@ def run_job(job: Job, translator: translate.Translator, should_pause) -> str:
         raise
 
     cache.close()
-    book.write(job.folder / out_name)
+    write_book(book, job.folder / out_name, fmt)
     if job.partial and job.partial.exists():
         try:
             job.partial.unlink()
         except OSError:
             pass
     elapsed = time.monotonic() - t0
-    job.save(status="done", output=out_name, partial="", done_units=len(plan),
+    job.save(status="done", output=out_name, out_format=fmt, partial="", done_units=len(plan),
              done_chars=total, pct=100, eta=None, elapsed=int(elapsed),
              work_seconds=before + int(elapsed),
              stats=stats.as_dict(), finished=time.time())
@@ -1436,6 +1496,35 @@ def prepare(library: Path, settings: dict) -> Job:
     job.save(**settings, created=job.data.get("created") or time.time(), status="queued",
              error="")
     return job
+
+
+def render(job: Job, fmt: str, out: Path) -> Path:
+    """Write the translated (or partly translated) book again in another
+    format, from what is in its cache: no model is called."""
+    d = job.data
+    kind = d["kind"]
+    fmt = output_format(kind, fmt)
+    source = Path(d["source"]) if d.get("source") else None
+    if source is not None and not source.is_file():
+        raise BookError(f"the book is no longer there: {source}")
+    page_texts = {int(k): v for k, v in (d.get("page_texts") or {}).items()}
+    book = open_book(source, kind, d["tgt"], int(d.get("block_chars") or DEFAULT_MAX_CHARS),
+                     page_texts, d.get("pages", 0), d.get("name", ""))
+    cache = Cache(job.folder / "cache.jsonl")
+    try:
+        engine = Engine(None, cache, d.get("src") or "", d["tgt"], int(d.get("passes") or 2),
+                        [], Stats(), lambda m: None)
+        tr = Translator(engine, int(d.get("block_chars") or DEFAULT_MAX_CHARS))
+        for _, units in book.chapters:
+            for unit in units:
+                for seg in unit:
+                    final = tr.final_of(seg)
+                    if final is not None:
+                        tr._apply_final(seg, final)
+    finally:
+        cache.close()
+    write_book(book, out, fmt)
+    return out
 
 
 class Books:

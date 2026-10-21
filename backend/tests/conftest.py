@@ -10,6 +10,12 @@ import pytest
 pymupdf = pytest.importorskip("pymupdf")
 
 HAS_TESSERACT = shutil.which("tesseract") is not None
+
+
+@pytest.fixture(autouse=True)
+def _no_watcher(monkeypatch):
+    """No background folder watcher in the tests (they call watch_once)."""
+    monkeypatch.setenv("IAK_WATCH_SECONDS", "0")
 needs_tesseract = pytest.mark.skipif(not HAS_TESSERACT, reason="tesseract not installed")
 
 PAGES = [
