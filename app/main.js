@@ -26,6 +26,10 @@ const state = {
   jobs: [],
   waiters: new Map(),          // job id -> resolve
   history: [],                 // [{question, answer}] of the current conversation
+  turns: [],                   // the same answers with their sources, for export
+  collections: [],             // [{id, name, n_docs}]
+  collection: null,            // id of the collection shown in the library, or null
+  folders: [],                 // followed folders
   seenJobs: new Set(),         // finished jobs already taken into account
   started: false,              // first jobs poll done
   imageUrl: null,
@@ -163,7 +167,7 @@ async function pollJobs() {
     // the library changes with these jobs, whoever started them
     if (finished && !state.seenJobs.has(job.id)) {
       state.seenJobs.add(job.id);
-      if (state.started && ["import", "reindex", "embed"].includes(job.kind)) libraryChanged = true;
+      if (state.started && ["import", "reindex", "embed", "scan"].includes(job.kind)) libraryChanged = true;
     }
   }
   state.started = true;
@@ -195,7 +199,12 @@ function renderJobs() {
     if (j.status === "done" && j.kind === "import" && j.result) {
       const c = { imported: 0, duplicate: 0, error: 0 };
       j.result.files.forEach((f) => { c[f.status] = (c[f.status] || 0) + 1; });
+      (j.result.folders || []).forEach((f) => {
+        c.imported += f.imported; c.duplicate += f.duplicates; c.error += f.errors; });
       li.append(el("span", { class: "muted" }, t("import.result", c)));
+    }
+    if (j.status === "done" && j.kind === "scan" && j.result) {
+      li.append(el("span", { class: "muted" }, scanSummary(j.result)));
     }
     ul.append(li);
   }
@@ -204,7 +213,13 @@ function renderJobs() {
 // ------------------------------------------------------------------ library
 
 async function loadLibrary() {
-  state.documents = await get("/api/documents");
+  [state.documents, state.collections, state.folders] = await Promise.all([
+    get("/api/documents"), get("/api/collections"), get("/api/folders")]);
+  renderFolders();
+  if (state.collection && !state.collections.some((c) => c.id === state.collection)) {
+    state.collection = null;
+  }
+  renderCollections();
   renderLibrary();
   renderFilters();
   renderTranslateDocs();
@@ -213,6 +228,14 @@ async function loadLibrary() {
 
 /** Type and document lists of the search and question filters. */
 function renderFilters() {
+  for (const id of ["#search-coll", "#ask-coll"]) {
+    const sel = $(id);
+    const keep = sel.value;
+    sel.replaceChildren(el("option", { value: "" }, t("filter.all_colls")),
+      ...state.collections.map((c) => el("option", { value: String(c.id) }, c.name)));
+    sel.value = state.collections.some((c) => String(c.id) === keep) ? keep : "";
+    sel.hidden = !state.collections.length;
+  }
   const kinds = [...new Set(state.documents.map((d) => d.kind))].sort();
   for (const id of ["#search-kind", "#ask-kind"]) {
     const sel = $(id);
@@ -234,15 +257,130 @@ function renderFilters() {
 function filterOf(prefix) {
   const kind = $(`#${prefix}-kind`).value;
   const doc = $(`#${prefix}-doc`).value;
+  const coll = $(`#${prefix}-coll`).value;
   return { kinds: kind ? [kind] : null, doc_ids: doc ? [Number(doc)] : null,
-           label: [kind && kindLabel(kind), doc && $(`#${prefix}-doc`).selectedOptions[0].text]
+           collections: coll ? [Number(coll)] : null,
+           label: [coll && $(`#${prefix}-coll`).selectedOptions[0].text, kind && kindLabel(kind),
+                   doc && $(`#${prefix}-doc`).selectedOptions[0].text]
              .filter(Boolean).join(", ") };
 }
 
+// ------------------------------------------------------------------ collections
+
+function renderCollections() {
+  const chip = (id, label, n) => el("button", {
+    class: `coll-chip${state.collection === id ? " active" : ""}`,
+    onclick: () => { state.collection = id; renderCollections(); renderLibrary(); } },
+    label, el("span", { class: "n" }, String(n)));
+  $("#coll-chips").replaceChildren(chip(null, t("coll.all"), state.documents.length),
+    ...state.collections.map((c) => chip(c.id, c.name, c.n_docs)));
+  $("#coll-tools").hidden = !state.collection;
+  const target = $("#coll-target");
+  const keep = target.value;
+  target.replaceChildren(...state.collections.map((c) =>
+    el("option", { value: String(c.id) }, c.name)));
+  if (state.collections.some((c) => String(c.id) === keep)) target.value = keep;
+  else if (state.collection) target.value = String(state.collection);
+  updateSelection();
+}
+
+function currentCollection() {
+  return state.collections.find((c) => c.id === state.collection) || null;
+}
+
+/** The tools for the documents ticked in the list. */
+function updateSelection() {
+  const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
+  $("#coll-selection").hidden = !ids.length;
+  $("#coll-selected").textContent = t("coll.selected", { n: ids.length });
+  const hasColls = state.collections.length > 0;
+  $("#coll-target").hidden = $("#coll-add").hidden = !hasColls;
+  const cur = currentCollection();
+  $("#coll-remove").hidden = !cur;
+  if (cur) $("#coll-remove").textContent = t("coll.remove", { name: cur.name });
+  if (!hasColls) $("#coll-selected").textContent += ` — ${t("coll.none_yet")}`;
+}
+
+async function changeMembers(collectionId, add, remove) {
+  const r = await post(`/api/collections/${collectionId}/documents`, { add, remove });
+  const name = (state.collections.find((c) => c.id === collectionId) || {}).name || "";
+  toast(add.length ? t("coll.added", { n: r.added, name }) : t("coll.removed", { n: r.removed, name }));
+  state.selected.clear();
+  await loadLibrary();
+}
+
+async function createCollection(ev) {
+  ev.preventDefault();
+  const f = $("#coll-new");
+  const name = f.name.value.trim();
+  if (!name) { f.name.focus(); return; }
+  const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
+  try {
+    const c = await post("/api/collections", { name, doc_ids: ids });
+    f.hidden = true;
+    $("#coll-new-btn").hidden = false;
+    f.name.value = "";
+    state.selected.clear();
+    state.collection = c.id;
+    toast(t("coll.created", { name: c.name, n: c.doc_ids.length }));
+    await loadLibrary();
+  } catch (e) { fail(e); }
+}
+
+async function renameCollection() {
+  const cur = currentCollection();
+  if (!cur) return;
+  const f = $("#coll-new");
+  f.hidden = false;
+  $("#coll-new-btn").hidden = true;
+  f.name.value = cur.name;
+  f.dataset.rename = String(cur.id);
+  f.querySelector("button.primary").textContent = t("coll.rename_ok");
+  f.name.focus();
+  f.name.select();
+}
+
+async function submitCollectionForm(ev) {
+  const f = $("#coll-new");
+  if (!f.dataset.rename) return createCollection(ev);
+  ev.preventDefault();
+  try {
+    await request("PUT", `/api/collections/${f.dataset.rename}`, { name: f.name.value.trim() });
+    closeCollectionForm();
+    await loadLibrary();
+  } catch (e) { fail(e); }
+}
+
+function closeCollectionForm() {
+  const f = $("#coll-new");
+  f.hidden = true;
+  delete f.dataset.rename;
+  f.querySelector("button.primary").textContent = t("coll.create");
+  $("#coll-new-btn").hidden = false;
+}
+
+async function deleteCollection() {
+  const cur = currentCollection();
+  if (!cur) return;
+  const msg = t("coll.delete_confirm", { name: cur.name });
+  const ok = TAURI && TAURI.dialog.ask ? await TAURI.dialog.ask(msg, { kind: "warning" })
+                                       : window.confirm(msg);
+  if (!ok) return;
+  try {
+    await request("DELETE", `/api/collections/${cur.id}`);
+    state.collection = null;
+    await loadLibrary();
+  } catch (e) { fail(e); }
+}
+
 function renderLibrary() {
-  const docs = state.documents;
+  const docs = state.collection
+    ? state.documents.filter((d) => (d.collections || []).includes(state.collection))
+    : state.documents;
   $("#library-empty").hidden = docs.length > 0;
+  $("#library-empty").textContent = state.collection ? t("coll.empty") : t("lib.empty");
   $("#library-table").hidden = docs.length === 0;
+  const names = Object.fromEntries(state.collections.map((c) => [c.id, c.name]));
   const tbody = $("#library-rows");
   tbody.replaceChildren();
   for (const d of [...docs].reverse()) {
@@ -253,13 +391,16 @@ function renderLibrary() {
     box.addEventListener("change", () => {
       if (box.checked) state.selected.add(d.id); else state.selected.delete(d.id);
       updateCompare();
+      updateSelection();
     });
     const stateCell = el("td", { class: d.status === "error" ? "state-error" : "" },
       t(`lib.state.${d.status}`));
     if (d.error) stateCell.title = d.error;
     tbody.append(el("tr", {},
       el("td", {}, box),
-      el("td", { class: "name", onclick: () => openDoc(d.id) }, d.name),
+      el("td", { class: "name", onclick: () => openDoc(d.id) }, d.name,
+        ...(d.collections || []).filter((c) => names[c] && c !== state.collection)
+          .map((c) => el("span", { class: "coll-tag" }, names[c]))),
       el("td", {}, kindLabel(d.kind)),
       el("td", {}, added),
       stateCell,
@@ -288,6 +429,96 @@ async function chooseFiles() {
       "bmp", "webp", "docx", "txt", "md", "markdown", "html", "htm", "xhtml", "epub"] }],
   });
   if (picked) importPaths(Array.isArray(picked) ? picked : [picked]);
+}
+
+// ------------------------------------------------------------------ folders
+
+function scanSummary(r) {
+  if (!r.available) return t("folder.absent");
+  const parts = [t("folder.scan_found", { n: r.found })];
+  if (r.imported) parts.push(t("folder.scan_new", { n: r.imported }));
+  if (r.changed) parts.push(t("folder.scan_changed", { n: r.changed }));
+  if (r.errors) parts.push(t("folder.scan_errors", { n: r.errors }));
+  if (r.waiting) parts.push(t("folder.scan_waiting", { n: r.waiting }));
+  if (r.gone) parts.push(t("folder.scan_gone", { n: r.gone }));
+  return parts.join(" · ");
+}
+
+function renderFolders() {
+  const ul = $("#folders");
+  ul.hidden = !state.folders.length;
+  ul.replaceChildren(...state.folders.map((f) => {
+    const when = f.last_scan ? new Date(f.last_scan * 1000).toLocaleString(getLang(), {
+      dateStyle: "short", timeStyle: "short" }) : "—";
+    const status = !f.available ? el("span", { class: "badge warn" }, t("folder.absent"))
+      : el("span", { class: f.watch ? "badge ok" : "badge" }, t(f.watch ? "folder.watched" : "folder.once"));
+    const coll = state.collections.find((c) => c.name === f.collection);
+    return el("li", {},
+      el("button", { class: "link coll-link", title: t("folder.show"), onclick: () => {
+        if (coll) { state.collection = coll.id; renderCollections(); renderLibrary(); }
+      } }, f.collection || "—"),
+      el("span", { class: "path", title: f.full_path }, f.full_path),
+      status,
+      el("span", { class: "muted" }, t("folder.files", { n: f.files, when })),
+      el("span", { class: "spacer" }),
+      f.available ? el("button", { class: "link", onclick: () => scanFolder(f).catch(fail) },
+        t("folder.scan")) : null,
+      el("button", { class: "link", onclick: () => request("PUT", `/api/folders/${f.id}`,
+        { watch: !f.watch }).then(loadLibrary, fail) },
+        t(f.watch ? "folder.unwatch" : "folder.rewatch")),
+      el("button", { class: "link danger", onclick: () => unfollow(f).catch(fail) },
+        t("folder.remove")));
+  }));
+}
+
+async function chooseFolder() {
+  if (!TAURI || !TAURI.dialog) { toast(t("tr.export_desktop"), true); return; }
+  const path = await TAURI.dialog.open({ directory: true, multiple: false });
+  if (path) openFolderForm(Array.isArray(path) ? path[0] : path);
+}
+
+function openFolderForm(path) {
+  const f = $("#folder-form");
+  f.dataset.path = path;
+  $("#folder-path").textContent = path;
+  f.name.value = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  f.copy.checked = false;
+  f.hidden = false;
+  f.name.focus();
+}
+
+async function followFolder(ev) {
+  ev.preventDefault();
+  const f = $("#folder-form");
+  try {
+    const r = await post("/api/folders", { path: f.dataset.path, name: f.name.value.trim(),
+      recursive: f.recursive.checked, watch: f.watch.checked, copy: f.copy.checked });
+    f.hidden = true;
+    toast(t("folder.added", { name: r.collection }));
+    await loadLibrary();
+    const done = await waitJob(r.job);
+    if (done.status === "error") fail(done.error);
+    else toast(`${r.collection} : ${scanSummary(done.result)}`);
+    const c = state.collections.find((x) => x.name === r.collection);
+    if (c) { state.collection = c.id; renderCollections(); renderLibrary(); }
+  } catch (e) { fail(e); }
+}
+
+async function scanFolder(f) {
+  const { job } = await post(`/api/folders/${f.id}/scan`);
+  toast(t("folder.scanning", { name: f.collection }));
+  const done = await waitJob(job);
+  if (done.status === "error") fail(done.error);
+  else toast(`${f.collection} : ${scanSummary(done.result)}`);
+}
+
+async function unfollow(f) {
+  const msg = t("folder.remove_confirm", { path: f.full_path, name: f.collection });
+  const ok = TAURI && TAURI.dialog.ask ? await TAURI.dialog.ask(msg, { kind: "warning" })
+                                       : window.confirm(msg);
+  if (!ok) return;
+  await request("DELETE", `/api/folders/${f.id}`);
+  await loadLibrary();
 }
 
 async function importPaths(paths) {
@@ -319,7 +550,9 @@ async function removeDoc(d) {
   } catch (e) { fail(e); }
 }
 
-function showResult(title, text) {
+function showResult(title, text, analysisId = null) {
+  state.resultAnalysis = analysisId;
+  $("#result-copy").hidden = $("#result-export").hidden = !analysisId;
   $("#result-title").textContent = title;
   $("#result-body").replaceChildren(markdown(text));
   $("#result-panel").hidden = false;
@@ -332,7 +565,7 @@ async function summarize(docId, name, refresh = false) {
     const done = await waitJob(job);
     if (done.status === "error") { fail(done.error); return; }
     if (state.view === "viewer" && state.doc && state.doc.id === docId) await loadAnalyses();
-    else showResult(`${t("lib.summary")} — ${name}`, done.result.text);
+    else showResult(`${t("analysis.summary")} — ${name}`, done.result.text, done.result.analysis);
   } catch (e) { fail(e); }
 }
 
@@ -345,8 +578,53 @@ async function compareSelected() {
     const done = await waitJob(job);
     if (done.status === "error") { fail(done.error); return; }
     const names = ids.map((id, i) => `D${i + 1} ${(state.documents.find((d) => d.id === id) || {}).name || id}`);
-    showResult(`${t("lib.compare")} — ${names.join(", ")}`, done.result.text);
+    showResult(`${t("lib.compare")} — ${names.join(", ")}`, done.result.text, done.result.analysis);
   } catch (e) { fail(e); }
+}
+
+// ------------------------------------------------------------------ exports
+
+/** Copy the Markdown an export call returns. */
+async function copyMarkdown(promise) {
+  try {
+    const r = await promise;
+    await navigator.clipboard.writeText(r.markdown);
+    toast(t("export.copied"));
+  } catch (e) { fail(e); }
+}
+
+/** Ask where to save, then let `write(path)` produce the file. */
+async function saveMarkdown(name, write) {
+  if (!TAURI) { toast(t("tr.export_desktop"), true); return; }
+  const path = await TAURI.dialog.save({ defaultPath: name,
+                                         filters: [{ name: "Markdown", extensions: ["md"] }] });
+  if (!path) return;
+  try {
+    const r = await write(path);
+    toast(t("export.saved", { path: r.path }));
+  } catch (e) { fail(e); }
+}
+
+async function exportAnalysis(id) {
+  const lang = getLang();
+  const r = await get(`/api/analyses/${id}/markdown?lang=${lang}`);
+  await saveMarkdown(r.name, (path) => post(`/api/analyses/${id}/export`, { path, lang }));
+}
+
+function analysisExportButtons(id) {
+  return el("span", { class: "export-links" },
+    el("button", { class: "link inline", onclick: () =>
+      copyMarkdown(get(`/api/analyses/${id}/markdown?lang=${getLang()}`)) }, t("export.copy")),
+    el("button", { class: "link inline", onclick: () => exportAnalysis(id).catch(fail) },
+      t("export.save")));
+}
+
+async function exportConversation() {
+  if (!state.turns.length) return;
+  const lang = getLang();
+  const r = await post("/api/export/conversation", { turns: state.turns, lang });
+  await saveMarkdown(r.name, (path) =>
+    post("/api/export/conversation", { turns: state.turns, lang, path }));
 }
 
 // ------------------------------------------------------------------ viewer
@@ -364,6 +642,8 @@ async function openDoc(docId, unitId = null, passageId = null) {
     $("#analyse-box").hidden = !hasPages;
     $("#viewer-reread").hidden = !hasPages;
     $("#reread-panel").hidden = true;
+    $("#viewer-fulltext").hidden = !(hasPages || doc.kind === "epub");
+    $("#fulltext-panel").hidden = true;
     show("viewer");
     await selectUnit(unitId || (units[0] && units[0].id), passageId);
     await loadAnalyses();
@@ -462,7 +742,7 @@ async function loadAnalyses() {
     const unit = state.units.find((u) => u.id === a.unit_id);
     const when = new Date(a.created_at * 1000).toLocaleString(getLang(), {
       dateStyle: "short", timeStyle: "short" });
-    const what = a.task === "summary" ? t("lib.summary")
+    const what = a.task === "summary" ? t("analysis.summary")
       : (t(`viewer.task.${a.task}`) + (a.question ? ` : ${a.question}` : ""));
     const reading = a.task === "transcribe" || a.task === "correct";
     const meta = [what, unit ? unit.label : null, a.model || null, when];
@@ -470,7 +750,8 @@ async function loadAnalyses() {
       meta.push(t("reading.score", { pct: Math.round(a.score * 100) }));
     }
     const item = el("div", { class: reading ? "analysis reading" : "analysis" },
-      el("div", { class: "meta" }, meta.filter(Boolean).join(" · ")));
+      el("div", { class: "meta" }, meta.filter(Boolean).join(" · "), " · ",
+         analysisExportButtons(a.id)));
     if (reading) {
       item.append(el("div", { class: "text" }, a.text));
       if (a.sources && a.sources.truncated) item.append(el("p", { class: "badge warn" }, t("reading.truncated")));
@@ -536,6 +817,75 @@ async function restoreUnit() {
   } catch (e) { fail(e); }
 }
 
+// documents in full text
+
+function sizeLabel(n) {
+  return n >= 1e6
+    ? `${(n / 1e6).toLocaleString(getLang(), { maximumFractionDigits: 1 })} ${t("ft.mb")}`
+    : `${Math.max(1, Math.round(n / 1e3))} ${t("ft.kb")}`;
+}
+
+async function openFulltext() {
+  const f = $("#fulltext-panel");
+  if (!f.hidden) { f.hidden = true; return; }
+  const epub = state.doc.kind === "epub";
+  f.format.hidden = epub;
+  f.method.hidden = !epub;
+  $("#fulltext-note").textContent = t(epub ? "ft.note_epub" : "ft.note_pdf");
+  $("#fulltext-files").replaceChildren();          // not the previous document's
+  f.hidden = false;
+  await loadFulltextFiles();
+}
+
+async function loadFulltextFiles() {
+  if (!state.doc) return;
+  const docId = state.doc.id;
+  const files = await get(`/api/documents/${docId}/fulltext`);
+  $("#fulltext-files").replaceChildren(...files.map((x) => el("li", {},
+    el("strong", {}, x.name), el("span", { class: "muted" }, sizeLabel(x.size)),
+    el("button", { type: "button", class: "link", onclick: () => saveFulltext(docId, x).catch(fail) }, t("book.save")),
+    el("button", { type: "button", class: "link", onclick: async () => {
+      const { job } = await post(`/api/documents/${docId}/fulltext/import`, { name: x.name });
+      toast(t("book.importing"));
+      const done = await waitJob(job);
+      if (done.status === "error") fail(done.error); else toast(t("ft.imported"));
+    } }, t("book.import")),
+    el("button", { type: "button", class: "link danger", onclick: async () => {
+      await request("DELETE", `/api/documents/${docId}/fulltext?name=${encodeURIComponent(x.name)}`);
+      await loadFulltextFiles();
+    } }, t("book.delete")))));
+}
+
+async function saveFulltext(docId, x) {
+  if (!TAURI) { toast(t("tr.export_desktop"), true); return; }
+  const path = await TAURI.dialog.save({ defaultPath: x.name,
+    filters: [{ name: x.format.toUpperCase(), extensions: [x.format] }] });
+  if (!path) return;
+  const r = await post(`/api/documents/${docId}/fulltext/save`, { name: x.name, path });
+  toast(t("export.saved", { path: r.path }));
+}
+
+async function makeFulltext(ev) {
+  ev.preventDefault();
+  if (!state.doc) return;
+  const f = $("#fulltext-panel");
+  const docId = state.doc.id;
+  const button = f.querySelector("button.primary");
+  button.disabled = true;
+  try {
+    const { job } = await post(`/api/documents/${docId}/fulltext`, {
+      format: f.format.value, method: f.method.value, illustrations: f.illustrations.checked });
+    toast(t("ft.running"));
+    const done = await waitJob(job);
+    if (done.status === "error") { fail(done.error); return; }
+    const r = done.result;
+    toast(t("ft.done", { file: r.file, before: sizeLabel(r.size_before), after: sizeLabel(r.size_after),
+                         n: r.illustrations }));
+    if (state.doc && state.doc.id === docId) await loadFulltextFiles();
+  } catch (e) { fail(e); }
+  finally { button.disabled = false; }
+}
+
 async function startReread(ev) {
   ev.preventDefault();
   if (!state.doc) return;
@@ -597,6 +947,7 @@ async function runSearch(ev) {
   const mode = $("#search-mode").value;
   const f = filterOf("search");
   let url = `/api/search?q=${encodeURIComponent(q)}&mode=${mode}&n=30`;
+  if (f.collections) url += `&collection=${f.collections[0]}`;
   if (f.kinds) url += `&kind=${encodeURIComponent(f.kinds[0])}`;
   if (f.doc_ids) url += `&doc=${f.doc_ids[0]}`;
   try {
@@ -639,14 +990,18 @@ async function runAsk(ev) {
   };
   try {
     const body = { question, history: state.history.slice(-3),
-                   doc_ids: f.doc_ids, kinds: f.kinds };
+                   doc_ids: f.doc_ids, kinds: f.kinds, collections: f.collections };
     await streamAsk(body, {
       sources: (d) => { live.textContent = t("ask.found", { n: d.sent.length }); },
       token: (d) => { text += d.text; if (!frame) frame = requestAnimationFrame(paint); },
       done: (d) => {
         if (frame) cancelAnimationFrame(frame);
-        live.replaceWith(answerMessage(d));
+        const turn = { question, text: d.text, status: d.status, scope: f.label,
+                       sources: d.sources };
+        live.replaceWith(answerMessage(d, turn));
         state.history.push({ question, answer: d.status === "no_answer" ? "" : d.text });
+        state.turns.push(turn);
+        $("#chat-export").hidden = false;
       },
       error: (d) => { throw new Error(d.error); },
     });
@@ -703,7 +1058,7 @@ async function streamAsk(body, handlers) {
   if (!finished) throw new Error("the answer was interrupted");
 }
 
-function answerMessage(res) {
+function answerMessage(res, turn = null) {
   const msg = el("div", { class: "msg bot" });
   if (res.status === "no_answer") {
     msg.append(el("p", {}, t("ask.no_answer")));
@@ -728,8 +1083,14 @@ function answerMessage(res) {
     }
   }
   const modeName = t(`search.mode.${res.search}`).toLowerCase();
-  msg.append(el("div", { class: "meta" },
-    t("ask.meta", { n: res.sent.length, mode: modeName, s: res.seconds })));
+  const meta = el("div", { class: "meta" },
+    t("ask.meta", { n: res.sent.length, mode: modeName, s: res.seconds }));
+  if (turn) {
+    meta.append(" · ", el("button", { class: "link inline", onclick: () =>
+      copyMarkdown(post("/api/export/conversation", { turns: [turn], single: true, lang: getLang() }))
+    }, t("export.copy_answer")));
+  }
+  msg.append(meta);
   return msg;
 }
 
@@ -972,6 +1333,7 @@ function duration(sec) {
 function renderBookDocs() {
   const sel = $("#book-doc");
   if (!sel) return;
+  setTimeout(updateBookFormat);
   const keep = sel.value;
   const docs = [...state.documents].sort((a, b) => a.name.localeCompare(b.name, getLang()));
   sel.replaceChildren(el("option", { value: "" }, t("book.choose_doc")),
@@ -987,6 +1349,19 @@ async function chooseBookFile() {
   books.file = path;
   $("#book-doc").value = "";
   $("#book-file-name").textContent = path.split(/[\\/]/).pop();
+  updateBookFormat();
+}
+
+/** EPUB, HTML and DOCX books keep their layout, so their format: the
+ * choice is for books read as a flat text (PDF, scans, TXT, Markdown). */
+function updateBookFormat() {
+  const doc = state.documents.find((d) => String(d.id) === $("#book-doc").value);
+  const kind = doc ? doc.kind : (books.file || "").split(".").pop().toLowerCase();
+  const fixed = ["epub", "html", "htm", "xhtml", "docx"].includes(kind);
+  $("#book-format-box").hidden = fixed;
+  const auto = $("#book-format").options[0];
+  auto.textContent = t("book.fmt_auto") + ({ pdf: " (PDF)", image: " (PDF)", txt: " (TXT)",
+                                             md: " (Markdown)" }[kind] || "");
 }
 
 async function startBook() {
@@ -994,7 +1369,8 @@ async function startBook() {
   if (!docId && !books.file) { $("#book-doc").focus(); return; }
   const { src, tgt } = trLanguages();
   const body = { src, tgt, passes: Number($("#book-passes").value),
-                 glossary: $("#book-glossary").value, limit: $("#book-trial").checked ? 3 : 0 };
+                 glossary: $("#book-glossary").value, limit: $("#book-trial").checked ? 3 : 0,
+                 format: $("#book-format-box").hidden ? "auto" : $("#book-format").value };
   if (docId) body.doc_id = Number(docId); else body.path = books.file;
   try {
     await post("/api/books", body);
@@ -1056,6 +1432,7 @@ function renderBooks(logs = {}) {
         await post(`/api/books/${b.id}/resume`); await loadBooks(); }, "primary"));
     }
     if (b.output_ready) {
+      if ((b.formats || []).length > 1) actions.append(formatSelect(b));
       actions.append(bookAction(t("book.save"), () => saveBook(b, false), "primary"),
         bookAction(t("book.import"), async () => {
           const { job } = await post(`/api/books/${b.id}/import`);
@@ -1094,14 +1471,26 @@ function renderBooks(logs = {}) {
   }));
 }
 
+/** Format to save a finished book in (written again from its translations). */
+function formatSelect(b) {
+  books.formats = books.formats || {};
+  const sel = el("select", { class: "book-fmt", title: t("book.format"),
+                             onchange: () => { books.formats[b.id] = sel.value; } },
+    ...b.formats.map((f) => el("option", { value: f },
+      { docx: "Word (DOCX)", md: "Markdown", txt: t("book.fmt_txt") }[f] || f.toUpperCase())));
+  sel.value = books.formats[b.id] || b.out_format || b.formats[0];
+  return sel;
+}
+
 async function saveBook(b, partial) {
   if (!TAURI) { toast(t("tr.export_desktop"), true); return; }
   const name = partial ? b.partial : b.output;
-  const ext = name.split(".").pop();
-  const path = await TAURI.dialog.save({ defaultPath: name,
+  const current = name.split(".").pop();
+  const ext = (!partial && books.formats && books.formats[b.id]) || current;
+  const path = await TAURI.dialog.save({ defaultPath: name.replace(/\.[^.]+$/, `.${ext}`),
                                          filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
   if (!path) return;
-  const r = await post(`/api/books/${b.id}/save`, { path, partial });
+  const r = await post(`/api/books/${b.id}/save`, { path, partial, format: ext });
   toast(t("tr.exported", { path: r.path }));
 }
 
@@ -1269,6 +1658,8 @@ function wire() {
   $("#lang-switch").addEventListener("click", () => {
     setLang(getLang() === "fr" ? "en" : "fr");
     translatePage();
+    renderCollections();
+    renderFolders();
     renderLibrary();
     renderFilters();
     renderJobs();
@@ -1283,10 +1674,36 @@ function wire() {
   });
   $("#import-btn").addEventListener("click", () => chooseFiles().catch(fail));
   $("#compare-btn").addEventListener("click", compareSelected);
+  $("#folder-btn").addEventListener("click", () => chooseFolder().catch(fail));
+  $("#folder-form").addEventListener("submit", followFolder);
+  $("#folder-cancel").addEventListener("click", () => { $("#folder-form").hidden = true; });
+  $("#coll-new-btn").addEventListener("click", () => {
+    $("#coll-new").hidden = false; $("#coll-new-btn").hidden = true; $("#coll-new").name.focus(); });
+  $("#coll-new-cancel").addEventListener("click", closeCollectionForm);
+  $("#coll-new").addEventListener("submit", submitCollectionForm);
+  $("#coll-rename").addEventListener("click", renameCollection);
+  $("#coll-delete").addEventListener("click", deleteCollection);
+  $("#coll-add").addEventListener("click", () => {
+    const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
+    if (ids.length && $("#coll-target").value) {
+      changeMembers(Number($("#coll-target").value), ids, []).catch(fail);
+    }
+  });
+  $("#coll-remove").addEventListener("click", () => {
+    const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
+    if (ids.length && state.collection) changeMembers(state.collection, [], ids).catch(fail);
+  });
   $("#result-close").addEventListener("click", () => { $("#result-panel").hidden = true; });
   $("#search-form").addEventListener("submit", runSearch);
+  $("#chat-export").addEventListener("click", () => exportConversation().catch(fail));
+  $("#result-copy").addEventListener("click", () => state.resultAnalysis &&
+    copyMarkdown(get(`/api/analyses/${state.resultAnalysis}/markdown?lang=${getLang()}`)));
+  $("#result-export").addEventListener("click", () => state.resultAnalysis &&
+    exportAnalysis(state.resultAnalysis).catch(fail));
   $("#chat-new").addEventListener("click", () => {
     state.history = [];
+    state.turns = [];
+    $("#chat-export").hidden = true;
     $("#chat").replaceChildren($("#chat-empty"));
     $("#chat-empty").hidden = false;
     $("#ask-input").focus();
@@ -1300,6 +1717,9 @@ function wire() {
   $("#viewer-reread").addEventListener("click", () => { $("#reread-panel").hidden = !$("#reread-panel").hidden; });
   $("#reread-close").addEventListener("click", () => { $("#reread-panel").hidden = true; });
   $("#reread-panel").addEventListener("submit", startReread);
+  $("#viewer-fulltext").addEventListener("click", () => openFulltext().catch(fail));
+  $("#fulltext-close").addEventListener("click", () => { $("#fulltext-panel").hidden = true; });
+  $("#fulltext-panel").addEventListener("submit", makeFulltext);
   $("#reread-panel").pages.addEventListener("change", () => {
     $("#reread-threshold-box").hidden = $("#reread-panel").pages.value !== "low";
   });
@@ -1345,6 +1765,7 @@ function wire() {
   $("#book-file").addEventListener("click", () => chooseBookFile().catch(fail));
   $("#book-doc").addEventListener("change", () => {
     if ($("#book-doc").value) { books.file = null; $("#book-file-name").textContent = ""; }
+    updateBookFormat();
   });
   $("#book-start").addEventListener("click", startBook);
   $("#look-task").addEventListener("change", () => {

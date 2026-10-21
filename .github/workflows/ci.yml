@@ -1,6 +1,8 @@
-# IA-K: tests and builds on Linux and Windows.
+# IA-K: tests and builds on Linux, Windows and macOS.
 # - backend: Python tests (Tesseract with French data installed for the OCR tests)
-# - desktop: Rust tests, release build, portable folder as a downloadable zip
+# - desktop: Rust tests, release build, portable folder with its Python as a
+#   downloadable zip for each system
+# - key: the three zips merged into one key for all systems (ia-k.zip)
 # Runs on every push and pull request, and by hand (Actions > CI > Run workflow).
 name: CI
 
@@ -23,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
 
@@ -40,6 +42,15 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q tesseract-ocr tesseract-ocr-fra
+
+      - name: Tesseract (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          brew install tesseract
+          tessdata="$(brew --prefix tesseract)/share/tessdata"
+          curl -fsSL -o "$tessdata/fra.traineddata" https://github.com/tesseract-ocr/tessdata_fast/raw/main/fra.traineddata
+          tesseract --list-langs
 
       # Without Tesseract the OCR tests are skipped, the others still run.
       - name: Tesseract (Windows)
@@ -69,9 +80,17 @@ jobs:
           - os: ubuntu-22.04
             portable: linux
             exe: src-tauri/target/release/ia-k
+            build: npx tauri build --no-bundle
           - os: windows-latest
             portable: windows
             exe: src-tauri/target/release/ia-k.exe
+            build: npx tauri build --no-bundle
+          # one application for Apple silicon and Intel Macs, as IA-K.app
+          - os: macos-latest
+            portable: mac
+            exe: src-tauri/target/universal-apple-darwin/release/bundle/macos/IA-K.app
+            build: npx tauri build --target universal-apple-darwin --bundles app
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
     steps:
       - uses: actions/checkout@v7
 
@@ -82,6 +101,8 @@ jobs:
           sudo apt-get install -y -q libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -103,14 +124,47 @@ jobs:
         run: cargo test
 
       - name: Build
-        run: npx tauri build --no-bundle
+        run: ${{ matrix.build }}
+
+      # the Python of the key, with the engine's packages (Apple silicon on macOS)
+      - name: Portable Python (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: ./setup_python.sh
+
+      - name: Portable Python (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: call setup_python.bat
 
       - name: Portable folder
-        run: python scripts/make_portable.py --exe ${{ matrix.exe }} --os ${{ matrix.portable }}
+        run: python scripts/make_portable.py --exe ${{ matrix.exe }} --os ${{ matrix.portable }} --python
 
       - uses: actions/upload-artifact@v7
         with:
           name: ia-k-${{ matrix.portable }}
           path: dist/ia-k-${{ matrix.portable }}.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  key:
+    name: Key for all systems
+    needs: desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ia-k-*
+          path: dist
+          merge-multiple: true
+
+      - name: Merge
+        run: python3 scripts/merge_portable.py dist/ia-k-linux.zip dist/ia-k-mac.zip dist/ia-k-windows.zip -o dist/ia-k.zip
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ia-k
+          path: dist/ia-k.zip
           if-no-files-found: error
           retention-days: 30

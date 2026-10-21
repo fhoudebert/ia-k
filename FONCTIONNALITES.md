@@ -13,8 +13,9 @@ ne part sur Internet.
 - **Portable** : IA-K tient dans un dossier, sur une clé USB ou un disque, et
   fonctionne sous **Windows, Linux et macOS**, y compris depuis la même clé
   exFAT, avec une bibliothèque commune.
-- **Sans installation sur l'ordinateur** : un Python complet est installé sur
-  la clé (`setup_python`), une fois par système.
+- **Sans installation** : on décompresse un seul fichier (`ia-k.zip`, tous
+  systèmes) sur la clé, Python et moteur compris ; rien n'est écrit sur
+  l'ordinateur. Seul un Mac Intel demande une fois `setup_python.sh`.
 - **Modèles locaux** au format GGUF, servis par llama.cpp (`llama-server`) :
   Gemma 4 pour les réponses, EmbeddingGemma pour la recherche par le sens,
   TranslateGemma pour la traduction, Qwen3-VL pour la lecture des pages.
@@ -33,6 +34,15 @@ ne part sur Internet.
 - **OCR** (Tesseract) des pages scannées, avec la confiance de lecture de
   chaque page ; langues réglables (`fra+eng`, `fra+frm` pour le moyen
   français…).
+- **Dossiers** : « Importer un dossier… » (ou déposer un dossier sur la
+  fenêtre) référence tous ses documents, sous-dossiers compris, dans une
+  collection du nom du dossier. Un dossier **surveillé** est examiné chaque
+  minute : les fichiers ajoutés ou modifiés y sont importés tout seuls. Un
+  dossier situé sur la clé est retrouvé d'un ordinateur à l'autre, quelle que
+  soit la lettre du lecteur.
+- **Collections** : des groupes de documents nommés (par sujet, projet,
+  fonds…) ; un document peut appartenir à plusieurs collections, et une
+  collection peut limiter la recherche et les questions.
 - Visionneuse : la page à gauche, son texte à droite, **correction du texte**
   conservée même après une nouvelle extraction.
 - Sauvegarde automatique de la base avant chaque suppression ou mise à jour ;
@@ -40,13 +50,17 @@ ne part sur Internet.
 
 ## Recherche et questions
 
-- **Recherche par mots, par sens ou les deux** : « Qui est Geoffroy Martel ? » trouve « lC'est le fils de Foulques Nerra, il est né en 1005 …' ».
+- **Recherche par mots, par sens ou les deux** : « Qui est Geoffroy Martel ? » trouve « C’est le fils de Foulques Nerra, il est né en 1005 … ».
 - **Réponses sourcées** : chaque affirmation renvoie au document, à la page
   et au passage ; un clic ouvre la page et **surligne le passage**.
 - Réponse écrite en direct ; **questions de suivi** (« et quand l'a-t-il
-  rendu ? ») ; filtres par type ou par document.
+  rendu ? ») ; filtres par collection, par type ou par document.
 - Si les documents ne contiennent pas la réponse, IA-K **le dit** au lieu
   d'inventer.
+- **Export en Markdown** : « Copier en Markdown » sur chaque réponse,
+  « Exporter la conversation… » pour toute la séance ; chaque réponse garde
+  ses renvois [S1] et la liste de ses sources (document, page, extrait du
+  passage).
 
 ## Analyses
 
@@ -55,6 +69,21 @@ ne part sur Internet.
   répondre à une question.
 - **Résumé** d'un document avec renvoi aux pages ; **comparaison** de
   plusieurs documents (points communs, différences, contradictions).
+- Résumés, comparaisons et analyses se **copient ou s'exportent en
+  Markdown** : pages citées, documents comparés (D1, D2…), modèle et date.
+
+## Texte intégral
+
+- « Texte intégral… » transforme un **PDF scanné** (ou une image) en document
+  léger fait de vrai texte, que la liseuse remet en page : le texte de la
+  bibliothèque (OCR, corrections, relectures) remplace les images des pages,
+  les titres sont retrouvés, en-têtes et numéros de page retirés, et les
+  **illustrations** (photos, gravures, cartes) sont découpées et gardées à
+  leur place. En EPUB, PDF A5, HTML, Word, RTF ou Markdown, bien plus léger
+  que le scan (selon les illustrations gardées).
+- Pour un **EPUB fait de pages scannées**, chaque image de texte est lue
+  (Tesseract ou modèle de vision) et remplacée par son texte ; illustrations
+  et couverture restent.
 
 ## Relecture des scans difficiles
 
@@ -78,8 +107,11 @@ ne part sur Internet.
   pages corrigées depuis signalées, export Markdown ou texte (avec
   l'original si souhaité).
 - **Livre entier, mise en forme conservée** : EPUB → EPUB (italiques, notes,
-  liens, table des matières), PDF → Markdown (titres, paragraphes recollés,
-  en-têtes et numéros de page retirés), DOCX, HTML, TXT, Markdown.
+  liens, table des matières), DOCX → DOCX, HTML → HTML. Un PDF (titres,
+  paragraphes recollés, en-têtes et numéros de page retirés) revient en PDF
+  au format A5 des liseuses, ou au choix en EPUB, HTML, Word, RTF, Markdown
+  ou texte ; de même pour les scans, TXT et Markdown. Une traduction finie
+  peut être réenregistrée dans un autre format sans rien retraduire.
   - 1 à 3 passes : traduction, révision bilingue, relecture finale ;
   - glossaire facultatif (« terme = traduction ») ;
   - essai sur les premiers blocs ;

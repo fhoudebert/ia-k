@@ -111,7 +111,15 @@ fn find_python(root: &Path) -> PathBuf {
     let portable = if cfg!(windows) {
         root.join("build").join("python").join("windows").join("python.exe")
     } else if cfg!(target_os = "macos") {
-        root.join("build").join("python").join("mac").join("bin").join("python3.12")
+        // one Python per processor, so that one key serves both kinds of Mac
+        let arch = if cfg!(target_arch = "aarch64") { "mac-aarch64" } else { "mac-x86_64" };
+        let python = root.join("build").join("python").join(arch).join("bin").join("python3.12");
+        if python.is_file() {
+            python
+        } else {
+            // the folder of earlier versions, before setup_python.sh renames it
+            root.join("build").join("python").join("mac").join("bin").join("python3.12")
+        }
     } else {
         root.join("build").join("python").join("linux").join("bin").join("python3.12")
     };

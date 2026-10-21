@@ -220,8 +220,17 @@ def test_pdf_with_ocr_pages(tmp_path, gemma):
     job = book.prepare(tmp_path / "lib", settings_for(
         path, page_texts={"3": "Texte lu par\nl'OCR de la page trois."}))
     assert book.run_job(job, gemma.translator(), lambda: False) == "done"
-    md = job.output.read_text(encoding="utf-8")
-    assert job.output.name == "livre.en.md"
+    # a PDF comes back as a PDF by default
+    assert job.output.name == "livre.en.pdf" and job.data["out_format"] == "pdf"
+    with pymupdf.open(job.output) as out:
+        text = " ".join(p.get_text() for p in out)
+        assert out.metadata["title"] == "livre" and out[0].rect.width < 450   # A5
+    assert "PREMIER CHAPITRE" in text and "OCR DE LA PAGE TROIS" in text
+    # the same translation in Markdown, from the cache: no model call
+    calls = len(gemma.prompts)
+    md_path = book.render(job, "md", tmp_path / "livre.en.md")
+    assert len(gemma.prompts) == calls
+    md = md_path.read_text(encoding="utf-8")
     assert md.startswith("# PREMIER CHAPITRE")
     assert "HISTOIRE DU REGISTRE" not in md and "\n\n3\n" not in md
     assert "TEXTE LU PAR L'OCR DE LA PAGE TROIS." in md
@@ -265,6 +274,46 @@ def test_markdown_txt_docx(tmp_path, gemma):
     assert texts[:2] == ["LE REGISTRE", "UN ATLAS ENDOMMAGÉ."]
     assert out.paragraphs[0].style.name == "Heading 1"
     assert [c.text for c in out.tables[0].rows[0].cells] == ["CELLULE GAUCHE", "CELLULE DROITE"]
+
+
+def test_formats(tmp_path, gemma):
+    import docx as pydocx
+    from iak import bookformats
+    txt = tmp_path / "conte.txt"
+    txt.write_text("Le relieur répare l'atlas.\n\nIl le rend au printemps, { sans } frais.\n",
+                   encoding="utf-8")
+    job = book.prepare(tmp_path / "lib", settings_for(txt, passes=1, format="epub"))
+    assert book.run_job(job, gemma.translator(), lambda: False) == "done"
+    assert job.output.name == "conte.en.epub"
+    with zipfile.ZipFile(job.output) as z:
+        assert z.infolist()[0].filename == "mimetype"
+        assert z.infolist()[0].compress_type == zipfile.ZIP_STORED
+        opf = z.read("OEBPS/content.opf").decode()
+        c1 = z.read("OEBPS/c1.xhtml").decode()
+        assert "<dc:language>en</dc:language>" in opf and "properties=\"nav\"" in opf
+        assert "<p>LE RELIEUR RÉPARE L'ATLAS.</p>" in c1
+    out = {}
+    for fmt in ("html", "docx", "rtf", "txt", "pdf"):
+        out[fmt] = book.render(job, fmt, tmp_path / f"conte.{fmt}")
+    assert "<p>IL LE REND AU PRINTEMPS, { SANS } FRAIS.</p>" in out["html"].read_text("utf-8")
+    assert [p.text for p in pydocx.Document(str(out["docx"])).paragraphs][:1] == [
+        "LE RELIEUR RÉPARE L'ATLAS."]
+    rtf = out["rtf"].read_text("ascii")
+    assert rtf.startswith("{\\rtf1") and "R\\u201?PARE" in rtf and "\\{ SANS \\}" in rtf
+    assert out["txt"].read_text("utf-8").startswith("LE RELIEUR")
+    # EPUB, HTML and DOCX books keep their own format
+    with pytest.raises(book.BookError):
+        book.output_format("epub", "pdf")
+    assert book.output_format("epub", "auto") == "epub"
+    assert book.formats_for("pdf") == list(bookformats.FORMATS)
+    assert book.formats_for("docx") == ["docx"]
+    # chapters cut at the headings
+    blocks = [("h1", "Un"), ("p", "a"), ("h1", "Deux"), ("p", "b"), ("li", "c"), ("li", "d")]
+    bookformats.write_epub(blocks, "Titre", "fr", tmp_path / "t.epub")
+    with zipfile.ZipFile(tmp_path / "t.epub") as z:
+        assert {"OEBPS/c1.xhtml", "OEBPS/c2.xhtml"} <= set(z.namelist())
+        assert "<ul>\n<li>c</li>\n<li>d</li>\n</ul>" in z.read("OEBPS/c2.xhtml").decode()
+        assert ">Deux</a>" in z.read("OEBPS/nav.xhtml").decode()
 
 
 def test_scanned_pdf_without_ocr(tmp_path):
@@ -336,11 +385,22 @@ def test_api_books(tmp_path, txt_file):
         assert s == 200 and "DEUXIÈME PARAGRAPHE SUR LA RELIURE." in out.read_text("utf-8")
         assert call(port, "POST", f"/api/books/{b['id']}/save",
                     {"path": str(out), "partial": True})[0] == 409
+        # the same book saved as a PDF, and as an EPUB
+        assert info["formats"][0] == "pdf" and info["out_format"] == "txt"
+        for fmt, magic in (("pdf", b"%PDF"), ("epub", b"PK")):
+            dest = tmp_path / f"copy.{fmt}"
+            s, _, _ = call(port, "POST", f"/api/books/{b['id']}/save",
+                           {"path": str(dest), "format": fmt})
+            assert s == 200 and dest.read_bytes().startswith(magic)
+        assert call(port, "POST", f"/api/books/{b['id']}/save",
+                    {"path": str(dest), "format": "xls"})[0] == 400
         s, r, _ = call(port, "POST", f"/api/books/{b['id']}/import")
         j = wait(port, r["job"])
         assert j["result"]["files"][0]["name"] == "journal.en.txt"
         # an EPUB file from the disk, paused while it runs, then resumed
         epub = make_epub(tmp_path / "long.epub", chapters=8)
+        assert call(port, "POST", "/api/books", {"path": str(epub), "tgt": "de",
+                                                 "format": "pdf"})[0] == 400
         s, b2, _ = call(port, "POST", "/api/books", {"path": str(epub), "tgt": "de",
                                                      "passes": 2})
         assert s == 202 and b2["src"] == "auto"

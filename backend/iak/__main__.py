@@ -15,6 +15,17 @@
     python -m iak summarize ID            summary of a document, with page labels
     python -m iak compare ID ID...        compare documents (from their summaries)
     python -m iak analyses [ID]           stored analyses
+    python -m iak collection [list|create NAME|add NAME ID...|remove NAME ID...|
+                              rename NAME NEW|delete NAME|show NAME]
+                                          named groups of documents (--collection
+                                          NAME limits search and ask to one)
+    python -m iak folder add PATH [--copy] [--no-watch]  a folder's documents, in a
+                                          collection named after it (also list,
+                                          scan [ID], watch ID, unwatch ID, remove ID)
+    python -m iak fulltext ID|FILE.epub [--format epub|pdf|html|docx|rtf|md] [-o F]
+                                          a scanned document as real text, its
+                                          illustrations kept
+    python -m iak export ANALYSIS [-o F]  an analysis (summary, comparison...) as Markdown
     python -m iak translate ID --to en    translate a document page by page (kept),
                                           or --text "..." / --file F.txt; --out FILE
                                           writes the translated document
@@ -87,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-n", type=int, default=10)
     p.add_argument("--doc", type=int, action="append", help="limit to document ID")
     p.add_argument("--kind", action="append", help="limit to a type (pdf, image...)")
+    p.add_argument("--collection", action="append", help="limit to a collection (name)")
     p.add_argument("--mode", choices=["auto", "hybrid", "sem", "kw"], default="auto")
     p = sub.add_parser("ask")
     p.add_argument("question")
@@ -95,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--mode", choices=["auto", "hybrid", "sem", "kw"], default="auto")
     p.add_argument("--budget", type=int, default=answer.DEFAULT_BUDGET_CHARS,
                    help="characters of passages sent to the model")
+    p.add_argument("--md", type=Path, help="also write the answer and its sources as Markdown")
+    p.add_argument("--collection", action="append", help="limit to a collection (name)")
     p = sub.add_parser("look")
     p.add_argument("unit_id", type=int, help="unit (page) id, see the show command")
     p.add_argument("--task", default="describe",
@@ -117,6 +131,32 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("compare")
     p.add_argument("ids", type=int, nargs="+")
     p.add_argument("--question", default="", help="aspect to focus on")
+    p = sub.add_parser("collection")
+    p.add_argument("action", nargs="?", default="list",
+                   choices=("list", "show", "create", "add", "remove", "rename", "delete"))
+    p.add_argument("name", nargs="?", help="collection name")
+    p.add_argument("args", nargs="*", help="document ids (add, remove) or the new name (rename)")
+    p = sub.add_parser("folder")
+    p.add_argument("action", nargs="?", default="list",
+                   choices=("list", "add", "scan", "watch", "unwatch", "remove"))
+    p.add_argument("target", nargs="?", help="folder path (add) or id")
+    p.add_argument("--copy", action="store_true",
+                   help="copy the files into the library (default: only referenced)")
+    p.add_argument("--no-recursive", action="store_true", help="not the subfolders")
+    p.add_argument("--no-watch", action="store_true",
+                   help="import once; the application will not watch the folder")
+    p.add_argument("--name", help="collection name (default: the folder's name)")
+    p = sub.add_parser("fulltext")
+    p.add_argument("target", help="library document id (PDF, image, EPUB) or an EPUB file")
+    p.add_argument("--format", default="epub", choices=("epub", "pdf", "html", "docx", "rtf", "md"),
+                   help="for a PDF or an image (an EPUB stays EPUB); default epub")
+    p.add_argument("--no-illustrations", action="store_true", help="text only")
+    p.add_argument("--vision", action="store_true",
+                   help="EPUB: read its pictures of text with the vision model, not Tesseract")
+    p.add_argument("-o", "--out", type=Path, help="copy the result here")
+    p = sub.add_parser("export")
+    p.add_argument("analysis", type=int, help="analysis id (see analyses)")
+    p.add_argument("-o", "--out", type=Path, help="file to write (default: printed)")
     p = sub.add_parser("analyses")
     p.add_argument("id", type=int, nargs="?")
     p = sub.add_parser("translate")
@@ -139,6 +179,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--glossary", type=Path, help="text file of 'term = translation' lines")
     p.add_argument("--limit", type=int, default=0, help="trial: only the first N units")
     p.add_argument("--fresh", action="store_true", help="forget earlier results")
+    p.add_argument("--format", default="auto",
+                   choices=("auto", "pdf", "epub", "html", "docx", "rtf", "md", "txt"),
+                   help="for a PDF, scan, TXT or Markdown book (default: as the original); "
+                        "EPUB, HTML and DOCX books keep their format")
     p.add_argument("-o", "--out", type=Path, help="copy the translated book here")
     p = sub.add_parser("serve")
     p.add_argument("--port", type=int, default=int(os.environ.get("IAK_PORT", "0")),
@@ -269,8 +313,147 @@ def main(argv: list[str] | None = None) -> int:
                 _out(u["text"])
             return 0
 
+        def collection_ids(names):
+            from . import collection
+            try:
+                return [collection.by_name(lib.con, n)["id"] for n in names] if names else None
+            except KeyError as exc:
+                raise SystemExit(str(exc).strip("'"))
+
+        if args.cmd == "fulltext":
+            import shutil
+
+            from . import fulltext, ocr, transcription
+            from .book import BookError
+            vision = None
+            if args.vision:
+                client = analyze.vision_client(host, host.api_key, args.vision_server, args.server)
+                vision = lambda png: transcription.transcribe_png(client, png)  # noqa: E731
+
+            def progress(i, n):
+                print(f"\r  {i}/{n}", end="", file=sys.stderr, flush=True)
+            try:
+                if args.target.isdigit():
+                    r = fulltext.convert(lib, int(args.target), args.format,
+                                         not args.no_illustrations,
+                                         "vision" if args.vision else "ocr", vision, progress)
+                    out = fulltext.output_dir(lib, int(args.target)) / r["file"]
+                else:
+                    src = Path(args.target)
+                    out = args.out or src.with_name(src.stem + ".texte.epub")
+                    r = fulltext.epub_document(src, out, args.ocr_langs, args.tesseract,
+                                               not args.no_illustrations, vision, progress)
+            except (fulltext.FullTextError, KeyError, ocr.OcrError, BookError) as exc:
+                _out(f"\n{exc}")
+                return 1
+            print(file=sys.stderr)
+            if args.out and out != args.out:
+                shutil.copyfile(out, args.out)
+                out = args.out
+            parts = [f"{k}: {v}" for k, v in r.items() if k not in ("file", "errors")]
+            _out(f"written: {out}\n  " + ", ".join(parts))
+            for e in r.get("errors", [])[:10]:
+                _out(f"  ! {e}")
+            return 0
+
+        if args.cmd == "folder":
+            from . import folders
+
+            def report(res):
+                if not res["available"]:
+                    _out(f"  folder not found on this computer: {res['path']}")
+                    return
+                _out(f"  {res['found']} file(s): {res['imported']} imported, "
+                     f"{res['duplicates']} already in the library, {res['unchanged']} unchanged, "
+                     f"{res['changed']} changed, {res['errors']} error(s)"
+                     + (f", {res['waiting']} still being written" if res["waiting"] else "")
+                     + (f", {res['gone']} gone" if res["gone"] else ""))
+                for m in res["messages"]:
+                    _out(f"    {m}")
+
+            def progress(i, n):
+                print(f"\r  {i}/{n}", end="", file=sys.stderr, flush=True)
+            try:
+                if args.action == "list":
+                    for f in folders.all_(lib.con):
+                        state = ("watched" if f["watch"] else "imported once") + \
+                            ("" if f["available"] else ", not found here")
+                        _out(f"#{f['id']:<4} {f['full_path']}  -> collection {f['collection']} "
+                             f"({f['files']} files, {state})")
+                    return 0
+                if not args.target:
+                    _out("give the folder (add) or its id")
+                    return 1
+                if args.action == "add":
+                    f = folders.add(lib, args.target, args.copy, not args.no_recursive,
+                                    not args.no_watch, args.name)
+                    _out(f"folder #{f['id']} followed, collection {f['collection']}")
+                    res = folders.scan(lib, f["id"], progress)
+                    print(file=sys.stderr)
+                    report(res)
+                elif args.action == "scan":
+                    res = folders.scan(lib, int(args.target), progress)
+                    print(file=sys.stderr)
+                    report(res)
+                elif args.action in ("watch", "unwatch"):
+                    folders.update(lib, int(args.target), watch=args.action == "watch")
+                    _out(f"folder #{args.target}: {'watched' if args.action == 'watch' else 'no longer watched'}")
+                    return 0
+                elif args.action == "remove":
+                    folders.remove(lib, int(args.target))
+                    _out(f"folder #{args.target} no longer followed (its documents stay)")
+                    return 0
+            except (folders.FolderError, KeyError, ValueError) as exc:
+                _out(str(exc).strip("'"))
+                return 1
+            emb = embedder()
+            if emb and embed.pending(lib.con):
+                lib.embed_pending(emb)
+            return 0
+
+        if args.cmd == "collection":
+            from . import collection
+            try:
+                if args.action == "list":
+                    for c in collection.all_(lib.con):
+                        _out(f"{c['name']}  ({c['n_docs']} document(s))")
+                    return 0
+                if not args.name:
+                    _out("give the collection's name")
+                    return 1
+                if args.action == "create":
+                    c = collection.create(lib.con, args.name)
+                    if args.args:
+                        collection.add(lib.con, c["id"], [int(x) for x in args.args])
+                    _out(f"collection {c['name']} created")
+                    return 0
+                c = collection.by_name(lib.con, args.name)
+                if args.action == "show":
+                    for d in c["doc_ids"]:
+                        row = lib.document(d)
+                        _out(f"#{d:<5} {row['name']}")
+                elif args.action == "add":
+                    n = collection.add(lib.con, c["id"], [int(x) for x in args.args])
+                    _out(f"{n} document(s) added to {c['name']}")
+                elif args.action == "remove":
+                    n = collection.remove(lib.con, c["id"], [int(x) for x in args.args])
+                    _out(f"{n} document(s) removed from {c['name']}")
+                elif args.action == "rename":
+                    if len(args.args) != 1:
+                        _out("give the new name")
+                        return 1
+                    _out(f"renamed: {collection.rename(lib.con, c['id'], args.args[0])['name']}")
+                elif args.action == "delete":
+                    collection.delete(lib.con, c["id"])
+                    _out(f"collection {c['name']} deleted (its documents stay in the library)")
+            except (collection.CollectionError, KeyError, ValueError) as exc:
+                _out(str(exc).strip("'"))
+                return 1
+            return 0
+
         if args.cmd == "search":
-            filters = search.Filters(args.doc, args.kind)
+            filters = search.Filters(args.doc, args.kind,
+                                     collections=collection_ids(args.collection))
             try:
                 hits, used = lib.find(args.query, args.n, filters,
                                       embedder(args.mode in ("sem", "hybrid")), args.mode)
@@ -293,7 +476,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             if not servers.is_local(url):
                 _out(f"note: passages are sent to {url}, outside this computer")
-            filters = search.Filters(args.doc, args.kind)
+            filters = search.Filters(args.doc, args.kind,
+                                     collections=collection_ids(args.collection))
             try:
                 hits, used = lib.find(args.question, 20, filters,
                                       embedder(args.mode in ("sem", "hybrid")), args.mode)
@@ -318,6 +502,25 @@ def main(argv: list[str] | None = None) -> int:
                 for s in res.sources:
                     _out(f"  [{s.ref}] {s.doc_name}, {s.label}")
             _out(f"\n({len(res.sent)} passages sent, {used} search, {dt:.1f} s)")
+            if args.md:
+                from . import export
+                turn = {"question": args.question, "text": res.text, "status": res.status,
+                        "sources": [{"ref": s.ref, "doc_name": s.doc_name, "label": s.label,
+                                     "text": s.text} for s in res.sources]}
+                _out(f"written: {export.write(args.md, export.answer_md(turn, args.lang, 1))}")
+            return 0
+
+        if args.cmd == "export":
+            from . import export
+            try:
+                name, md = export.analysis_md(lib, args.analysis, args.lang)
+            except KeyError as exc:
+                _out(str(exc))
+                return 1
+            if args.out:
+                _out(f"written: {export.write(args.out, md)}")
+            else:
+                print(md, end="")
             return 0
 
         if args.cmd == "reread":
@@ -448,7 +651,13 @@ def main(argv: list[str] | None = None) -> int:
                 src = info["doc_language"]
             info.pop("doc_language", None)
             glossary = args.glossary.read_text(encoding="utf-8-sig") if args.glossary else ""
+            try:
+                book.output_format(info["kind"], args.format)
+            except book.BookError as exc:
+                _out(str(exc))
+                return 1
             job = book.prepare(lib.folder, {**info, "src": src, "tgt": args.to,
+                                            "format": args.format,
                                             "passes": args.passes, "glossary": glossary,
                                             "limit": args.limit, "fresh": args.fresh})
             job.echo = _out

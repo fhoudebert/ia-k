@@ -37,24 +37,29 @@ architecture).
   (tick French), on Linux `sudo apt install tesseract-ocr tesseract-ocr-fra`,
   on macOS `brew install tesseract tesseract-lang` ([Homebrew](https://brew.sh)).
   Without it, documents with real text still work.
-- About 300 MB on the key for each system, plus your documents.
+- About 250 MB on the key for each system (application and its Python),
+  plus your documents.
 
 ## Installing on a key or a disk
 
-1. **Get IA-K.** Download `ia-k-windows.zip`, `ia-k-linux.zip` or
-   `ia-k-mac.zip` (GitHub, *Actions* tab, last successful *CI* run,
-   *Artifacts*), or build it ([DEVELOPERS.md](DEVELOPERS.md)). Unzip it at
-   the root of the key, for instance `E:\ia-k`, `/media/me/KEY/ia-k` or
-   `/Volumes/KEY/ia-k`. The zips can be unzipped in the same folder: the
-   systems then share the library.
-2. **Install its Python** (once per system, needs internet):
-   `setup_python.bat` on Windows, `./setup_python.sh` on Linux and macOS
-   (in the Terminal). It puts a complete Python in `build/python/` without
-   touching the computer; it can be run again safely.
+1. **Get IA-K and unzip it.** Download `ia-k.zip`, the key for all
+   systems, or only `ia-k-windows.zip`, `ia-k-linux.zip` or `ia-k-mac.zip`
+   (GitHub, *Actions* tab, last successful *CI* run, *Artifacts*), or build
+   it ([DEVELOPERS.md](DEVELOPERS.md)). Unzip it at the root of the key, for
+   instance `E:\ia-k`, `/media/me/KEY/ia-k` or `/Volumes/KEY/ia-k`. Each zip
+   holds the application and its engine with their own Python: nothing else
+   to install, nothing written on the computer. Zips of several systems can
+   be unzipped in the same folder: the systems then share the library.
 
    On macOS, IA-K is not signed by an identified developer: before the first
    start, run once in the Terminal `xattr -dr com.apple.quarantine
    /Volumes/KEY/ia-k` (your folder), or right-click `IA-K.app` → *Open*.
+2. **Intel Mac only**: the zip holds the Python of Apple silicon Macs. Run
+   once, in the Terminal, `./setup_python.sh` (needs internet): it adds the
+   Intel one next to it in `build/python/`, so the key then serves both.
+   The same script (`setup_python.bat` on Windows) updates the Python of a
+   key, or installs it in a folder built from the sources; it can be run
+   again safely.
 3. **Say where the model servers are.** With the usual ports (chat 8080,
    meaning 8081, vision 8082, translation 8083) there is nothing to do.
    Otherwise fill in *Settings*, or copy `config/servers.example.toml` to
@@ -82,7 +87,7 @@ The folder then looks like this:
 ia-k/
 ├── ia-k.exe  ia-k  IA-K.app the application (Windows, Linux, macOS)
 ├── backend/                 the engine (Python), started by the application
-├── build/python/            portable Python, one folder per system
+├── build/python/            portable Python, one folder per system (two for Macs)
 ├── config/servers.toml      where the model servers are, per computer
 ├── data/                    your library: database, copies of your files, backups
 ├── server/                  launchers for the model servers, their settings
@@ -101,12 +106,45 @@ document's state, pages, OCR pages and passages; the *Jobs* panel shows
 imports and analyses in progress. From the list you can open, summarise or
 delete a document, and compare the documents you tick.
 
+**Folders.** *Import a folder…* (or drop a folder on the window) brings in
+all the documents of a folder and its subfolders, in a collection named
+after it. By default the files are only referenced: they stay where they
+are, IA-K keeps their text, pages and analyses. A *watched* folder is looked
+at every minute while IA-K runs: files added or changed there are imported
+by themselves (a changed file replaces its document, unless you corrected
+it). A file deleted from the folder leaves its document in the library. A
+folder on the key that holds IA-K is found again on another computer,
+whatever its drive letter; one that is not on this computer is simply
+skipped. *Look now*, *Stop watching* and *Stop following* are in the list of
+folders.
+
+**Collections.** Group documents by subject, project or source: tick
+documents, *+ New collection* (or *Add to the collection* for an existing
+one). A document can be in several collections; the chips above the list
+show one collection at a time, where documents can be removed from it, and
+the collection renamed or deleted (its documents stay in the library). In
+*Search* and *Questions*, a collection limits the passages to its documents,
+alone or with a type or a document.
+
 **Document.** The page on the left, its text on the right. OCR text can be
 corrected and saved; the correction is kept even if the document is read
 again. *Analyse the page* asks the model to describe it, transcribe it,
 explain an error on a screenshot, extract names, dates and amounts, or answer
 a question of yours. When you arrive from a search or a citation, the passage
 is highlighted in yellow on the page.
+
+**Full text.** *Full text…* in the viewer makes, from a scanned PDF (or an
+image, or a PDF with an OCR layer), a light document of real text an e-reader
+can reflow: the library's text (OCR, your corrections, the vision model's
+readings) replaces the pictures of the pages, headings are found from the
+size of the letters, running heads and page numbers go, paragraphs are joined
+across pages, and the illustrations (photographs, engravings, maps) are cut
+out of the pages and kept in place. As EPUB, or PDF on A5 pages, HTML, Word,
+RTF or Markdown, much lighter than the scan (how much depends on the
+illustrations kept).
+For an EPUB made of pictures of scanned pages, each picture of text is read
+(by Tesseract, or the vision model) and replaced by its text; illustrations
+and the cover stay. The result can be saved, or added to the library.
 
 **Reading pages again.** When Tesseract reads a scan badly (old print,
 columns, tables, handwriting), the vision model can do better. In *Analyse
@@ -135,6 +173,14 @@ until *New conversation*. When the documents do not contain the answer, IA-K
 says so instead of inventing one. Questions can be limited to a type or a
 document.
 
+**Exports.** Every answer has *Copy as Markdown*, and *Export the
+conversation…* saves all of it in a Markdown file: each question, its answer
+with its `[S1]` marks, and under it the sources — document, page and the
+passage quoted. Summaries, comparisons and page analyses have *Copy* and
+*Export…* too: a summary lists the pages it cites, a comparison says which
+documents D1, D2… are. Markdown opens in any text editor, Obsidian, Typora,
+or converts to Word or PDF (Pandoc).
+
 **Translation.** *Text*: paste a text, choose the languages (or let IA-K
 detect the source language), *Translate*. *Library document*: choose a
 document, *Translate the document*; it is translated page by page (or
@@ -146,11 +192,14 @@ the viewer, *Translate the page* does it for the page shown. Translation uses
 TranslateGemma when its server runs, and otherwise the chat model.
 
 *Book* translates a whole book and keeps its layout: an EPUB comes back as
-an EPUB with its italics, notes, links and table of contents; a PDF as
-Markdown (headings found from the font sizes, running heads and page numbers
-removed, paragraphs joined across pages; pages read by OCR in the library
-are taken from there); DOCX, HTML, text and Markdown files in their own
-format. Choose a library document or a file, the languages and the quality
+an EPUB with its italics, notes, links and table of contents; DOCX and HTML
+files in their own format. A PDF (headings found from the font sizes,
+running heads and page numbers removed, paragraphs joined across pages;
+pages read by OCR in the library are taken from there) comes back as a PDF
+laid out on A5 pages, the size of an e-reader, or, as you choose, as EPUB,
+HTML, Word, RTF, Markdown or text; so do scans, text and Markdown files. A
+finished translation can be saved again in another of these formats, without
+translating anything again. Choose a library document or a file, the languages and the quality
 (1 pass, 2 with a revision, 3 with a final proofreading), and optionally a
 glossary (`term = translation` per line). Paragraphs are sent in groups so
 the model keeps the context. Everything translated is saved at once: *Pause*,
@@ -181,7 +230,7 @@ Good to know:
 
 | What you see | What to do |
 |---|---|
-| "The IA-K engine could not start" | Run `setup_python` on this system; read `data/iak-backend.log`. |
+| "The IA-K engine could not start" | Read `data/iak-backend.log`; if `build/python/` has no folder for this system (an Intel Mac, a folder built from the sources), run `setup_python` once. |
 | Chat, Meaning or Translation shown in red at the top | The model server is not running or not at that address: start it, check *Settings*. |
 | An error mentioning `ErrorOutOfDeviceMemory` or "graphics memory" | The model server ran out of graphics memory: see [SERVERS.md, Memory](SERVERS.md#memory). |
 | "The documents do not allow an answer" | Nothing relevant was found: rephrase, check the document is indexed, or try *Search* first. |
@@ -225,14 +274,28 @@ Done:
     application for Apple silicon and Intel, `setup_python.sh` for macOS,
     engine tests on macOS in CI
 
+12. Export of answers, conversations, summaries, comparisons and page
+    analyses as Markdown, with their sources
+
+13. Collections (named groups of documents) to limit search and questions
+
+14. Folders: a whole folder referenced (or copied) as a collection named
+    after it; watched folders, whose new or changed files are imported by
+    themselves
+
+15. Documents in full text: the pictures of text of a scanned PDF or EPUB
+    replaced by their text, illustrations kept, as a light EPUB (or PDF,
+    HTML, Word, RTF, Markdown)
+
+16. The engine on the key: each zip holds its Python with the engine's
+    packages (without test suites, caches or Tk), checked in CI by importing
+    the engine with it; `ia-k.zip` merges the three systems into one key.
+    No `setup_python` step, except on an Intel Mac
+
 Next:
 
-12. **Export of answers, summaries and comparisons** (Markdown, with their
-    sources).
+- Tesseract on the key too, for scans on a computer without it.
 
 Later:
 
 - Other launchers by use, as needed.
-- Collections (named groups of documents) to limit search and questions.
-- Watched folders: documents added to a folder imported by themselves.
-- The engine frozen in the application (no `setup_python` step).

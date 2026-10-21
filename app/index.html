@@ -38,12 +38,53 @@
     <main id="view-library" class="view">
       <div class="toolbar">
         <button class="primary" id="import-btn" data-i18n="lib.import"></button>
+        <button id="folder-btn" data-i18n="folder.import"></button>
         <label class="check"><input type="checkbox" id="import-reference">
           <span data-i18n="lib.reference"></span></label>
         <span class="muted" data-i18n="lib.drop"></span>
         <span class="spacer"></span>
         <input id="compare-question" data-i18n-placeholder="compare.question" hidden>
         <button id="compare-btn" data-i18n="lib.compare" hidden></button>
+      </div>
+      <form id="folder-form" class="panel folder-form" hidden>
+        <div class="row"><strong data-i18n="folder.follow"></strong>
+          <span id="folder-path" class="muted"></span></div>
+        <div class="row">
+          <label class="check"><span data-i18n="folder.collection"></span>
+            <input name="name" maxlength="80" autocomplete="off"></label>
+          <label class="check"><input type="checkbox" name="recursive" checked>
+            <span data-i18n="folder.recursive"></span></label>
+          <label class="check"><input type="checkbox" name="watch" checked>
+            <span data-i18n="folder.watch"></span></label>
+          <label class="check"><input type="checkbox" name="copy">
+            <span data-i18n="folder.copy"></span></label>
+        </div>
+        <p class="muted" data-i18n="folder.note"></p>
+        <div class="row">
+          <button class="primary" data-i18n="folder.add"></button>
+          <button type="button" class="link" id="folder-cancel" data-i18n="folder.cancel"></button>
+        </div>
+      </form>
+      <div class="collections">
+        <div id="coll-chips" class="coll-chips"></div>
+        <form id="coll-new" class="coll-new" hidden>
+          <input name="name" data-i18n-placeholder="coll.name" maxlength="80" autocomplete="off">
+          <button class="primary" data-i18n="coll.create"></button>
+          <button type="button" class="link" id="coll-new-cancel">×</button>
+        </form>
+        <button class="link" id="coll-new-btn" data-i18n="coll.new"></button>
+        <span class="spacer"></span>
+        <span id="coll-tools" hidden>
+          <button class="link" id="coll-rename" data-i18n="coll.rename"></button>
+          <button class="link danger" id="coll-delete" data-i18n="coll.delete"></button>
+        </span>
+      </div>
+      <ul id="folders" class="folders" hidden></ul>
+      <div id="coll-selection" class="coll-selection" hidden>
+        <span id="coll-selected"></span>
+        <select id="coll-target"></select>
+        <button id="coll-add" data-i18n="coll.add"></button>
+        <button id="coll-remove" class="link" hidden></button>
       </div>
       <div id="drop-zone" class="drop-zone">
         <p id="library-empty" class="empty" data-i18n="lib.empty" hidden></p>
@@ -64,6 +105,8 @@
       </div>
       <section class="panel" id="result-panel" hidden>
         <div class="panel-head"><h3 id="result-title"></h3>
+          <button class="link" id="result-copy" data-i18n="export.copy"></button>
+          <button class="link" id="result-export" data-i18n="export.save"></button>
           <button class="link close" id="result-close">×</button></div>
         <div id="result-body" class="prose"></div>
       </section>
@@ -86,6 +129,7 @@
         <button class="primary" data-i18n="search.go"></button>
       </form>
       <div class="filters">
+        <select id="search-coll" class="filter-coll"></select>
         <select id="search-kind" class="filter-kind"></select>
         <select id="search-doc" class="filter-doc"></select>
       </div>
@@ -96,9 +140,11 @@
     <!-- questions -->
     <main id="view-ask" class="view" hidden>
       <div class="filters">
+        <select id="ask-coll" class="filter-coll"></select>
         <select id="ask-kind" class="filter-kind"></select>
         <select id="ask-doc" class="filter-doc"></select>
         <span class="spacer"></span>
+        <button class="link" id="chat-export" data-i18n="export.conversation" hidden></button>
         <button class="link" id="chat-new" data-i18n="ask.new"></button>
       </div>
       <div id="chat" class="chat">
@@ -174,6 +220,17 @@
                 <option value="2" data-i18n="book.passes2" selected></option>
                 <option value="3" data-i18n="book.passes3"></option>
               </select></label>
+            <label class="check" id="book-format-box"><span data-i18n="book.format"></span>
+              <select id="book-format">
+                <option value="auto" data-i18n="book.fmt_auto"></option>
+                <option value="pdf">PDF</option>
+                <option value="epub">EPUB</option>
+                <option value="html">HTML</option>
+                <option value="docx">Word (DOCX)</option>
+                <option value="rtf">RTF</option>
+                <option value="md">Markdown</option>
+                <option value="txt" data-i18n="book.fmt_txt"></option>
+              </select></label>
             <label class="check"><input type="checkbox" id="book-trial">
               <span data-i18n="book.trial"></span></label>
             <span class="spacer"></span>
@@ -241,6 +298,7 @@
         <button class="link" id="viewer-back">← <span data-i18n="viewer.back"></span></button>
         <h2 id="viewer-title"></h2>
         <span class="spacer"></span>
+        <button id="viewer-fulltext" data-i18n="ft.button"></button>
         <button id="viewer-reread" data-i18n="viewer.reread"></button>
         <button id="viewer-translate" data-i18n="viewer.translate"></button>
         <button id="viewer-summary" data-i18n="viewer.summary"></button>
@@ -263,6 +321,27 @@
           <span data-i18n="reread.replace"></span></label>
         <button class="primary" data-i18n="reread.start"></button>
         <button type="button" class="link close" id="reread-close">×</button>
+      </form>
+      <form id="fulltext-panel" class="reread fulltext" hidden>
+        <span data-i18n="ft.title"></span>
+        <select name="format">
+          <option value="epub">EPUB</option>
+          <option value="pdf" data-i18n="ft.fmt_pdf"></option>
+          <option value="html">HTML</option>
+          <option value="docx">Word (DOCX)</option>
+          <option value="rtf">RTF</option>
+          <option value="md">Markdown</option>
+        </select>
+        <select name="method">
+          <option value="ocr" data-i18n="ft.method_ocr"></option>
+          <option value="vision" data-i18n="ft.method_vision"></option>
+        </select>
+        <label class="check"><input type="checkbox" name="illustrations" checked>
+          <span data-i18n="ft.illustrations"></span></label>
+        <button class="primary" data-i18n="ft.make"></button>
+        <button type="button" class="link close" id="fulltext-close">×</button>
+        <p class="muted ft-note" id="fulltext-note"></p>
+        <ul id="fulltext-files" class="ft-files"></ul>
       </form>
       <div class="viewer-body">
         <aside class="units">

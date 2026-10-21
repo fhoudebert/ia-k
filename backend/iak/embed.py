@@ -183,12 +183,20 @@ class VectorIndex:
             self._load()
             return int(self._ids.shape[0])
 
-    def search(self, qvec: np.ndarray, k: int = 50) -> list[tuple[int, float]]:
+    def search(self, qvec: np.ndarray, k: int = 50,
+               allow=None) -> list[tuple[int, float]]:
+        """The k passages closest to qvec; `allow`, when given, the passage ids
+        that may be returned (the others are not candidates)."""
         with self._lock:
             self._load()
             mat, ids = self._mat, self._ids
         if mat is None or not len(ids):
             return []
+        if allow is not None:
+            keep = np.isin(ids, np.fromiter(allow, dtype=np.int64))
+            if not keep.any():
+                return []
+            mat, ids = mat[keep], ids[keep]
         scores = mat @ qvec.astype(np.float32)
         k = min(k, scores.shape[0])
         top = np.argpartition(-scores, k - 1)[:k]

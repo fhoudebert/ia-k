@@ -11,7 +11,7 @@ interface uses.
 ## Command line
 
 `iak.bat` on Windows, `./iak.sh` on Linux, at the root of the IA-K folder
-(they use the portable Python installed by `setup_python`):
+(they use the portable Python of the key, in `build/python/`):
 
 ```
 ./iak.sh import ~/docs/*.pdf scans/page12.png     # copied into the library
@@ -20,7 +20,12 @@ interface uses.
 ./iak.sh status                                   # counts, semantic index, servers
 ./iak.sh show 3                                   # pages of document 3 with their text
 ./iak.sh search "atlas relieur"                   # hybrid search
-./iak.sh search "..." --mode kw|sem|hybrid --doc 3 --kind pdf
+./iak.sh search "..." --mode kw|sem|hybrid --doc 3 --kind pdf --collection "Archives"
+./iak.sh collection create "Archives" 3 7         # also: list, show, add, remove, rename, delete
+./iak.sh fulltext 3 --format epub -o livre.epub   # a scanned document as text, illustrations kept
+./iak.sh fulltext scans.epub [--vision]           # an EPUB of scanned pages, its pictures of text read
+./iak.sh folder add ~/Documents/Archives          # its documents, in a collection "Archives"
+./iak.sh folder scan 1                            # also: list, watch, unwatch, remove; --copy
 ./iak.sh ask "Où l'atlas a-t-il été envoyé ?"     # sourced answer
 ./iak.sh edit 42 corrected.txt                    # replace the text of unit 42 (OCR correction)
 ./iak.sh reindex 3 --extract                      # extract and OCR again
@@ -31,11 +36,14 @@ interface uses.
 ./iak.sh summarize 3 [--refresh]                  # summary with [p. N] labels
 ./iak.sh compare 3 7 --question "dates"           # common points, differences
 ./iak.sh analyses 3                               # stored analyses
+./iak.sh export 12 -o resume.md                   # analysis 12 as Markdown
+./iak.sh ask "…" --md reponse.md                  # an answer and its sources as Markdown
 ./iak.sh translate 3 --to en --out doc3.en.md     # document, page by page (kept)
 ./iak.sh translate --unit 42 --to la              # one page
 ./iak.sh translate --text "Bonjour" --from fr --to de   # or --file text.txt
 ./iak.sh book candide.epub --to en [--passes 1|2|3] [--glossary g.txt] [--limit 3] [-o out.epub]
 ./iak.sh book --doc 3 --to en                     # a library document; resumable
+./iak.sh book scan.pdf --to fr --format epub       # pdf (default for a PDF), epub, html, docx, rtf, md, txt
 ./iak.sh delete 3                                 # database backed up first
 ./iak.sh serve                                    # local API (below)
 ```
@@ -85,6 +93,13 @@ suits exFAT keys that may be unplugged.
   `title: <document> | text: …`, queries as `task: search result | query: …`.
 - **Cut-off.** Meaning search always has neighbours: hits under a cosine of
   0.10 or under half the best score are dropped.
+- **Filters.** A collection, a type or a document limit both searches. Meaning
+  search then scores only the passages the filters keep, so a small
+  collection in a big library is searched as well as the whole library.
+- **Collections.** `collections` and `collection_docs` (schema 6): names
+  unique whatever their case; a document can be in several; deleting a
+  collection leaves its documents, deleting a document takes it out of its
+  collections.
 - **One model per index.** The index records its embedding model (file name,
   dimension, vector of a probe sentence); another model is refused until
   `embed --rebuild`, another quantisation of the same model is accepted.
@@ -116,6 +131,75 @@ suits exFAT keys that may be unplugged.
 - `compare` works from the documents' summaries; documents are named D1, D2…
 - Results are stored with their task, language and model, and deleted with
   their document.
+
+## Exports
+
+`iak/export.py` writes Markdown in the interface language. An answer keeps
+its `[S1]` marks and gets a *Sources* list of the passages it cites
+(document, label, the passage cut to 300 characters as a quotation; an
+answer citing nothing is marked as such); a conversation is a
+title, the date and one section per question. An analysis gets its title
+(task, document, page), date and model, its text, and its sources: the
+document and the pages a summary cites, the documents D1, D2… of a
+comparison, the agreement of a page reading. Names and passages are escaped
+so that they cannot become Markdown markup; files are written through a
+temporary file.
+
+## Folders
+
+`iak/folders.py`, tables `folders` and `folder_files` (schema 7).
+
+- **Following a folder.** Its documents (subfolders included, unless
+  `recursive` is off) are imported, referenced by default or copied, into a
+  collection named after the folder (an existing collection of that name is
+  used). Hidden files, Office temporary files (`~$…`), partial downloads,
+  AppleDouble files (`._…`) and system folders (`$RECYCLE.BIN`, `__MACOSX`…)
+  are left out.
+- **Scans.** Each file is known by its relative path, size and date: a scan
+  imports only what is new or changed. A file changed in the last 5 seconds
+  is left for the next scan (still being written). A changed file comes in as
+  a new document; the old one is deleted (database backed up first) when it
+  came from this file and has no correction by hand. A deleted file leaves
+  its document; the folder forgets it.
+- **Watching.** While the engine runs, a thread looks at the watched folders
+  every `IAK_WATCH_SECONDS` (60; 0 turns it off): a cheap fingerprint (number
+  of files, total size, latest date) decides whether a scan job is queued.
+  Scans are jobs like imports; their vectors are computed after them.
+- **Paths.** A folder on the drive or key that holds IA-K is stored relative
+  to the IA-K folder, so the key's folders are found again under another
+  drive letter or mount point; a referenced document whose recorded path is
+  gone is looked for through its folder. A folder absent from this computer
+  is skipped.
+
+## Full text
+
+`iak/fulltext.py`; formats from `iak/bookformats.py` (pictures included).
+
+- **A PDF or an image of the library.** Each page gives text and pictures in
+  reading order. A native page: its text blocks (with their font size) and
+  the images it holds, cut out of the page at 150 dpi. A page read by OCR (or
+  corrected, or read again by the vision model): the library's text as
+  paragraphs, a size for each from its words' boxes, and the illustrations
+  found on the rendered page; a picture covering most of a page is the scan
+  itself and is searched the same way. Then, as for books: headings from the
+  sizes, running heads and page numbers removed, paragraphs joined across
+  pages.
+- **Finding illustrations.** The page is rendered in grey at 100 dpi; the
+  words' rectangles are blanked (except "words" of low confidence or great
+  size: Tesseract reads hatching that way); a grid of cells marks those with
+  enough ink or grey; neighbouring cells make regions; small, thin, sparse
+  regions, a scan's dark border and the whole page are dropped. The rest is
+  cut out with a margin, as JPEG.
+- **An EPUB of pictures.** Every picture of the reading order (not the
+  cover) is read by Tesseract; it is text with at least 12 words read with a
+  mean confidence of 55, covering a tenth of it (or 40 words covering less:
+  a page with a large picture). Its paragraphs (headings from the boxes'
+  heights, running heads and page numbers removed) and the illustrations cut
+  out of it replace the picture's wrapper (`<p>`, `<div>`, `<svg>`); with the
+  vision model, the text is its reading. Pictures no longer used leave the
+  book and its manifest; the new ones join it.
+- **Results.** In `<library>/fulltext/<document>/`, deleted with the
+  document.
 
 ## Reading pages again
 
@@ -179,8 +263,16 @@ suits exFAT keys that may be unplugged.
   numbers, with paragraphs joined across pages and hyphenation removed; for a
   library PDF, pages read by OCR or corrected are taken from the library. An
   image or a document whose original is gone is translated from the
-  library's text, as Markdown; so is an EPUB, DOCX or HTML whose text was
-  corrected in IA-K.
+  library's text; so is an EPUB, DOCX or HTML whose text was corrected in
+  IA-K.
+- **Formats.** EPUB, HTML and DOCX books are written back in their format,
+  layout kept. Books read as a flat text (PDF, library text, TXT, Markdown)
+  are written by `iak/bookformats.py` as PDF (the default for a PDF: A5
+  pages laid out by MuPDF from HTML, fonts embedded for Latin, Greek,
+  Cyrillic, Hebrew and CJK scripts, page numbers; Arabic is not shaped well),
+  EPUB 3 (chapters at the headings, navigation and NCX), HTML, DOCX, RTF,
+  Markdown or text. `render` writes a translated book again in another
+  format from its cache, without the model.
 - **Segments and units.** Each paragraph, heading, list item or cell is a
   segment; consecutive segments are sent together, as
   `<seg n="1">…</seg>` (up to 2,500 characters, less with a small context),
@@ -236,13 +328,20 @@ The interface talks to the engine through an HTTP API:
 | `GET /api/documents/<id>/units[?boxes=1]` | pages or sections with their text |
 | `GET /api/documents/<id>/original` | the original file |
 | `DELETE /api/documents/<id>` | remove (database backed up first) |
-| `POST /api/import` `{"paths": [...], "reference": false}` | job |
+| `POST /api/import` `{"paths": [...], "reference": false}` | job; a folder among the paths is followed (not watched) |
 | `POST /api/documents/<id>/reindex` `{"extract": true}` | job |
 | `GET /api/units/<id>`, `GET /api/units/<id>/image?max=1600` | text and word boxes; page as PNG |
 | `PUT /api/units/<id>/text` `{"text": "..."}` | OCR correction, reindexed |
 | `GET /api/passages/<id>/boxes` | rectangles of a passage's lines on its page |
-| `GET /api/search?q=&mode=auto\|hybrid\|sem\|kw&n=&doc=&kind=` | passages with citations |
-| `POST /api/ask` `{"question", "doc_ids", "kinds", "history"}` | sourced answer |
+| `GET /api/search?q=&mode=auto\|hybrid\|sem\|kw&n=&doc=&kind=&collection=` | passages with citations |
+| `POST /api/ask` `{"question", "doc_ids", "kinds", "collections", "history"}` | sourced answer |
+| `GET /api/collections`, `POST /api/collections` `{"name", "doc_ids"}` | collections with their counts; create one |
+| `GET`, `POST /api/documents/<id>/fulltext` `{"format", "illustrations", "method": "ocr"\|"vision"}` | full-text versions of a document; make one (job) |
+| `POST /api/documents/<id>/fulltext/save` `{"name", "path"}`, `/import` `{"name"}`, `DELETE …/fulltext?name=` | save a copy, add it to the library (job), delete it |
+| `GET /api/folders`, `POST /api/folders` `{"path", "copy", "recursive", "watch", "name"}` | followed folders; follow one (its first scan is a job) |
+| `PUT /api/folders/<id>` `{"watch", "copy", "recursive"}`, `POST /api/folders/<id>/scan`, `DELETE /api/folders/<id>` | settings; scan now (job); stop following |
+| `GET`, `PUT` `{"name"}`, `DELETE /api/collections/<id>` | one collection: its documents, rename, delete |
+| `POST /api/collections/<id>/documents` `{"add": [ids], "remove": [ids]}` | put documents in it or take them out |
 | `POST /api/ask/stream` (same body) | server-sent events: `sources`, `token`…, `done` or `error` |
 | `POST /api/look` `{"unit_id": 42, "task": "error"}` or `"question"` | job |
 | `POST /api/summarize` `{"doc_id": 3}`, `POST /api/compare` `{"doc_ids": [3, 7]}` | jobs |
@@ -251,6 +350,8 @@ The interface talks to the engine through an HTTP API:
 | `GET /api/analyses/<id>/diff`, `POST /api/analyses/<id>/apply` | word differences with the page's text; use a reading as the text |
 | `POST /api/units/<id>/restore` | back to the extracted text |
 | `POST /api/jobs/<id>/cancel` | cancel a queued job, or stop a reading between two pages |
+| `POST /api/export/conversation` `{"turns": [{"question", "text", "status", "sources", "scope"}], "lang", "single", "path"}` | Markdown of an answer or a conversation (returned, or written to `path`) |
+| `GET /api/analyses/<id>/markdown?lang=fr`, `POST /api/analyses/<id>/export` `{"path", "lang"}` | an analysis as Markdown |
 | `GET /api/languages` | languages offered for translation |
 | `POST /api/translate` `{"text", "src": "auto", "tgt": "en"}` | job: translated text, detected language |
 | `POST /api/translate/document` `{"doc_id"` or `"unit_id", "src", "tgt", "refresh"}` | job |

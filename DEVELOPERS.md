@@ -13,7 +13,7 @@
 | PDF, EPUB, images | PyMuPDF 1.x (2.0 pulls onnxruntime and more) |
 | DOCX | python-docx |
 | EPUB and HTML rewriting | Beautiful Soup 4 on lxml (books) |
-| Storage | SQLite: documents, units, passages, FTS5, vectors as float32 BLOBs searched with numpy, analyses, translations, settings |
+| Storage | SQLite: documents, units, passages, FTS5, vectors as float32 BLOBs searched with numpy, analyses, translations, collections, folders, settings |
 
 At start the application finds the IA-K folder from its own location (or
 `IAK_ROOT`; an AppImage counts from the `.AppImage` file), launches
@@ -27,9 +27,9 @@ Repository layout:
 
 ```
 app/                 interface: index.html, main.js, i18n.js (fr, en), style.css
-backend/iak/         engine: db, extract, ocr, chunk, library, search, embed,
-                     answer, analyze, transcription, translate, book, servers, api,
-                     __main__ (command line)
+backend/iak/         engine: db, extract, ocr, chunk, library, collection, folders, search, embed,
+                     answer, analyze, transcription, fulltext, translate, book, bookformats,
+                     export, servers, api, __main__ (command line)
 backend/tests/       pytest, on generated documents and fake model servers
 src-tauri/           Rust: backend.rs (engine process, library folder), lib.rs
 config/              servers.example.toml
@@ -70,34 +70,53 @@ npm install
 npm run dev                                   # the application with its engine
 npm run build                                 # installers in src-tauri/target/release/bundle
 npx tauri build --no-bundle                   # only src-tauri/target/release/ia-k[.exe]
-python scripts/make_portable.py --exe src-tauri/target/release/ia-k.exe --os windows
+setup_python.bat                              # build\python\windows, for --python
+python scripts/make_portable.py --exe src-tauri/target/release/ia-k.exe --os windows --python
 # macOS, for both processors (rustup target add aarch64-apple-darwin x86_64-apple-darwin)
 npx tauri build --target universal-apple-darwin --bundles app
-python scripts/make_portable.py --os mac \
+python scripts/make_portable.py --os mac --python \
     --exe src-tauri/target/universal-apple-darwin/release/bundle/macos/IA-K.app
+# one key for all systems, from the three zips (Linux first)
+python scripts/merge_portable.py dist/ia-k-linux.zip dist/ia-k-mac.zip dist/ia-k-windows.zip
 ```
 
 `make_portable.py` assembles `dist/ia-k-<os>/` and its zip: the application,
 the engine, the setup scripts, the launchers and the guides (the interface is
-inside the application; Python, models and library stay out). Builds are made
-on each system.
+inside the application; models and library stay out). With `--python` it adds
+the portable Python that `setup_python` installed in `build/python/` (every
+`mac-*` folder on macOS), without what IA-K does not use: `__pycache__`
+(stale once unzipped, as a zip keeps times to 2 seconds), the test suites of
+the standard library and of the packages, `idlelib`, `tkinter`, Tcl/Tk,
+`ensurepip`, `lib2to3`, `share/terminfo` and `share/man`; pip stays, for
+`setup_python` updates. It then imports the engine and its packages with the
+copied Python (`--no-check` skips it). About 215 MB unzipped, 80 MB zipped,
+per system. Builds are made on each system.
+
+`merge_portable.py` merges the zips into `dist/ia-k.zip` (folder `ia-k/`):
+shared files once (they must match, line endings aside), executable bits
+kept, names differing only by case refused (exFAT).
 
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push, on `ubuntu-22.04` /
 `ubuntu-latest`, `windows-latest` and `macos-latest`: the engine tests
 (Tesseract with French data), the Rust tests, a release build and the
-portable zip, kept 30 days as the run's *Artifacts* (`ia-k-windows`,
-`ia-k-linux`, `ia-k-mac`). Check it locally with
+portable zip with its Python (`setup_python` runs first), kept 30 days as
+the run's *Artifacts* (`ia-k-windows`, `ia-k-linux`, `ia-k-mac`), and the
+`key` job merges them into `ia-k` (`ia-k.zip`, all systems). Check it locally with
 [actionlint](https://github.com/rhysd/actionlint).
 
 macOS: one universal application (`--target universal-apple-darwin`, Apple
 silicon and Intel) bundled as `IA-K.app` (`--bundles app`), ad hoc signed
 (`signingIdentity "-"`): it is not notarised, so a downloaded copy is
 quarantined (README). The application finds the IA-K folder above
-`IA-K.app/Contents/MacOS/`, and the portable Python in `build/python/mac`
-(`setup_python.sh` picks the `aarch64-` or `x86_64-apple-darwin` build of
-python-build-standalone from the Mac it runs on).
+`IA-K.app/Contents/MacOS/`, and the portable Python of its processor in
+`build/python/mac-aarch64` or `build/python/mac-x86_64` (`setup_python.sh`
+installs the `aarch64-` or `x86_64-apple-darwin` build of
+python-build-standalone of the Mac it runs on, and renames the
+`build/python/mac` of earlier versions when it is of that processor; until
+then the application and `iak.sh` still use it). The CI runner is an Apple
+silicon Mac, so `ia-k-mac.zip` holds `mac-aarch64` only.
 
 ## Tests
 

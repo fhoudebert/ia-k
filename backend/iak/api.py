@@ -17,6 +17,7 @@ Each request opens its own SQLite connection; the vector index is shared.
 from __future__ import annotations
 
 import itertools
+import os
 import json
 import mimetypes
 import queue
@@ -32,8 +33,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, analyze, answer, book, db, embed, ocr, search, servers,
-               transcription, translate)
+from . import (__version__, analyze, answer, book, collection, db, embed, export, folders,
+               fulltext, ocr, search, servers, transcription, translate)
 from .library import Library
 
 CONTENT_TYPES = {
@@ -80,7 +81,7 @@ class App:
     def __init__(self, library: str | Path, host: servers.Host, lang: str = "fr",
                  ocr_langs: str = "fra+eng", tesseract: str | None = None,
                  token: str | None = None, origins: set[str] | None = None,
-                 config: str | Path | None = None):
+                 config: str | Path | None = None, watch_seconds: float | None = None):
         self.folder = Path(library)
         self.host = host
         self.config = Path(config) if config else None    # servers.toml written by settings
@@ -102,6 +103,14 @@ class App:
         # whole books: their own thread, they take hours
         self.books = book.Books(self.folder, lambda: translate.translator_for(
             self.host, self.host.api_key))
+        # watched folders: looked at every watch_seconds (IAK_WATCH_SECONDS, 0 = off)
+        if watch_seconds is None:
+            watch_seconds = float(os.environ.get("IAK_WATCH_SECONDS", "60"))
+        self.watch_seconds = watch_seconds
+        self._signatures: dict[int, tuple] = {}
+        self._rescan: set[int] = set()
+        if watch_seconds > 0:
+            threading.Thread(target=self._watch, daemon=True, name="iak-watch").start()
 
     def library(self) -> Library:
         return Library(self.folder, self.ocr_langs, self.tesseract, vectors=self.vectors)
@@ -139,6 +148,36 @@ class App:
                     del self.jobs[old]
         self._queue.put(job)
         return job
+
+    def scan_active(self, folder_id: int) -> bool:
+        return any(j.kind == "scan" and j.params.get("folder_id") == folder_id
+                   and j.status in ("queued", "running") for j in list(self.jobs.values()))
+
+    def watch_once(self) -> list[int]:
+        """Queue a scan for each watched folder whose files changed (or that
+        has files still being written); returns their ids."""
+        queued = []
+        with self.library() as lib:
+            rows = lib.con.execute("SELECT id FROM folders WHERE watch=1").fetchall()
+            for (fid,) in rows:
+                sig = folders.signature(lib, fid)
+                if sig is None or self.scan_active(fid):
+                    continue
+                if sig != self._signatures.get(fid) or fid in self._rescan:
+                    self._signatures[fid] = sig
+                    self._rescan.discard(fid)
+                    self.submit("scan", {"folder_id": fid, "auto": True})
+                    queued.append(fid)
+        return queued
+
+    def _watch(self) -> None:
+        time.sleep(min(5.0, self.watch_seconds))     # let the interface start first
+        while True:
+            try:
+                self.watch_once()
+            except Exception:  # a folder on a key pulled out, a locked file...
+                traceback.print_exc()
+            time.sleep(self.watch_seconds)
 
     def _worker(self) -> None:
         while True:
@@ -184,13 +223,47 @@ def _embed_if_possible(app: App, lib: Library, job: Job) -> dict:
 
 def job_import(app: App, lib: Library, job: Job):
     paths = job.params["paths"]
-    results = []
+    results, followed = [], []
     for i, p in enumerate(paths, 1):
         job.progress = {"step": "import", "done": i - 1, "total": len(paths), "file": p}
+        if Path(p).is_dir():
+            # a folder: all its documents, in a collection named after it
+            folder = _follow(lib, p, copy=not job.params.get("reference", False), watch=False)
+            res = folders.scan(lib, folder["id"], _progress(job, "import"), lambda: job.cancel)
+            followed.append({"path": p, "folder": folder["id"],
+                             "collection": folder["collection"], **_scan_counts(res)})
+            continue
         r = lib.import_file(p, copy=not job.params.get("reference", False))
         results.append({"path": p, "doc_id": r.doc_id, "status": r.status,
                         "name": r.name, "message": r.message})
-    return {"files": results, **_embed_if_possible(app, lib, job)}
+    return {"files": results, "folders": followed, **_embed_if_possible(app, lib, job)}
+
+
+def _follow(lib: Library, path: str, **opts) -> dict:
+    """The folder followed at path, added if needed."""
+    stored = folders.store_path(path)
+    row = lib.con.execute("SELECT id FROM folders WHERE path=?", (stored,)).fetchone()
+    if row:
+        return folders.public(lib.con, folders._row(lib.con, row[0]))
+    return folders.add(lib, path, **opts)
+
+
+def _scan_counts(res: dict) -> dict:
+    return {k: res[k] for k in ("found", "imported", "duplicates", "unchanged", "changed",
+                                "replaced", "errors", "waiting", "gone", "available")}
+
+
+def job_scan(app: App, lib: Library, job: Job):
+    fid = job.params["folder_id"]
+    res = folders.scan(lib, fid, _progress(job, "scan"), lambda: job.cancel)
+    if res["waiting"]:
+        app._rescan.add(fid)                   # files still being written
+    with app._lock:
+        sig = folders.signature(lib, fid)
+        if sig is not None:
+            app._signatures[fid] = sig
+    return {"folder": fid, **_scan_counts(res), "messages": res["messages"],
+            **_embed_if_possible(app, lib, job)}
 
 
 def job_embed(app: App, lib: Library, job: Job):
@@ -229,6 +302,20 @@ def job_compare(app: App, lib: Library, job: Job):
     r = analyze.compare(lib, app.chat(), p["doc_ids"], p.get("question", ""),
                         p.get("lang") or app.lang, _progress(job, "summary"))
     return {"analysis": r.id, "text": r.text, "seconds": round(r.seconds, 1)}
+
+
+def job_fulltext(app: App, lib: Library, job: Job):
+    p = job.params
+    vision = None
+    if p.get("method") == "vision":
+        client = analyze.vision_client(app.host, app.host.api_key)
+        vision = lambda png: transcription.transcribe_png(client, png)  # noqa: E731
+    try:
+        return fulltext.convert(lib, p["doc_id"], p.get("format", "epub"),
+                                p.get("illustrations", True), p.get("method", "ocr"), vision,
+                                _progress(job, "fulltext"), lambda: job.cancel)
+    except (fulltext.FullTextError, ocr.OcrError) as exc:
+        raise ApiError(409, str(exc))
 
 
 def job_vectors(app: App, lib: Library, job: Job):
@@ -310,7 +397,8 @@ def job_translate_document(app: App, lib: Library, job: Job):
 JOBS = {"import": job_import, "embed": job_embed, "reindex": job_reindex,
         "look": job_look, "summarize": job_summarize, "compare": job_compare,
         "translate": job_translate, "translate_document": job_translate_document,
-        "read": job_read, "vectors": job_vectors}
+        "read": job_read, "vectors": job_vectors, "scan": job_scan,
+        "fulltext": job_fulltext}
 
 
 # ---------------------------------------------------------------- views
@@ -339,7 +427,8 @@ def _filters(q: dict) -> search.Filters:
         v = q.get(key)
         return [int(x) for x in v] if v else None
     return search.Filters(doc_ids=ints("doc"), kinds=q.get("kind") or None,
-                          folder=(q.get("folder") or [None])[0])
+                          folder=(q.get("folder") or [None])[0],
+                          collections=ints("collection"))
 
 
 def _book_source(lib: Library, doc_id: int) -> dict:
@@ -546,7 +635,11 @@ class Handler(BaseHTTPRequestHandler):
     def documents(self, query):
         with self.app.library() as lib:
             rows = lib.documents((query.get("kind") or [None])[0])
-        self._json(200, [_row(r) for r in rows])
+            colls = collection.of_documents(lib.con)
+        out = [_row(r) for r in rows]
+        for d in out:
+            d["collections"] = colls.get(d["id"], [])
+        self._json(200, out)
 
     @route("GET", r"/api/documents/(\d+)")
     def document(self, doc_id, query):
@@ -608,7 +701,8 @@ class Handler(BaseHTTPRequestHandler):
         paths = body.get("paths")
         if not isinstance(paths, list) or not paths or not all(isinstance(p, str) for p in paths):
             raise ApiError(400, "paths must be a non-empty list of file paths")
-        missing = [p for p in paths if not Path(p).is_file()]
+        # a folder is followed: its documents, in a collection named after it
+        missing = [p for p in paths if not (Path(p).is_file() or Path(p).is_dir())]
         if missing:
             raise ApiError(400, f"not found: {', '.join(missing[:5])}")
         job = self.app.submit("import", {"paths": paths,
@@ -665,9 +759,11 @@ class Handler(BaseHTTPRequestHandler):
         mode = body.get("mode", "auto")
         doc_ids = body.get("doc_ids") or None
         kinds = body.get("kinds") or None
-        if doc_ids is not None and not all(isinstance(x, int) for x in doc_ids):
-            raise ApiError(400, "doc_ids must be a list of numbers")
-        filters = search.Filters(doc_ids=doc_ids, kinds=kinds)
+        colls = body.get("collections") or None
+        for name, v in (("doc_ids", doc_ids), ("collections", colls)):
+            if v is not None and not (isinstance(v, list) and all(isinstance(x, int) for x in v)):
+                raise ApiError(400, f"{name} must be a list of numbers")
+        filters = search.Filters(doc_ids=doc_ids, kinds=kinds, collections=colls)
         history = answer.clean_history(body.get("history"))
         with self.app.library() as lib:
             emb = self.app.embedder(required=mode in ("sem", "hybrid"))
@@ -729,6 +825,259 @@ class Handler(BaseHTTPRequestHandler):
         with self.app.library() as lib:
             rows = analyze.analyses(lib.con, int(doc[0]) if doc else None)
         self._json(200, [_row(r) for r in rows])
+
+    # -------------------------------------------------- full-text versions
+    @route("GET", r"/api/documents/(\d+)/fulltext")
+    def fulltext_list(self, doc_id, query):
+        with self.app.library() as lib:
+            if lib.document(int(doc_id)) is None:
+                raise ApiError(404, "no such document")
+            self._json(200, fulltext.outputs(lib, int(doc_id)))
+
+    @route("POST", r"/api/documents/(\d+)/fulltext")
+    def fulltext_make(self, doc_id, query):
+        """{"format": "epub", "illustrations": true, "method": "ocr"|"vision"}: a job."""
+        body = self._body()
+        fmt = body.get("format", "epub")
+        if fmt not in fulltext.FORMATS:
+            raise ApiError(400, f"format is one of {', '.join(fulltext.FORMATS)}")
+        method = body.get("method", "ocr")
+        if method not in ("ocr", "vision"):
+            raise ApiError(400, "method is ocr or vision")
+        with self.app.library() as lib:
+            d = lib.document(int(doc_id))
+            if d is None:
+                raise ApiError(404, "no such document")
+            if d["kind"] not in ("pdf", "image", "epub"):
+                raise ApiError(409, f"{d['name']} is already text")
+        job = self.app.submit("fulltext", {"doc_id": int(doc_id), "format": fmt,
+                                           "illustrations": body.get("illustrations", True)
+                                           is not False, "method": method})
+        self._json(202, {"job": job.id})
+
+    def _fulltext_file(self, lib, doc_id, name) -> Path:
+        name = str(name or "")
+        if not name or "/" in name or "\\" in name or name.startswith("."):
+            raise ApiError(400, "no such file")
+        path = fulltext.output_dir(lib, int(doc_id)) / name
+        if not path.is_file():
+            raise ApiError(404, "no such file")
+        return path
+
+    @route("POST", r"/api/documents/(\d+)/fulltext/save")
+    def fulltext_save(self, doc_id, query):
+        body = self._body()
+        if not body.get("path"):
+            raise ApiError(400, "choose where to save the file")
+        with self.app.library() as lib:
+            src = self._fulltext_file(lib, doc_id, body.get("name"))
+        try:
+            shutil.copyfile(src, body["path"])
+        except OSError as exc:
+            raise ApiError(400, f"cannot write {body['path']}: {exc}")
+        self._json(200, {"path": str(body["path"])})
+
+    @route("POST", r"/api/documents/(\d+)/fulltext/import")
+    def fulltext_import(self, doc_id, query):
+        body = self._body()
+        with self.app.library() as lib:
+            src = self._fulltext_file(lib, doc_id, body.get("name"))
+        job = self.app.submit("import", {"paths": [str(src)], "reference": False})
+        self._json(202, {"job": job.id})
+
+    @route("DELETE", r"/api/documents/(\d+)/fulltext")
+    def fulltext_delete(self, doc_id, query):
+        with self.app.library() as lib:
+            src = self._fulltext_file(lib, doc_id, (query.get("name") or [""])[0])
+        src.unlink()
+        self._json(200, {"deleted": src.name})
+
+    # -------------------------------------------------- followed folders
+    @route("GET", "/api/folders")
+    def folders_list(self, query):
+        with self.app.library() as lib:
+            self._json(200, folders.all_(lib.con))
+
+    @route("POST", "/api/folders")
+    def folder_add(self, query):
+        """{"path", "copy": false, "recursive": true, "watch": true, "name"}: follow a
+        folder and import its documents (a job)."""
+        body = self._body()
+        path = str(body.get("path") or "")
+        if not path:
+            raise ApiError(400, "choose a folder")
+        with self.app.library() as lib:
+            try:
+                f = folders.add(lib, path, bool(body.get("copy")), body.get("recursive", True)
+                                is not False, body.get("watch", True) is not False,
+                                body.get("name") or None)
+            except folders.FolderError as exc:
+                raise ApiError(409 if "already" in str(exc) else 400, str(exc))
+            except collection.CollectionError as exc:
+                raise ApiError(400, str(exc))
+        job = self.app.submit("scan", {"folder_id": f["id"]})
+        self._json(201, {**f, "job": job.id})
+
+    @route("PUT", r"/api/folders/(\d+)")
+    def folder_update(self, folder_id, query):
+        body = self._body()
+        with self.app.library() as lib:
+            try:
+                f = folders.update(lib, int(folder_id), copy=body.get("copy"),
+                                   recursive=body.get("recursive"), watch=body.get("watch"))
+            except KeyError:
+                raise ApiError(404, "no such folder")
+        self.app._signatures.pop(int(folder_id), None)
+        self._json(200, f)
+
+    @route("POST", r"/api/folders/(\d+)/scan")
+    def folder_scan(self, folder_id, query):
+        with self.app.library() as lib:
+            try:
+                f = folders.public(lib.con, folders._row(lib.con, int(folder_id)))
+            except KeyError:
+                raise ApiError(404, "no such folder")
+        if not f["available"]:
+            raise ApiError(409, f"folder not found on this computer: {f['full_path']}")
+        if self.app.scan_active(int(folder_id)):
+            raise ApiError(409, "this folder is being looked at already")
+        job = self.app.submit("scan", {"folder_id": int(folder_id)})
+        self._json(202, {"job": job.id})
+
+    @route("DELETE", r"/api/folders/(\d+)")
+    def folder_remove(self, folder_id, query):
+        with self.app.library() as lib:
+            try:
+                folders.remove(lib, int(folder_id))
+            except KeyError:
+                raise ApiError(404, "no such folder")
+        self.app._signatures.pop(int(folder_id), None)
+        self._json(200, {"removed": int(folder_id)})
+
+    # -------------------------------------------------- collections
+    def _collection(self, lib, cid):
+        try:
+            return collection.get(lib.con, int(cid))
+        except KeyError:
+            raise ApiError(404, "no such collection")
+
+    @route("GET", "/api/collections")
+    def collections(self, query):
+        with self.app.library() as lib:
+            self._json(200, collection.all_(lib.con))
+
+    @route("POST", "/api/collections")
+    def collection_create(self, query):
+        body = self._body()
+        with self.app.library() as lib:
+            try:
+                c = collection.create(lib.con, body.get("name"))
+                if body.get("doc_ids"):
+                    collection.add(lib.con, c["id"], [int(x) for x in body["doc_ids"]])
+                    c = collection.get(lib.con, c["id"])
+            except collection.CollectionError as exc:
+                raise ApiError(409 if "exists" in str(exc) else 400, str(exc))
+            except KeyError as exc:
+                raise ApiError(404, str(exc).strip("'"))
+        self._json(201, c)
+
+    @route("GET", r"/api/collections/(\d+)")
+    def collection_info(self, cid, query):
+        with self.app.library() as lib:
+            self._json(200, self._collection(lib, cid))
+
+    @route("PUT", r"/api/collections/(\d+)")
+    def collection_rename(self, cid, query):
+        body = self._body()
+        with self.app.library() as lib:
+            self._collection(lib, cid)
+            try:
+                self._json(200, collection.rename(lib.con, int(cid), body.get("name")))
+            except collection.CollectionError as exc:
+                raise ApiError(409 if "exists" in str(exc) else 400, str(exc))
+
+    @route("DELETE", r"/api/collections/(\d+)")
+    def collection_delete(self, cid, query):
+        with self.app.library() as lib:
+            self._collection(lib, cid)
+            collection.delete(lib.con, int(cid))
+        self._json(200, {"deleted": int(cid)})
+
+    @route("POST", r"/api/collections/(\d+)/documents")
+    def collection_documents(self, cid, query):
+        """{"add": [document ids], "remove": [document ids]}"""
+        body = self._body()
+        with self.app.library() as lib:
+            self._collection(lib, cid)
+            try:
+                added = collection.add(lib.con, int(cid), [int(x) for x in body.get("add") or []])
+            except KeyError as exc:
+                raise ApiError(404, str(exc).strip("'"))
+            removed = collection.remove(lib.con, int(cid),
+                                        [int(x) for x in body.get("remove") or []])
+            out = self._collection(lib, cid)
+        self._json(200, {**out, "added": added, "removed": removed})
+
+    # -------------------------------------------------- Markdown exports
+    def _lang(self, value) -> str:
+        return value if value in export.LABELS else self.app.lang
+
+    def _deliver(self, name: str, markdown: str, path) -> None:
+        """Write to path when given, else hand the Markdown back (copy)."""
+        if not path:
+            self._json(200, {"name": export.safe_name(name), "markdown": markdown})
+            return
+        try:
+            out = export.write(str(path), markdown)
+        except OSError as exc:
+            raise ApiError(400, f"cannot write {path}: {exc}")
+        self._json(200, {"path": str(out)})
+
+    @route("POST", "/api/export/conversation")
+    def export_conversation(self, query):
+        body = self._body()
+        turns = body.get("turns")
+        if not isinstance(turns, list) or not turns or len(turns) > 500:
+            raise ApiError(400, "turns: a list of questions and answers")
+        clean = []
+        for t in turns:
+            if not isinstance(t, dict):
+                raise ApiError(400, "each turn is an object")
+            sources = t.get("sources") if isinstance(t.get("sources"), list) else []
+            clean.append({
+                "question": str(t.get("question") or ""), "text": str(t.get("text") or ""),
+                "status": str(t.get("status") or "answered"), "scope": str(t.get("scope") or ""),
+                "sources": [{k: str(src.get(k) or "") for k in ("ref", "doc_name", "label", "text")}
+                            for src in sources[:100] if isinstance(src, dict)]})
+        lang = self._lang(body.get("lang"))
+        md = (export.answer_md(clean[0], lang, 1, bool(body.get("quote", True)))
+              if body.get("single") else
+              export.conversation_md(clean, lang, body.get("title"), bool(body.get("quote", True))))
+        stem = "IA-K - " + (clean[0]["question"][:60] if body.get("single") else
+                            export.LABELS[lang]["conversation"])
+        self._deliver(f"{stem} - {time.strftime('%Y-%m-%d')}.md", md, body.get("path"))
+
+    @route("GET", r"/api/analyses/(\d+)/markdown")
+    def analysis_markdown(self, analysis_id, query):
+        lang = self._lang((query.get("lang") or [None])[0])
+        with self.app.library() as lib:
+            try:
+                name, md = export.analysis_md(lib, int(analysis_id), lang)
+            except KeyError:
+                raise ApiError(404, "no such analysis")
+        self._deliver(name, md, None)
+
+    @route("POST", r"/api/analyses/(\d+)/export")
+    def analysis_export(self, analysis_id, query):
+        body = self._body()
+        if not body.get("path"):
+            raise ApiError(400, "choose where to save the file")
+        with self.app.library() as lib:
+            try:
+                name, md = export.analysis_md(lib, int(analysis_id), self._lang(body.get("lang")))
+            except KeyError:
+                raise ApiError(404, "no such analysis")
+        self._deliver(name, md, body["path"])
 
     # -------------------------------------------------- page readings (vision)
     @route("POST", "/api/read")
@@ -895,7 +1244,13 @@ class Handler(BaseHTTPRequestHandler):
         if src == "auto" and src_info.get("doc_language") in translate.ENGLISH_NAMES:
             src = src_info["doc_language"]
         src_info.pop("doc_language", None)
+        fmt = str(body.get("format") or "auto")
+        try:
+            book.output_format(src_info["kind"], fmt)
+        except book.BookError as exc:
+            raise ApiError(400, str(exc))
         job = self.app.books.create({**src_info, "src": src, "tgt": tgt, "passes": passes,
+                                     "format": fmt,
                                      "glossary": glossary,
                                      "limit": max(0, int(body.get("limit") or 0)),
                                      "fresh": bool(body.get("fresh"))})
@@ -945,8 +1300,15 @@ class Handler(BaseHTTPRequestHandler):
         dest = Path(str(body.get("path") or ""))
         if not body.get("path"):
             raise ApiError(400, "choose where to save the file")
+        fmt = body.get("format")
         try:
-            shutil.copyfile(src, dest)
+            if fmt and fmt != src.suffix.lstrip("."):
+                # another format: written again from the translations kept
+                book.render(job, fmt, dest)
+            else:
+                shutil.copyfile(src, dest)
+        except book.BookError as exc:
+            raise ApiError(400, str(exc))
         except OSError as exc:
             raise ApiError(400, f"cannot write {dest}: {exc}")
         self._json(200, {"path": str(dest)})

@@ -69,6 +69,12 @@ class Filters:
     folder: str | None = None
     added_after: float | None = None
     added_before: float | None = None
+    collections: list[int] | None = None     # documents of any of these collections
+
+    @property
+    def active(self) -> bool:
+        return bool(self.doc_ids or self.kinds or self.folder or self.collections
+                    or self.added_after is not None or self.added_before is not None)
 
     def sql(self) -> tuple[str, list]:
         sql, args = [], []
@@ -87,6 +93,10 @@ class Filters:
         if self.added_before is not None:
             sql.append("AND d.added_at < ?")
             args.append(self.added_before)
+        if self.collections:
+            sql.append("AND p.doc_id IN (SELECT doc_id FROM collection_docs WHERE "
+                       f"collection_id IN ({','.join('?' * len(self.collections))}))")
+            args += self.collections
         return "\n".join(sql), args
 
 
@@ -131,9 +141,17 @@ def semantic(con: sqlite3.Connection, index, qvec, limit: int = 20,
              relative: float = RELATIVE_CUTOFF) -> list[Hit]:
     """Meaning search: the passages whose vectors are closest to the query's."""
     f = filters or Filters()
-    # take more than needed, the filters are applied afterwards
-    scored = index.search(qvec, limit * 5 if (f.doc_ids or f.kinds or f.folder
-                                                or f.added_after or f.added_before) else limit)
+    allow = None
+    if f.active:
+        # only the passages the filters keep are scored: a small collection in
+        # a big library is searched as well as the whole library
+        where, args = f.sql()
+        allow = [r[0] for r in con.execute(
+            f"SELECT p.id FROM passages p JOIN documents d ON d.id = p.doc_id WHERE 1=1 {where}",
+            args)]
+        if not allow:
+            return []
+    scored = index.search(qvec, limit, allow)
     if not scored:
         return []
     floor = max(min_cosine, scored[0][1] * relative)

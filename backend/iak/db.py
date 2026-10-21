@@ -20,7 +20,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE documents (
@@ -129,6 +129,43 @@ CREATE INDEX translations_doc ON translations(doc_id, tgt);
 -- schema 5: page readings by the vision model, used or not as the page text
 ALTER TABLE analyses ADD COLUMN applied REAL;    -- when it became the page's text
 ALTER TABLE analyses ADD COLUMN score REAL;      -- word agreement with the text it was compared to, 0-1
+
+-- schema 6: collections, named groups of documents (a document may be in several)
+CREATE TABLE collections (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    created_at  REAL NOT NULL
+);
+CREATE TABLE collection_docs (
+    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    doc_id        INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    added_at      REAL NOT NULL,
+    PRIMARY KEY (collection_id, doc_id)
+);
+CREATE INDEX collection_docs_doc ON collection_docs(doc_id);
+
+-- schema 7: folders followed by the library (watched or imported once)
+CREATE TABLE folders (
+    id            INTEGER PRIMARY KEY,
+    path          TEXT NOT NULL UNIQUE,  -- absolute, or relative to the IA-K folder when on its drive
+    collection_id INTEGER REFERENCES collections(id) ON DELETE SET NULL,
+    copy          INTEGER NOT NULL DEFAULT 0,   -- 1: files copied into the library, 0: referenced
+    recursive     INTEGER NOT NULL DEFAULT 1,
+    watch         INTEGER NOT NULL DEFAULT 1,   -- new files imported by themselves
+    created_at    REAL NOT NULL,
+    last_scan     REAL,
+    last_result   TEXT NOT NULL DEFAULT '{}'    -- JSON: counts of the last scan
+);
+CREATE TABLE folder_files (
+    folder_id     INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    rel_path      TEXT NOT NULL,         -- with "/" separators
+    size          INTEGER NOT NULL,
+    mtime         REAL NOT NULL,
+    doc_id        INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+    status        TEXT NOT NULL,         -- imported, duplicate, error
+    PRIMARY KEY (folder_id, rel_path)
+);
+CREATE INDEX folder_files_doc ON folder_files(doc_id);
 """
 
 # upgrades from each older schema version to the next
@@ -176,6 +213,45 @@ CREATE INDEX translations_doc ON translations(doc_id, tgt);
 -- schema 5: page readings by the vision model, used or not as the page text
 ALTER TABLE analyses ADD COLUMN applied REAL;    -- when it became the page's text
 ALTER TABLE analyses ADD COLUMN score REAL;      -- word agreement with the text it was compared to, 0-1
+""",
+    5: """
+-- schema 6: collections, named groups of documents (a document may be in several)
+CREATE TABLE collections (
+    id          INTEGER PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    created_at  REAL NOT NULL
+);
+CREATE TABLE collection_docs (
+    collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+    doc_id        INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    added_at      REAL NOT NULL,
+    PRIMARY KEY (collection_id, doc_id)
+);
+CREATE INDEX collection_docs_doc ON collection_docs(doc_id);
+""",
+    6: """
+-- schema 7: folders followed by the library (watched or imported once)
+CREATE TABLE folders (
+    id            INTEGER PRIMARY KEY,
+    path          TEXT NOT NULL UNIQUE,  -- absolute, or relative to the IA-K folder when on its drive
+    collection_id INTEGER REFERENCES collections(id) ON DELETE SET NULL,
+    copy          INTEGER NOT NULL DEFAULT 0,   -- 1: files copied into the library, 0: referenced
+    recursive     INTEGER NOT NULL DEFAULT 1,
+    watch         INTEGER NOT NULL DEFAULT 1,   -- new files imported by themselves
+    created_at    REAL NOT NULL,
+    last_scan     REAL,
+    last_result   TEXT NOT NULL DEFAULT '{}'    -- JSON: counts of the last scan
+);
+CREATE TABLE folder_files (
+    folder_id     INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    rel_path      TEXT NOT NULL,         -- with "/" separators
+    size          INTEGER NOT NULL,
+    mtime         REAL NOT NULL,
+    doc_id        INTEGER REFERENCES documents(id) ON DELETE SET NULL,
+    status        TEXT NOT NULL,         -- imported, duplicate, error
+    PRIMARY KEY (folder_id, rel_path)
+);
+CREATE INDEX folder_files_doc ON folder_files(doc_id);
 """,
 }
 

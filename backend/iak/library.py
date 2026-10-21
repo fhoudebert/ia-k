@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -175,7 +176,15 @@ class Library:
             raise KeyError(f"no document {doc_id}")
         if row["stored_path"]:
             return self.folder / row["stored_path"]
-        return Path(row["source_path"])
+        source = Path(row["source_path"])
+        if not source.exists():
+            # referenced from a followed folder: maybe under another drive
+            # letter or mount point on this computer
+            from . import folders
+            moved = folders.original_for(self.con, doc_id)
+            if moved is not None:
+                return moved
+        return source
 
     # ------------------------------------------------------------------ delete
 
@@ -188,6 +197,8 @@ class Library:
             db.backup(self.con, self.folder / "backups")
         with self.con:
             self.con.execute("DELETE FROM documents WHERE id=?", (doc_id,))
+        # its full-text versions (fulltext.py) go with it
+        shutil.rmtree(self.folder / "fulltext" / str(doc_id), ignore_errors=True)
         if row["stored_path"]:
             stored = self.folder / row["stored_path"]
             try:
