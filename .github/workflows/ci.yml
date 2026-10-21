@@ -1,6 +1,8 @@
 # IA-K: tests and builds on Linux, Windows and macOS.
 # - backend: Python tests (Tesseract with French data installed for the OCR tests)
-# - desktop: Rust tests, release build, portable folder as a downloadable zip
+# - desktop: Rust tests, release build, portable folder with its Python as a
+#   downloadable zip for each system
+# - key: the three zips merged into one key for all systems (ia-k.zip)
 # Runs on every push and pull request, and by hand (Actions > CI > Run workflow).
 name: CI
 
@@ -124,12 +126,45 @@ jobs:
       - name: Build
         run: ${{ matrix.build }}
 
+      # the Python of the key, with the engine's packages (Apple silicon on macOS)
+      - name: Portable Python (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: ./setup_python.sh
+
+      - name: Portable Python (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: call setup_python.bat
+
       - name: Portable folder
-        run: python scripts/make_portable.py --exe ${{ matrix.exe }} --os ${{ matrix.portable }}
+        run: python scripts/make_portable.py --exe ${{ matrix.exe }} --os ${{ matrix.portable }} --python
 
       - uses: actions/upload-artifact@v7
         with:
           name: ia-k-${{ matrix.portable }}
           path: dist/ia-k-${{ matrix.portable }}.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  key:
+    name: Key for all systems
+    needs: desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ia-k-*
+          path: dist
+          merge-multiple: true
+
+      - name: Merge
+        run: python3 scripts/merge_portable.py dist/ia-k-linux.zip dist/ia-k-mac.zip dist/ia-k-windows.zip -o dist/ia-k.zip
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ia-k
+          path: dist/ia-k.zip
           if-no-files-found: error
           retention-days: 30
