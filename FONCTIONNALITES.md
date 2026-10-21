@@ -71,6 +71,19 @@ ne part sur Internet.
 - Résumés, comparaisons et analyses se **copient ou s'exportent en
   Markdown** : pages citées, documents comparés (D1, D2…), modèle et date.
 
+## Texte intégral
+
+- « Texte intégral… » transforme un **PDF scanné** (ou une image) en document
+  léger fait de vrai texte, que la liseuse remet en page : le texte de la
+  bibliothèque (OCR, corrections, relectures) remplace les images des pages,
+  les titres sont retrouvés, en-têtes et numéros de page retirés, et les
+  **illustrations** (photos, gravures, cartes) sont découpées et gardées à
+  leur place. En EPUB, PDF A5, HTML, Word, RTF ou Markdown, bien plus léger
+  que le scan (selon les illustrations gardées).
+- Pour un **EPUB fait de pages scannées**, chaque image de texte est lue
+  (Tesseract ou modèle de vision) et remplacée par son texte ; illustrations
+  et couverture restent.
+
 ## Relecture des scans difficiles
 
 - Le modèle de vision **corrige le texte de Tesseract** à partir de l'image,

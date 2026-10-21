@@ -3,17 +3,21 @@ in the library, a text or Markdown file): PDF, EPUB, HTML, DOCX, RTF,
 Markdown, text.
 
 The book is a list of blocks (kind, text): h1 and h2 headings, p paragraphs,
-li list items, quote, code. EPUB is cut into chapters at h1 headings (or
+li list items, quote, code; and ("img", Picture) for an illustration (RTF
+and text cannot show them: RTF gets them as pictures, text a mark). EPUB is cut into chapters at h1 headings (or
 every 150 blocks), for e-readers; the PDF is laid out on A5 pages, the size
 of a reader's screen, with fonts embedded by MuPDF (Latin, Greek, Cyrillic,
 Hebrew and CJK scripts; Arabic is not shaped well).
 """
 from __future__ import annotations
 
+import base64
 import html
+import io
 import time
 import uuid
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 FORMATS = ("pdf", "epub", "html", "docx", "rtf", "md", "txt")
@@ -28,15 +32,42 @@ h1 + p, h2 + p { text-indent: 0; }
 blockquote { margin: .5em 1.5em; font-style: italic; }
 pre { white-space: pre-wrap; font-family: monospace; font-size: .85em; }
 li { margin-bottom: .2em; }
+figure { margin: .8em 0; text-align: center; }
+figure img { max-width: 100%; height: auto; }
 """
+
+
+@dataclass
+class Picture:
+    """An illustration: JPEG or PNG bytes and their size in pixels; dpi says
+    how big it was on the page (to show it at about that size)."""
+    data: bytes
+    mime: str = "image/jpeg"
+    width: int = 0
+    height: int = 0
+    dpi: int = 150
+
+    @property
+    def ext(self) -> str:
+        return "png" if self.mime == "image/png" else "jpg"
+
+    def data_uri(self) -> str:
+        return f"data:{self.mime};base64,{base64.b64encode(self.data).decode('ascii')}"
+
+
+def pictures(blocks) -> list[Picture]:
+    return [b[1] for b in blocks if b[0] == "img"]
 
 
 def _esc(text: str) -> str:
     return html.escape(text, quote=False)
 
 
-def html_body(blocks: list[tuple[str, str]]) -> str:
+def html_body(blocks: list[tuple], src=None, width=None) -> str:
+    """src(picture) gives an image's address (default: a data URI); width(picture)
+    an optional CSS width."""
     out, in_list = [], False
+    src = src or (lambda pic: pic.data_uri())
     for kind, text in blocks:
         if kind == "li" and not in_list:
             out.append("<ul>")
@@ -52,6 +83,9 @@ def html_body(blocks: list[tuple[str, str]]) -> str:
             out.append(f"<blockquote><p>{_esc(text)}</p></blockquote>")
         elif kind == "code":
             out.append(f"<pre>{_esc(text)}</pre>")
+        elif kind == "img":
+            style = f' style="width:{width(text)}"' if width else ""
+            out.append(f'<figure><img src="{html.escape(src(text))}" alt=""{style}/></figure>')
         else:
             out.append(f"<p>{_esc(text)}</p>")
     if in_list:
@@ -67,9 +101,11 @@ def write_html(blocks, title: str, lang: str, out: Path) -> None:
 
 
 def _chapters(blocks, size: int = 150) -> list[list[tuple[str, str]]]:
+    """Chapters at the h1 headings, or at the h2 ones in a book without h1."""
+    cut = "h1" if any(b[0] == "h1" for b in blocks) else "h2"
     chapters: list[list] = [[]]
     for b in blocks:
-        if (b[0] == "h1" and chapters[-1]) or len(chapters[-1]) >= size:
+        if (b[0] == cut and chapters[-1]) or len(chapters[-1]) >= size:
             chapters.append([])
         chapters[-1].append(b)
     return [c for c in chapters if c]
@@ -84,14 +120,20 @@ def write_epub(blocks, title: str, lang: str, out: Path) -> None:
         head = next((t for k, t in ch if k in ("h1", "h2")), None)
         titles.append(head or (title if i == 1 else f"{i}"))
 
+    names = {id(p): f"images/i{n}.{p.ext}" for n, p in enumerate(pictures(blocks), 1)}
+
     def xhtml(i, ch):
+        body = html_body(ch, src=lambda pic: names[id(pic)])
         return (f'<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n'
                 f'<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="{lang}" lang="{lang}">\n'
                 f"<head><title>{_esc(titles[i - 1])}</title>"
                 f'<link rel="stylesheet" type="text/css" href="style.css"/></head>\n'
-                f"<body>\n{html_body(ch)}\n</body>\n</html>\n")
+                f"<body>\n{body}\n</body>\n</html>\n")
     manifest = "\n".join(f'<item id="c{i}" href="c{i}.xhtml" media-type="application/xhtml+xml"/>'
                          for i in range(1, len(chapters) + 1))
+    manifest += "".join(f'\n<item id="i{n}" href="{name}" media-type="{p.mime}"/>'
+                        for n, p in enumerate(pictures(blocks), 1)
+                        for name in [names[id(p)]])
     spine = "\n".join(f'<itemref idref="c{i}"/>' for i in range(1, len(chapters) + 1))
     modified = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     opf = f"""<?xml version="1.0" encoding="utf-8"?>
@@ -140,6 +182,8 @@ def write_epub(blocks, title: str, lang: str, out: Path) -> None:
             z.writestr(f"OEBPS/{name}", data, compress_type=zipfile.ZIP_DEFLATED)
         for i, ch in enumerate(chapters, 1):
             z.writestr(f"OEBPS/c{i}.xhtml", xhtml(i, ch), compress_type=zipfile.ZIP_DEFLATED)
+        for p in pictures(blocks):                 # already compressed
+            z.writestr(f"OEBPS/{names[id(p)]}", p.data, compress_type=zipfile.ZIP_STORED)
     tmp.replace(out)
 
 
@@ -147,9 +191,20 @@ def write_pdf(blocks, title: str, lang: str, out: Path) -> None:
     """A5 pages laid out by MuPDF from the HTML, page numbers at the foot."""
     import pymupdf
     css = CSS + "body { font-size: 11pt; margin: 0; } p { margin-bottom: .35em; }"
-    story = pymupdf.Story(html=f'<body lang="{lang}">{html_body(blocks)}</body>', user_css=css)
     page = pymupdf.paper_rect("a5")
     where = page + (42, 46, -42, -50)
+    archive = pymupdf.Archive()
+    names = {}
+    for n, p in enumerate(pictures(blocks), 1):
+        names[id(p)] = f"i{n}.{p.ext}"
+        archive.add(p.data, names[id(p)])
+
+    def width(pic):                 # about its size on the page, within the margins
+        pt = pic.width / max(pic.dpi, 1) * 72 if pic.width else where.width
+        return f"{min(pt, where.width):.0f}pt"
+    body = html_body(blocks, src=lambda pic: names[id(pic)], width=width)
+    story = pymupdf.Story(html=f'<body lang="{lang}">{body}</body>', user_css=css,
+                          archive=archive)
     tmp = out.with_name(out.name + ".part")
     writer = pymupdf.DocumentWriter(str(tmp))
     more, n = 1, 0
@@ -186,6 +241,13 @@ def write_docx(blocks, title: str, lang: str, out: Path) -> None:
             d.add_paragraph(text, style="List Bullet")
         elif kind == "quote":
             d.add_paragraph(text, style="Quote")
+        elif kind == "img":
+            from docx.shared import Inches
+            inches = min(6.0, text.width / max(text.dpi, 1)) if text.width else 5.0
+            try:
+                d.add_picture(io.BytesIO(text.data), width=Inches(inches))
+            except Exception:  # noqa: BLE001 - a picture python-docx cannot read
+                d.add_paragraph("[illustration]")
         else:
             d.add_paragraph(text)
     d.save(str(out))
@@ -211,6 +273,13 @@ def write_rtf(blocks, title: str, lang: str, out: Path) -> None:
              "{\\fonttbl{\\f0\\froman Times New Roman;}{\\f1\\fmodern Courier New;}}",
              f"{{\\info{{\\title {_rtf(title)}}}}}", "\\fs24"]
     for kind, text in blocks:
+        if kind == "img":
+            blip = "\\pngblip" if text.mime == "image/png" else "\\jpegblip"
+            tw = int(min(6.0, text.width / max(text.dpi, 1)) * 1440) if text.width else 7200
+            th = int(tw * text.height / text.width) if text.width else 5400
+            lines.append(f"{{\\pard\\qc\\sa120{{\\pict{blip}\\picw{text.width}\\pich{text.height}"
+                         f"\\picwgoal{tw}\\pichgoal{th}\n{text.data.hex()}\n}}\\par}}")
+            continue
         t = _rtf(text)
         if kind == "h1":
             lines.append(f"{{\\pard\\qc\\sb240\\sa120\\b\\fs32 {t}\\par}}")
@@ -229,8 +298,21 @@ def write_rtf(blocks, title: str, lang: str, out: Path) -> None:
 
 
 def write_text(blocks, title: str, lang: str, out: Path, markdown: bool) -> None:
+    """Markdown: illustrations in a folder <name>_images next to the file."""
     parts, prev_li = [], False
+    n_img = 0
     for kind, text in blocks:
+        if kind == "img":
+            n_img += 1
+            if markdown:
+                folder = out.with_name(out.stem + "_images")
+                folder.mkdir(exist_ok=True)
+                (folder / f"i{n_img}.{text.ext}").write_bytes(text.data)
+                parts.append(f"![](<{folder.name}/i{n_img}.{text.ext}>)")
+            else:
+                parts.append("[illustration]")
+            prev_li = False
+            continue
         if markdown:
             line = {"h1": "# ", "h2": "## ", "li": "- ", "quote": "> "}.get(kind, "") + text
             if kind == "code":

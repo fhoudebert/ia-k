@@ -253,6 +253,12 @@ button.cite { padding: 0 5px; font-size: 11px; border-radius: 4px; background: v
 .coll-selection { display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: var(--accent-soft); border-radius: var(--radius); font-size: 13px; }
 .coll-tag { margin-left: 8px; font-size: 11px; font-weight: 400; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
 
+/* documents in full text */
+.fulltext .ft-note { flex-basis: 100%; margin: 0; }
+.ft-files { flex-basis: 100%; list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.ft-files li { display: flex; gap: 10px; align-items: baseline; }
+.ft-files li:empty { display: none; }
+
 /* followed folders */
 .folder-form { display: flex; flex-direction: column; gap: 8px; }
 .folder-form p { margin: 0; }

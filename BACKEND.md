@@ -22,6 +22,8 @@ interface uses.
 ./iak.sh search "atlas relieur"                   # hybrid search
 ./iak.sh search "..." --mode kw|sem|hybrid --doc 3 --kind pdf --collection "Archives"
 ./iak.sh collection create "Archives" 3 7         # also: list, show, add, remove, rename, delete
+./iak.sh fulltext 3 --format epub -o livre.epub   # a scanned document as text, illustrations kept
+./iak.sh fulltext scans.epub [--vision]           # an EPUB of scanned pages, its pictures of text read
 ./iak.sh folder add ~/Documents/Archives          # its documents, in a collection "Archives"
 ./iak.sh folder scan 1                            # also: list, watch, unwatch, remove; --copy
 ./iak.sh ask "Où l'atlas a-t-il été envoyé ?"     # sourced answer
@@ -169,6 +171,36 @@ temporary file.
   gone is looked for through its folder. A folder absent from this computer
   is skipped.
 
+## Full text
+
+`iak/fulltext.py`; formats from `iak/bookformats.py` (pictures included).
+
+- **A PDF or an image of the library.** Each page gives text and pictures in
+  reading order. A native page: its text blocks (with their font size) and
+  the images it holds, cut out of the page at 150 dpi. A page read by OCR (or
+  corrected, or read again by the vision model): the library's text as
+  paragraphs, a size for each from its words' boxes, and the illustrations
+  found on the rendered page; a picture covering most of a page is the scan
+  itself and is searched the same way. Then, as for books: headings from the
+  sizes, running heads and page numbers removed, paragraphs joined across
+  pages.
+- **Finding illustrations.** The page is rendered in grey at 100 dpi; the
+  words' rectangles are blanked (except "words" of low confidence or great
+  size: Tesseract reads hatching that way); a grid of cells marks those with
+  enough ink or grey; neighbouring cells make regions; small, thin, sparse
+  regions, a scan's dark border and the whole page are dropped. The rest is
+  cut out with a margin, as JPEG.
+- **An EPUB of pictures.** Every picture of the reading order (not the
+  cover) is read by Tesseract; it is text with at least 12 words read with a
+  mean confidence of 55, covering a tenth of it (or 40 words covering less:
+  a page with a large picture). Its paragraphs (headings from the boxes'
+  heights, running heads and page numbers removed) and the illustrations cut
+  out of it replace the picture's wrapper (`<p>`, `<div>`, `<svg>`); with the
+  vision model, the text is its reading. Pictures no longer used leave the
+  book and its manifest; the new ones join it.
+- **Results.** In `<library>/fulltext/<document>/`, deleted with the
+  document.
+
 ## Reading pages again
 
 `iak/transcription.py`, for PDF pages and images.
@@ -304,6 +336,8 @@ The interface talks to the engine through an HTTP API:
 | `GET /api/search?q=&mode=auto\|hybrid\|sem\|kw&n=&doc=&kind=&collection=` | passages with citations |
 | `POST /api/ask` `{"question", "doc_ids", "kinds", "collections", "history"}` | sourced answer |
 | `GET /api/collections`, `POST /api/collections` `{"name", "doc_ids"}` | collections with their counts; create one |
+| `GET`, `POST /api/documents/<id>/fulltext` `{"format", "illustrations", "method": "ocr"\|"vision"}` | full-text versions of a document; make one (job) |
+| `POST /api/documents/<id>/fulltext/save` `{"name", "path"}`, `/import` `{"name"}`, `DELETE …/fulltext?name=` | save a copy, add it to the library (job), delete it |
 | `GET /api/folders`, `POST /api/folders` `{"path", "copy", "recursive", "watch", "name"}` | followed folders; follow one (its first scan is a job) |
 | `PUT /api/folders/<id>` `{"watch", "copy", "recursive"}`, `POST /api/folders/<id>/scan`, `DELETE /api/folders/<id>` | settings; scan now (job); stop following |
 | `GET`, `PUT` `{"name"}`, `DELETE /api/collections/<id>` | one collection: its documents, rename, delete |

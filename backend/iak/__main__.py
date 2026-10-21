@@ -22,6 +22,9 @@
     python -m iak folder add PATH [--copy] [--no-watch]  a folder's documents, in a
                                           collection named after it (also list,
                                           scan [ID], watch ID, unwatch ID, remove ID)
+    python -m iak fulltext ID|FILE.epub [--format epub|pdf|html|docx|rtf|md] [-o F]
+                                          a scanned document as real text, its
+                                          illustrations kept
     python -m iak export ANALYSIS [-o F]  an analysis (summary, comparison...) as Markdown
     python -m iak translate ID --to en    translate a document page by page (kept),
                                           or --text "..." / --file F.txt; --out FILE
@@ -143,6 +146,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-watch", action="store_true",
                    help="import once; the application will not watch the folder")
     p.add_argument("--name", help="collection name (default: the folder's name)")
+    p = sub.add_parser("fulltext")
+    p.add_argument("target", help="library document id (PDF, image, EPUB) or an EPUB file")
+    p.add_argument("--format", default="epub", choices=("epub", "pdf", "html", "docx", "rtf", "md"),
+                   help="for a PDF or an image (an EPUB stays EPUB); default epub")
+    p.add_argument("--no-illustrations", action="store_true", help="text only")
+    p.add_argument("--vision", action="store_true",
+                   help="EPUB: read its pictures of text with the vision model, not Tesseract")
+    p.add_argument("-o", "--out", type=Path, help="copy the result here")
     p = sub.add_parser("export")
     p.add_argument("analysis", type=int, help="analysis id (see analyses)")
     p.add_argument("-o", "--out", type=Path, help="file to write (default: printed)")
@@ -308,6 +319,42 @@ def main(argv: list[str] | None = None) -> int:
                 return [collection.by_name(lib.con, n)["id"] for n in names] if names else None
             except KeyError as exc:
                 raise SystemExit(str(exc).strip("'"))
+
+        if args.cmd == "fulltext":
+            import shutil
+
+            from . import fulltext, ocr, transcription
+            from .book import BookError
+            vision = None
+            if args.vision:
+                client = analyze.vision_client(host, host.api_key, args.vision_server, args.server)
+                vision = lambda png: transcription.transcribe_png(client, png)  # noqa: E731
+
+            def progress(i, n):
+                print(f"\r  {i}/{n}", end="", file=sys.stderr, flush=True)
+            try:
+                if args.target.isdigit():
+                    r = fulltext.convert(lib, int(args.target), args.format,
+                                         not args.no_illustrations,
+                                         "vision" if args.vision else "ocr", vision, progress)
+                    out = fulltext.output_dir(lib, int(args.target)) / r["file"]
+                else:
+                    src = Path(args.target)
+                    out = args.out or src.with_name(src.stem + ".texte.epub")
+                    r = fulltext.epub_document(src, out, args.ocr_langs, args.tesseract,
+                                               not args.no_illustrations, vision, progress)
+            except (fulltext.FullTextError, KeyError, ocr.OcrError, BookError) as exc:
+                _out(f"\n{exc}")
+                return 1
+            print(file=sys.stderr)
+            if args.out and out != args.out:
+                shutil.copyfile(out, args.out)
+                out = args.out
+            parts = [f"{k}: {v}" for k, v in r.items() if k not in ("file", "errors")]
+            _out(f"written: {out}\n  " + ", ".join(parts))
+            for e in r.get("errors", [])[:10]:
+                _out(f"  ! {e}")
+            return 0
 
         if args.cmd == "folder":
             from . import folders

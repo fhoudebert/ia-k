@@ -34,7 +34,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import (__version__, analyze, answer, book, collection, db, embed, export, folders,
-               ocr, search, servers, transcription, translate)
+               fulltext, ocr, search, servers, transcription, translate)
 from .library import Library
 
 CONTENT_TYPES = {
@@ -304,6 +304,20 @@ def job_compare(app: App, lib: Library, job: Job):
     return {"analysis": r.id, "text": r.text, "seconds": round(r.seconds, 1)}
 
 
+def job_fulltext(app: App, lib: Library, job: Job):
+    p = job.params
+    vision = None
+    if p.get("method") == "vision":
+        client = analyze.vision_client(app.host, app.host.api_key)
+        vision = lambda png: transcription.transcribe_png(client, png)  # noqa: E731
+    try:
+        return fulltext.convert(lib, p["doc_id"], p.get("format", "epub"),
+                                p.get("illustrations", True), p.get("method", "ocr"), vision,
+                                _progress(job, "fulltext"), lambda: job.cancel)
+    except (fulltext.FullTextError, ocr.OcrError) as exc:
+        raise ApiError(409, str(exc))
+
+
 def job_vectors(app: App, lib: Library, job: Job):
     return _embed_if_possible(app, lib, job)
 
@@ -383,7 +397,8 @@ def job_translate_document(app: App, lib: Library, job: Job):
 JOBS = {"import": job_import, "embed": job_embed, "reindex": job_reindex,
         "look": job_look, "summarize": job_summarize, "compare": job_compare,
         "translate": job_translate, "translate_document": job_translate_document,
-        "read": job_read, "vectors": job_vectors, "scan": job_scan}
+        "read": job_read, "vectors": job_vectors, "scan": job_scan,
+        "fulltext": job_fulltext}
 
 
 # ---------------------------------------------------------------- views
@@ -810,6 +825,72 @@ class Handler(BaseHTTPRequestHandler):
         with self.app.library() as lib:
             rows = analyze.analyses(lib.con, int(doc[0]) if doc else None)
         self._json(200, [_row(r) for r in rows])
+
+    # -------------------------------------------------- full-text versions
+    @route("GET", r"/api/documents/(\d+)/fulltext")
+    def fulltext_list(self, doc_id, query):
+        with self.app.library() as lib:
+            if lib.document(int(doc_id)) is None:
+                raise ApiError(404, "no such document")
+            self._json(200, fulltext.outputs(lib, int(doc_id)))
+
+    @route("POST", r"/api/documents/(\d+)/fulltext")
+    def fulltext_make(self, doc_id, query):
+        """{"format": "epub", "illustrations": true, "method": "ocr"|"vision"}: a job."""
+        body = self._body()
+        fmt = body.get("format", "epub")
+        if fmt not in fulltext.FORMATS:
+            raise ApiError(400, f"format is one of {', '.join(fulltext.FORMATS)}")
+        method = body.get("method", "ocr")
+        if method not in ("ocr", "vision"):
+            raise ApiError(400, "method is ocr or vision")
+        with self.app.library() as lib:
+            d = lib.document(int(doc_id))
+            if d is None:
+                raise ApiError(404, "no such document")
+            if d["kind"] not in ("pdf", "image", "epub"):
+                raise ApiError(409, f"{d['name']} is already text")
+        job = self.app.submit("fulltext", {"doc_id": int(doc_id), "format": fmt,
+                                           "illustrations": body.get("illustrations", True)
+                                           is not False, "method": method})
+        self._json(202, {"job": job.id})
+
+    def _fulltext_file(self, lib, doc_id, name) -> Path:
+        name = str(name or "")
+        if not name or "/" in name or "\\" in name or name.startswith("."):
+            raise ApiError(400, "no such file")
+        path = fulltext.output_dir(lib, int(doc_id)) / name
+        if not path.is_file():
+            raise ApiError(404, "no such file")
+        return path
+
+    @route("POST", r"/api/documents/(\d+)/fulltext/save")
+    def fulltext_save(self, doc_id, query):
+        body = self._body()
+        if not body.get("path"):
+            raise ApiError(400, "choose where to save the file")
+        with self.app.library() as lib:
+            src = self._fulltext_file(lib, doc_id, body.get("name"))
+        try:
+            shutil.copyfile(src, body["path"])
+        except OSError as exc:
+            raise ApiError(400, f"cannot write {body['path']}: {exc}")
+        self._json(200, {"path": str(body["path"])})
+
+    @route("POST", r"/api/documents/(\d+)/fulltext/import")
+    def fulltext_import(self, doc_id, query):
+        body = self._body()
+        with self.app.library() as lib:
+            src = self._fulltext_file(lib, doc_id, body.get("name"))
+        job = self.app.submit("import", {"paths": [str(src)], "reference": False})
+        self._json(202, {"job": job.id})
+
+    @route("DELETE", r"/api/documents/(\d+)/fulltext")
+    def fulltext_delete(self, doc_id, query):
+        with self.app.library() as lib:
+            src = self._fulltext_file(lib, doc_id, (query.get("name") or [""])[0])
+        src.unlink()
+        self._json(200, {"deleted": src.name})
 
     # -------------------------------------------------- followed folders
     @route("GET", "/api/folders")

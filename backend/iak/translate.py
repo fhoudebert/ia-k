@@ -47,7 +47,8 @@ ENGLISH_NAMES = {
 
 # frequent short words, enough to tell the usual European languages apart
 _STOP = {
-    "fr": "le la les des du un une et est que qui dans pour pas sur au aux ce cette il elle nous vous ont sont avec".split(),
+    # l, d, qu: the elisions (l'atlas, d'un), which only French has here
+    "fr": "le la les de des du un une et est que qui dans pour pas sur au aux ce cette il elle nous vous ont sont avec à par l d qu".split(),
     "en": "the and of to is in that it for was on are with as his they be at this have from".split(),
     "es": "el la los las de que y en un una es por con para del se no lo su al".split(),
     "it": "il lo la gli le di che e un una è per con non del della sono nel alla".split(),

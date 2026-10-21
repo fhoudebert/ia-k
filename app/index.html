@@ -298,6 +298,7 @@
         <button class="link" id="viewer-back">← <span data-i18n="viewer.back"></span></button>
         <h2 id="viewer-title"></h2>
         <span class="spacer"></span>
+        <button id="viewer-fulltext" data-i18n="ft.button"></button>
         <button id="viewer-reread" data-i18n="viewer.reread"></button>
         <button id="viewer-translate" data-i18n="viewer.translate"></button>
         <button id="viewer-summary" data-i18n="viewer.summary"></button>
@@ -320,6 +321,27 @@
           <span data-i18n="reread.replace"></span></label>
         <button class="primary" data-i18n="reread.start"></button>
         <button type="button" class="link close" id="reread-close">×</button>
+      </form>
+      <form id="fulltext-panel" class="reread fulltext" hidden>
+        <span data-i18n="ft.title"></span>
+        <select name="format">
+          <option value="epub">EPUB</option>
+          <option value="pdf" data-i18n="ft.fmt_pdf"></option>
+          <option value="html">HTML</option>
+          <option value="docx">Word (DOCX)</option>
+          <option value="rtf">RTF</option>
+          <option value="md">Markdown</option>
+        </select>
+        <select name="method">
+          <option value="ocr" data-i18n="ft.method_ocr"></option>
+          <option value="vision" data-i18n="ft.method_vision"></option>
+        </select>
+        <label class="check"><input type="checkbox" name="illustrations" checked>
+          <span data-i18n="ft.illustrations"></span></label>
+        <button class="primary" data-i18n="ft.make"></button>
+        <button type="button" class="link close" id="fulltext-close">×</button>
+        <p class="muted ft-note" id="fulltext-note"></p>
+        <ul id="fulltext-files" class="ft-files"></ul>
       </form>
       <div class="viewer-body">
         <aside class="units">

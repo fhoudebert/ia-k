@@ -128,6 +128,19 @@ explain an error on a screenshot, extract names, dates and amounts, or answer
 a question of yours. When you arrive from a search or a citation, the passage
 is highlighted in yellow on the page.
 
+**Full text.** *Full text…* in the viewer makes, from a scanned PDF (or an
+image, or a PDF with an OCR layer), a light document of real text an e-reader
+can reflow: the library's text (OCR, your corrections, the vision model's
+readings) replaces the pictures of the pages, headings are found from the
+size of the letters, running heads and page numbers go, paragraphs are joined
+across pages, and the illustrations (photographs, engravings, maps) are cut
+out of the pages and kept in place. As EPUB, or PDF on A5 pages, HTML, Word,
+RTF or Markdown, much lighter than the scan (how much depends on the
+illustrations kept).
+For an EPUB made of pictures of scanned pages, each picture of text is read
+(by Tesseract, or the vision model) and replaced by its text; illustrations
+and the cover stay. The result can be saved, or added to the library.
+
 **Reading pages again.** When Tesseract reads a scan badly (old print,
 columns, tables, handwriting), the vision model can do better. In *Analyse
 the page*, *Correct the OCR text from the image* gives it the page and
@@ -265,14 +278,15 @@ Done:
     after it; watched folders, whose new or changed files are imported by
     themselves
 
+15. Documents in full text: the pictures of text of a scanned PDF or EPUB
+    replaced by their text, illustrations kept, as a light EPUB (or PDF,
+    HTML, Word, RTF, Markdown)
+
 Next:
 
-15. **Documents in full text**: in an EPUB or a PDF made of images of text,
-    replace those images by their text (OCR or vision model), leaving the
-    illustrations, to get a light, searchable document an e-reader can
-    reflow.
+16. **The engine frozen in the application**: no `setup_python` step, one
+    download to unzip on the key.
 
 Later:
 
 - Other launchers by use, as needed.
-- The engine frozen in the application (no `setup_python` step).

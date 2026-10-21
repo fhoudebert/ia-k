@@ -60,6 +60,12 @@ def test_detect_language():
     assert translate.detect_language("The marine charts were stored in the east cabinet "
                                      "and the atlas was sent to the binder.") == "en"
     assert translate.detect_language("abc def") is None
+    # "de", "la", "un" are Spanish too: the elisions and "et" tell French
+    assert translate.detect_language("Le registre de la bibliothèque mentionne l'achat de "
+                                     "trois volumes reliés, d'un atlas et de plusieurs cartes "
+                                     "marines au cours de l'année 1712.") == "fr"
+    assert translate.detect_language("El registro de la biblioteca menciona la compra de tres "
+                                     "volúmenes, un atlas y varias cartas en el año 1712.") == "es"
 
 
 def test_split_text_keeps_paragraphs():

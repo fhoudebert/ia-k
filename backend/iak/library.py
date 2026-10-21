@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -196,6 +197,8 @@ class Library:
             db.backup(self.con, self.folder / "backups")
         with self.con:
             self.con.execute("DELETE FROM documents WHERE id=?", (doc_id,))
+        # its full-text versions (fulltext.py) go with it
+        shutil.rmtree(self.folder / "fulltext" / str(doc_id), ignore_errors=True)
         if row["stored_path"]:
             stored = self.folder / row["stored_path"]
             try:

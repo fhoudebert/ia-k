@@ -642,6 +642,8 @@ async function openDoc(docId, unitId = null, passageId = null) {
     $("#analyse-box").hidden = !hasPages;
     $("#viewer-reread").hidden = !hasPages;
     $("#reread-panel").hidden = true;
+    $("#viewer-fulltext").hidden = !(hasPages || doc.kind === "epub");
+    $("#fulltext-panel").hidden = true;
     show("viewer");
     await selectUnit(unitId || (units[0] && units[0].id), passageId);
     await loadAnalyses();
@@ -813,6 +815,75 @@ async function restoreUnit() {
     await refreshUnits();
     await loadAnalyses();
   } catch (e) { fail(e); }
+}
+
+// documents in full text
+
+function sizeLabel(n) {
+  return n >= 1e6
+    ? `${(n / 1e6).toLocaleString(getLang(), { maximumFractionDigits: 1 })} ${t("ft.mb")}`
+    : `${Math.max(1, Math.round(n / 1e3))} ${t("ft.kb")}`;
+}
+
+async function openFulltext() {
+  const f = $("#fulltext-panel");
+  if (!f.hidden) { f.hidden = true; return; }
+  const epub = state.doc.kind === "epub";
+  f.format.hidden = epub;
+  f.method.hidden = !epub;
+  $("#fulltext-note").textContent = t(epub ? "ft.note_epub" : "ft.note_pdf");
+  $("#fulltext-files").replaceChildren();          // not the previous document's
+  f.hidden = false;
+  await loadFulltextFiles();
+}
+
+async function loadFulltextFiles() {
+  if (!state.doc) return;
+  const docId = state.doc.id;
+  const files = await get(`/api/documents/${docId}/fulltext`);
+  $("#fulltext-files").replaceChildren(...files.map((x) => el("li", {},
+    el("strong", {}, x.name), el("span", { class: "muted" }, sizeLabel(x.size)),
+    el("button", { type: "button", class: "link", onclick: () => saveFulltext(docId, x).catch(fail) }, t("book.save")),
+    el("button", { type: "button", class: "link", onclick: async () => {
+      const { job } = await post(`/api/documents/${docId}/fulltext/import`, { name: x.name });
+      toast(t("book.importing"));
+      const done = await waitJob(job);
+      if (done.status === "error") fail(done.error); else toast(t("ft.imported"));
+    } }, t("book.import")),
+    el("button", { type: "button", class: "link danger", onclick: async () => {
+      await request("DELETE", `/api/documents/${docId}/fulltext?name=${encodeURIComponent(x.name)}`);
+      await loadFulltextFiles();
+    } }, t("book.delete")))));
+}
+
+async function saveFulltext(docId, x) {
+  if (!TAURI) { toast(t("tr.export_desktop"), true); return; }
+  const path = await TAURI.dialog.save({ defaultPath: x.name,
+    filters: [{ name: x.format.toUpperCase(), extensions: [x.format] }] });
+  if (!path) return;
+  const r = await post(`/api/documents/${docId}/fulltext/save`, { name: x.name, path });
+  toast(t("export.saved", { path: r.path }));
+}
+
+async function makeFulltext(ev) {
+  ev.preventDefault();
+  if (!state.doc) return;
+  const f = $("#fulltext-panel");
+  const docId = state.doc.id;
+  const button = f.querySelector("button.primary");
+  button.disabled = true;
+  try {
+    const { job } = await post(`/api/documents/${docId}/fulltext`, {
+      format: f.format.value, method: f.method.value, illustrations: f.illustrations.checked });
+    toast(t("ft.running"));
+    const done = await waitJob(job);
+    if (done.status === "error") { fail(done.error); return; }
+    const r = done.result;
+    toast(t("ft.done", { file: r.file, before: sizeLabel(r.size_before), after: sizeLabel(r.size_after),
+                         n: r.illustrations }));
+    if (state.doc && state.doc.id === docId) await loadFulltextFiles();
+  } catch (e) { fail(e); }
+  finally { button.disabled = false; }
 }
 
 async function startReread(ev) {
@@ -1646,6 +1717,9 @@ function wire() {
   $("#viewer-reread").addEventListener("click", () => { $("#reread-panel").hidden = !$("#reread-panel").hidden; });
   $("#reread-close").addEventListener("click", () => { $("#reread-panel").hidden = true; });
   $("#reread-panel").addEventListener("submit", startReread);
+  $("#viewer-fulltext").addEventListener("click", () => openFulltext().catch(fail));
+  $("#fulltext-close").addEventListener("click", () => { $("#fulltext-panel").hidden = true; });
+  $("#fulltext-panel").addEventListener("submit", makeFulltext);
   $("#reread-panel").pages.addEventListener("change", () => {
     $("#reread-threshold-box").hidden = $("#reread-panel").pages.value !== "low";
   });

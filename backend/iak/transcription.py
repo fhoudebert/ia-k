@@ -127,6 +127,17 @@ def _drop_loop(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def transcribe_png(client: Client, png: bytes, max_tokens: int = MAX_TOKENS) -> str:
+    """The text of a picture, read by the vision model alone (not stored)."""
+    content = [{"type": "text", "text": PROMPTS["transcribe"]},
+               {"type": "image_url", "image_url": {
+                   "url": "data:image/png;base64," + base64.b64encode(png).decode("ascii")}}]
+    text = client.chat([{"role": "system", "content": SYSTEM},
+                        {"role": "user", "content": content}],
+                       max_tokens=max_tokens, temperature=0.1, extra=SAMPLING)
+    return _drop_loop(_clean(text))
+
+
 def read_page(lib, client: Client, unit_id: int, method: str = "transcribe",
               max_side: int = DEFAULT_SIDE, max_tokens: int = MAX_TOKENS) -> Reading:
     """Read one page or image again with the vision model; the reading is
