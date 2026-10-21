@@ -60,7 +60,8 @@ Checked on a real exFAT volume: setup, command line and application.
 
 ## Building the application
 
-Requirements: Rust (rustup), Node.js for the Tauri command line, and on Linux
+Requirements: Rust 1.88 or later (rustup; edition 2024, `rust-version`
+in `src-tauri/Cargo.toml`), Node.js for the Tauri command line, and on Linux
 `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`; on Windows the MSVC build
 tools (WebView2 is part of Windows 10 and 11); on macOS the Xcode command
 line tools (`xcode-select --install`).
@@ -124,7 +125,11 @@ kept, names differing only by case refused (exFAT).
 portable zip with its Python and its Tesseract (`setup_python` and
 `build_tesseract.py` run first), kept 30 days as
 the run's *Artifacts* (`ia-k-windows`, `ia-k-linux`, `ia-k-mac`), and the
-`key` job merges them into `ia-k` (`ia-k.zip`, all systems). Check it locally with
+`key` job merges them into `ia-k` (`ia-k.zip`, all systems). The `msrv` job builds and
+tests the application with Rust 1.88 and the locked dependencies. Edition
+2024 picks Cargo's resolver 3, which follows `rust-version`: `cargo update`
+chooses the newest versions that still build with 1.88 (Tauri 2.11 for now,
+2.12 needs 1.90), so raise `rust-version` to take newer ones. Check it locally with
 [actionlint](https://github.com/rhysd/actionlint).
 
 macOS: one universal application (`--target universal-apple-darwin`, Apple
