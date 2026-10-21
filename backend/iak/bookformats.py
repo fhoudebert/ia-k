@@ -205,8 +205,10 @@ def write_pdf(blocks, title: str, lang: str, out: Path) -> None:
     body = html_body(blocks, src=lambda pic: names[id(pic)], width=width)
     story = pymupdf.Story(html=f'<body lang="{lang}">{body}</body>', user_css=css,
                           archive=archive)
-    tmp = out.with_name(out.name + ".part")
-    writer = pymupdf.DocumentWriter(str(tmp))
+    # laid out in memory, then saved once: on Windows a temporary file is still
+    # held by MuPDF when it should be deleted (WinError 32)
+    buf = io.BytesIO()
+    writer = pymupdf.DocumentWriter(buf)
     more, n = 1, 0
     while more:
         dev = writer.begin_page(page)
@@ -218,13 +220,15 @@ def write_pdf(blocks, title: str, lang: str, out: Path) -> None:
             break
     writer.close()
     # page numbers and the document's title and language
-    with pymupdf.open(str(tmp)) as doc:
+    with pymupdf.open(stream=buf.getvalue(), filetype="pdf") as doc:
         doc.set_metadata({"title": title, "producer": "IA-K"})
         for i, p in enumerate(doc, 1):
             p.insert_textbox(pymupdf.Rect(0, page.height - 36, page.width, page.height - 20),
                              str(i), fontsize=8, align=1, color=(0.35, 0.35, 0.35))
-        doc.save(str(out), garbage=3, deflate=True)
-    tmp.unlink()
+        data = doc.tobytes(garbage=3, deflate=True)
+    tmp = out.with_name(out.name + ".part")
+    tmp.write_bytes(data)
+    tmp.replace(out)
 
 
 def write_docx(blocks, title: str, lang: str, out: Path) -> None:
