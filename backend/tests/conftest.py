@@ -1,7 +1,6 @@
 """Test documents are generated, so the repository holds no binary samples."""
 from __future__ import annotations
 
-import shutil
 import zipfile
 from pathlib import Path
 
@@ -9,7 +8,18 @@ import pytest
 
 pymupdf = pytest.importorskip("pymupdf")
 
-HAS_TESSERACT = shutil.which("tesseract") is not None
+
+
+def _has_tesseract() -> bool:
+    """Installed, or carried on the key (scripts/build_tesseract.py)."""
+    from iak import ocr
+    try:
+        return "fra" in ocr.available_langs()
+    except Exception:
+        return False
+
+
+HAS_TESSERACT = _has_tesseract()
 
 
 @pytest.fixture(autouse=True)

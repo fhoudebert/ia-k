@@ -72,8 +72,10 @@ suits exFAT keys that may be unplugged.
   rendered at 300 dpi and read by Tesseract; images always are, small
   screenshots enlarged twice first. Word boxes and confidence are kept, for
   highlighting passages and spotting doubtful pages. Tesseract is looked for
-  in `build/tesseract/`, `IAK_TESSERACT`, the `PATH`, then
-  `C:\Program Files\Tesseract-OCR`.
+  in `--tesseract` / `IAK_TESSERACT`, on the key (`build/tesseract/<os>/`,
+  run with `TESSDATA_PREFIX` set to the shared `build/tesseract/tessdata`),
+  the `PATH`, then the usual places (`C:\Program Files\Tesseract-OCR`,
+  Homebrew, MacPorts).
 - **Corrections.** A corrected unit is reindexed alone; the extracted text is
   kept beside it, and extracting again keeps the correction.
 - **Duplicates.** A file whose content is already in the library is not

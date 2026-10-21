@@ -14,8 +14,9 @@ ne part sur Internet.
   fonctionne sous **Windows, Linux et macOS**, y compris depuis la même clé
   exFAT, avec une bibliothèque commune.
 - **Sans installation** : on décompresse un seul fichier (`ia-k.zip`, tous
-  systèmes) sur la clé, Python et moteur compris ; rien n'est écrit sur
-  l'ordinateur. Seul un Mac Intel demande une fois `setup_python.sh`.
+  systèmes) sur la clé, Python, moteur et OCR compris ; rien n'est écrit sur
+  l'ordinateur. Seul un Mac Intel demande une fois `setup_python.sh` (et
+  Tesseract par Homebrew).
 - **Modèles locaux** au format GGUF, servis par llama.cpp (`llama-server`) :
   Gemma 4 pour les réponses, EmbeddingGemma pour la recherche par le sens,
   TranslateGemma pour la traduction, Qwen3-VL pour la lecture des pages.
@@ -31,9 +32,10 @@ ne part sur Internet.
 - Import de **PDF, scans, images, captures d'écran, EPUB, DOCX, HTML, TXT et
   Markdown**, par bouton ou glisser-déposer ; copie dans la bibliothèque ou
   simple référence au fichier.
-- **OCR** (Tesseract) des pages scannées, avec la confiance de lecture de
-  chaque page ; langues réglables (`fra+eng`, `fra+frm` pour le moyen
-  français…).
+- **OCR** (Tesseract, fourni sur la clé avec le français, l'anglais, le
+  moyen français et le latin) des pages scannées, avec la confiance de
+  lecture de chaque page ; langues réglables (`fra+eng`, `fra+frm` pour le
+  moyen français…).
 - **Dossiers** : « Importer un dossier… » (ou déposer un dossier sur la
   fenêtre) référence tous ses documents, sous-dossiers compris, dans une
   collection du nom du dossier. Un dossier **surveillé** est examiné chaque

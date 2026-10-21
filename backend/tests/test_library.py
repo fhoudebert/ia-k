@@ -242,6 +242,7 @@ def test_pdf_without_tesseract_keeps_native_pages(lib, tmp_path, monkeypatch):
     # the usual places, where a CI runner has Tesseract installed
     monkeypatch.setattr("iak.ocr.WINDOWS_DEFAULTS", [])
     monkeypatch.setattr("iak.ocr.MAC_DEFAULTS", [])
+    monkeypatch.setattr("iak.ocr.KEY", str(tmp_path / "no-key"))   # nor on the key
     r = lib.import_file(path)
     assert r.status == "imported" and "OCR unavailable" in r.message
     assert search.search(lib.con, "reliure")

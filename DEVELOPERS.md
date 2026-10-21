@@ -78,6 +78,7 @@ python scripts/make_portable.py --os mac --python \
     --exe src-tauri/target/universal-apple-darwin/release/bundle/macos/IA-K.app
 # one key for all systems, from the three zips (Linux first)
 python scripts/merge_portable.py dist/ia-k-linux.zip dist/ia-k-mac.zip dist/ia-k-windows.zip
+python scripts/build_tesseract.py             # build/tesseract, for --tesseract
 ```
 
 `make_portable.py` assembles `dist/ia-k-<os>/` and its zip: the application,
@@ -90,7 +91,26 @@ the standard library and of the packages, `idlelib`, `tkinter`, Tcl/Tk,
 `ensurepip`, `lib2to3`, `share/terminfo` and `share/man`; pip stays, for
 `setup_python` updates. It then imports the engine and its packages with the
 copied Python (`--no-check` skips it). About 215 MB unzipped, 80 MB zipped,
-per system. Builds are made on each system.
+per system. With `--tesseract` it adds the Tesseract of this system and the
+shared language data, and lists its languages with it. Builds are made on
+each system.
+
+## Portable Tesseract
+
+`scripts/build_tesseract.py` builds Tesseract 5.5.3 from its sources (git
+clones at fixed commits, checked) with CMake: zlib, libpng and Leptonica
+(PNG only: IA-K gives it PNG images) linked statically, without OpenMP,
+network, archives, TIFF or training tools, the C++ runtime linked in too
+(`-static-libstdc++` on Linux, `/MT` with Visual Studio). The result is one
+program of about 7 MB, `build/tesseract/<os>/tesseract[.exe]`, that needs
+only the system's C library; its SIMD code is chosen when it runs
+(`ENABLE_NATIVE` off). Built on `ubuntu-22.04`, it runs on any Linux with
+glibc 2.35 or later. The language data, `build/tesseract/tessdata`, is the
+standard models of tessdata 4.1.0 (fra, eng, frm, lat, checked against
+their SHA-256) with the output configs Tesseract needs (`tsv`); one copy
+serves all systems. About 5 minutes per system; CI keeps `build/tesseract`
+in its cache until the script changes. `iak.ocr` finds it before an
+installed Tesseract and runs it with `TESSDATA_PREFIX` set to that folder.
 
 `merge_portable.py` merges the zips into `dist/ia-k.zip` (folder `ia-k/`):
 shared files once (they must match, line endings aside), executable bits
@@ -101,7 +121,8 @@ kept, names differing only by case refused (exFAT).
 `.github/workflows/ci.yml` runs on every push, on `ubuntu-22.04` /
 `ubuntu-latest`, `windows-latest` and `macos-latest`: the engine tests
 (Tesseract with French data), the Rust tests, a release build and the
-portable zip with its Python (`setup_python` runs first), kept 30 days as
+portable zip with its Python and its Tesseract (`setup_python` and
+`build_tesseract.py` run first), kept 30 days as
 the run's *Artifacts* (`ia-k-windows`, `ia-k-linux`, `ia-k-mac`), and the
 `key` job merges them into `ia-k` (`ia-k.zip`, all systems). Check it locally with
 [actionlint](https://github.com/rhysd/actionlint).
@@ -116,7 +137,8 @@ installs the `aarch64-` or `x86_64-apple-darwin` build of
 python-build-standalone of the Mac it runs on, and renames the
 `build/python/mac` of earlier versions when it is of that processor; until
 then the application and `iak.sh` still use it). The CI runner is an Apple
-silicon Mac, so `ia-k-mac.zip` holds `mac-aarch64` only.
+silicon Mac, so `ia-k-mac.zip` holds `mac-aarch64` only, for Python and for
+Tesseract (`build/tesseract/mac-aarch64`).
 
 ## Tests
 

@@ -63,7 +63,9 @@ echo [2/3] Installing packages (backend\requirements.lock)
 
 echo [3/3] Checking
 "%PY%" -c "import pymupdf, docx, numpy, bs4, sqlite3; c = sqlite3.connect(':memory:'); c.execute('create virtual table t using fts5(x)'); print('PyMuPDF', pymupdf.__version__, '- numpy', numpy.__version__, '- SQLite', sqlite3.sqlite_version, 'with FTS5')" || goto fail
-if exist "%ROOT%build\tesseract\tesseract.exe" (
+if exist "%ROOT%build\tesseract\windows\tesseract.exe" (
+    echo Tesseract: on the key, build\tesseract\windows
+) else if exist "%ROOT%build\tesseract\tesseract.exe" (
     echo Tesseract: build\tesseract\tesseract.exe
 ) else (
     where tesseract.exe >nul 2>nul && echo Tesseract found in PATH

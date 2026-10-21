@@ -11,9 +11,12 @@ the backend, the setup scripts, the server launchers and the documentation.
 With --python, the portable Python installed by setup_python.* (build/python/
 <os>, every build/python/mac-* on macOS) goes in too, so that the key works
 once unzipped; its bytecode caches, test suites and Tk are left out, and the
-copy is checked by importing the engine with it. Tesseract, the models and
-the library are never included. The interface (app/) is inside the
-application, it is not copied.
+copy is checked by importing the engine with it. With --tesseract, the
+Tesseract built by scripts/build_tesseract.py (build/tesseract/<os>, every
+mac-* on macOS) and the shared language data (build/tesseract/tessdata) go
+in too, checked by listing its languages. The models and the library are
+never included. The interface (app/) is inside the application, it is not
+copied.
 """
 from __future__ import annotations
 
@@ -128,6 +131,28 @@ def copy_python(src: Path, dst: Path) -> int:
     return size
 
 
+def tesseract_dirs(os_name: str, base: Path) -> list[Path]:
+    """The portable Tesseracts built for this system."""
+    exe = "tesseract.exe" if os_name == "windows" else "tesseract"
+    found = sorted(base.glob("mac-*")) if os_name == "mac" else [base / os_name]
+    found = [p for p in found if (p / exe).is_file()]
+    if not found:
+        raise SystemExit(f"no portable Tesseract in {base}: run scripts/build_tesseract.py")
+    if not (base / "tessdata" / "configs" / "tsv").is_file():
+        raise SystemExit(f"no language data in {base / 'tessdata'}: run "
+                         "scripts/build_tesseract.py --data-only")
+    return found
+
+
+def check_tesseract(exe: Path, tessdata: Path) -> None:
+    env = dict(os.environ, TESSDATA_PREFIX=str(tessdata))
+    r = subprocess.run([str(exe), "--list-langs"], env=env, capture_output=True, text=True)
+    langs = [ln.strip() for ln in (r.stdout or r.stderr).splitlines()[1:] if ln.strip()]
+    if r.returncode or "fra" not in langs:
+        raise SystemExit(f"the portable Tesseract {exe} fails:\n{r.stdout}{r.stderr}")
+    print(f"{exe.parent.name}: Tesseract ok, languages {' '.join(langs)}")
+
+
 def check_python(folder: Path, py_dir: Path) -> None:
     exe = py_dir / ("python.exe" if (py_dir / "python.exe").exists() else "bin/python3.12")
     env = dict(os.environ, PYTHONPATH=str(folder / "backend"), PYTHONDONTWRITEBYTECODE="1",
@@ -141,7 +166,8 @@ def check_python(folder: Path, py_dir: Path) -> None:
 
 
 def make(exe: Path, os_name: str, out: Path, zip_it: bool = True,
-         python: Path | None = None, check: bool = True) -> Path:
+         python: Path | None = None, check: bool = True,
+         tesseract: Path | None = None) -> Path:
     if not (exe.is_dir() if os_name == "mac" else exe.is_file()):
         raise SystemExit(f"application not found: {exe}")
     folder = out / f"ia-k-{os_name}"
@@ -170,6 +196,19 @@ def make(exe: Path, os_name: str, out: Path, zip_it: bool = True,
             print(f"{src.name}: {size / 1e6:.0f} MB of Python copied")
             if check:
                 check_python(folder, dst)
+    if tesseract is not None:
+        dirs = tesseract_dirs(os_name, tesseract)
+        for src in dirs + [tesseract / "tessdata"]:
+            dst = folder / "build" / "tesseract" / src.name
+            shutil.copytree(src, dst)
+            print(f"{src.name}: Tesseract files copied")
+        for src in dirs:
+            exe = folder / "build" / "tesseract" / src.name
+            exe = exe / ("tesseract.exe" if os_name == "windows" else "tesseract")
+            if os_name != "windows":
+                exe.chmod(exe.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            if check:
+                check_tesseract(exe, folder / "build" / "tesseract" / "tessdata")
     if os_name in ("linux", "mac"):
         exes = [r for r in BY_OS[os_name] if r.endswith(".sh")]
         exes.append(f"{name}/Contents/MacOS/ia-k" if os_name == "mac" else name)
@@ -204,11 +243,14 @@ def main() -> int:
     ap.add_argument("--python", nargs="?", type=Path, const=ROOT / "build" / "python",
                     metavar="DIR", help="include the portable Python installed by setup_python "
                     "(from build/python, or DIR)")
+    ap.add_argument("--tesseract", nargs="?", type=Path, const=ROOT / "build" / "tesseract",
+                    metavar="DIR", help="include the Tesseract built by "
+                    "scripts/build_tesseract.py and its languages (from build/tesseract, or DIR)")
     ap.add_argument("--no-check", action="store_true",
-                    help="do not run the included Python (built for another processor)")
+                    help="do not run the included Python and Tesseract (another processor)")
     args = ap.parse_args()
     result = make(args.exe, args.os_name, args.out, not args.no_zip, args.python,
-                  not args.no_check)
+                  not args.no_check, args.tesseract)
     size = result.stat().st_size if result.is_file() else sum(
         p.stat().st_size for p in result.rglob("*") if p.is_file())
     print(f"{result} ({size / 1e6:.1f} MB)")

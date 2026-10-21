@@ -177,14 +177,7 @@ impl Backend {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::from(log));
-        let tess = root.join("build").join("tesseract");
-        let tess_exe = tess.join(if cfg!(windows) { "tesseract.exe" } else { "tesseract" });
-        if tess_exe.is_file() {
-            cmd.env("IAK_TESSERACT", &tess_exe);
-            if tess.join("tessdata").is_dir() {
-                cmd.env("TESSDATA_PREFIX", tess.join("tessdata"));
-            }
-        }
+        // the Tesseract of the key (build/tesseract/) is found by the engine
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

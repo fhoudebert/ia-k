@@ -32,13 +32,16 @@ architecture).
   Gemma 4 for answers and EmbeddingGemma for search by meaning. IA-K does
   not start them; [SERVERS.md](SERVERS.md) explains how, with ready-made
   launchers.
-- **Tesseract** for scans and images: on Windows the
-  [UB Mannheim installer](https://github.com/UB-Mannheim/tesseract/wiki)
-  (tick French), on Linux `sudo apt install tesseract-ocr tesseract-ocr-fra`,
-  on macOS `brew install tesseract tesseract-lang` ([Homebrew](https://brew.sh)).
-  Without it, documents with real text still work.
-- About 250 MB on the key for each system (application and its Python),
-  plus your documents.
+- Nothing else for scans and images: the zips carry
+  [Tesseract](https://github.com/tesseract-ocr/tesseract) with French,
+  English, Middle French and Latin. On an Intel Mac, which it does not cover
+  yet, install it with `brew install tesseract tesseract-lang`
+  ([Homebrew](https://brew.sh)); a Tesseract installed on the computer is
+  used too when the key has none. Without any, documents with real text
+  still work.
+- About 260 MB on the key for each system (application, its Python and its
+  Tesseract) and 65 MB of language data shared by all, plus your
+  documents.
 
 ## Installing on a key or a disk
 
@@ -234,7 +237,7 @@ Good to know:
 | Chat, Meaning or Translation shown in red at the top | The model server is not running or not at that address: start it, check *Settings*. |
 | An error mentioning `ErrorOutOfDeviceMemory` or "graphics memory" | The model server ran out of graphics memory: see [SERVERS.md, Memory](SERVERS.md#memory). |
 | "The documents do not allow an answer" | Nothing relevant was found: rephrase, check the document is indexed, or try *Search* first. |
-| Scans give no text | Tesseract is missing or lacks the language: *Settings* lists the installed languages. |
+| Scans give no text | Tesseract is missing or lacks the language: *Settings* shows which Tesseract is used and its languages (on the key: `fra`, `eng`, `frm`, `lat`). |
 | Linux key: "cannot run, mounted noexec" | Remount the key with the `exec` option. |
 | macOS: "IA-K cannot be opened" or "is damaged" | The download is quarantined: `xattr -dr com.apple.quarantine` on the IA-K folder, then open it again. |
 
@@ -292,9 +295,13 @@ Done:
     the engine with it; `ia-k.zip` merges the three systems into one key.
     No `setup_python` step, except on an Intel Mac
 
+17. Tesseract on the key: built from its sources by CI, as one program per
+    system with nothing to install, and the standard language data for
+    French, English, Middle French and Latin, shared by all systems
+
 Next:
 
-- Tesseract on the key too, for scans on a computer without it.
+- More languages for Tesseract on the key, chosen when building it.
 
 Later:
 
