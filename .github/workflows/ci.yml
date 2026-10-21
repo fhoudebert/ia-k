@@ -1,7 +1,7 @@
 # IA-K: tests and builds on Linux, Windows and macOS.
 # - backend: Python tests (Tesseract with French data installed for the OCR tests)
-# - desktop: Rust tests, release build, portable folder with its Python as a
-#   downloadable zip for each system
+# - desktop: Rust tests, release build, portable folder with its Python and its
+#   Tesseract as a downloadable zip for each system
 # - key: the three zips merged into one key for all systems (ia-k.zip)
 # Runs on every push and pull request, and by hand (Actions > CI > Run workflow).
 name: CI
@@ -136,8 +136,18 @@ jobs:
         shell: cmd
         run: call setup_python.bat
 
+      # Tesseract built from its sources, statically (about 5 minutes), kept
+      # between runs until the script changes
+      - uses: actions/cache@v5
+        with:
+          path: build/tesseract
+          key: tesseract-${{ matrix.portable }}-${{ runner.arch }}-${{ hashFiles('scripts/build_tesseract.py') }}
+
+      - name: Portable Tesseract
+        run: python scripts/build_tesseract.py
+
       - name: Portable folder
-        run: python scripts/make_portable.py --exe ${{ matrix.exe }} --os ${{ matrix.portable }} --python
+        run: python scripts/make_portable.py --exe ${{ matrix.exe }} --os ${{ matrix.portable }} --python --tesseract
 
       - uses: actions/upload-artifact@v7
         with:
