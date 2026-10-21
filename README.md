@@ -37,24 +37,29 @@ architecture).
   (tick French), on Linux `sudo apt install tesseract-ocr tesseract-ocr-fra`,
   on macOS `brew install tesseract tesseract-lang` ([Homebrew](https://brew.sh)).
   Without it, documents with real text still work.
-- About 300 MB on the key for each system, plus your documents.
+- About 250 MB on the key for each system (application and its Python),
+  plus your documents.
 
 ## Installing on a key or a disk
 
-1. **Get IA-K.** Download `ia-k-windows.zip`, `ia-k-linux.zip` or
-   `ia-k-mac.zip` (GitHub, *Actions* tab, last successful *CI* run,
-   *Artifacts*), or build it ([DEVELOPERS.md](DEVELOPERS.md)). Unzip it at
-   the root of the key, for instance `E:\ia-k`, `/media/me/KEY/ia-k` or
-   `/Volumes/KEY/ia-k`. The zips can be unzipped in the same folder: the
-   systems then share the library.
-2. **Install its Python** (once per system, needs internet):
-   `setup_python.bat` on Windows, `./setup_python.sh` on Linux and macOS
-   (in the Terminal). It puts a complete Python in `build/python/` without
-   touching the computer; it can be run again safely.
+1. **Get IA-K and unzip it.** Download `ia-k.zip`, the key for all
+   systems, or only `ia-k-windows.zip`, `ia-k-linux.zip` or `ia-k-mac.zip`
+   (GitHub, *Actions* tab, last successful *CI* run, *Artifacts*), or build
+   it ([DEVELOPERS.md](DEVELOPERS.md)). Unzip it at the root of the key, for
+   instance `E:\ia-k`, `/media/me/KEY/ia-k` or `/Volumes/KEY/ia-k`. Each zip
+   holds the application and its engine with their own Python: nothing else
+   to install, nothing written on the computer. Zips of several systems can
+   be unzipped in the same folder: the systems then share the library.
 
    On macOS, IA-K is not signed by an identified developer: before the first
    start, run once in the Terminal `xattr -dr com.apple.quarantine
    /Volumes/KEY/ia-k` (your folder), or right-click `IA-K.app` → *Open*.
+2. **Intel Mac only**: the zip holds the Python of Apple silicon Macs. Run
+   once, in the Terminal, `./setup_python.sh` (needs internet): it adds the
+   Intel one next to it in `build/python/`, so the key then serves both.
+   The same script (`setup_python.bat` on Windows) updates the Python of a
+   key, or installs it in a folder built from the sources; it can be run
+   again safely.
 3. **Say where the model servers are.** With the usual ports (chat 8080,
    meaning 8081, vision 8082, translation 8083) there is nothing to do.
    Otherwise fill in *Settings*, or copy `config/servers.example.toml` to
@@ -82,7 +87,7 @@ The folder then looks like this:
 ia-k/
 ├── ia-k.exe  ia-k  IA-K.app the application (Windows, Linux, macOS)
 ├── backend/                 the engine (Python), started by the application
-├── build/python/            portable Python, one folder per system
+├── build/python/            portable Python, one folder per system (two for Macs)
 ├── config/servers.toml      where the model servers are, per computer
 ├── data/                    your library: database, copies of your files, backups
 ├── server/                  launchers for the model servers, their settings
@@ -225,7 +230,7 @@ Good to know:
 
 | What you see | What to do |
 |---|---|
-| "The IA-K engine could not start" | Run `setup_python` on this system; read `data/iak-backend.log`. |
+| "The IA-K engine could not start" | Read `data/iak-backend.log`; if `build/python/` has no folder for this system (an Intel Mac, a folder built from the sources), run `setup_python` once. |
 | Chat, Meaning or Translation shown in red at the top | The model server is not running or not at that address: start it, check *Settings*. |
 | An error mentioning `ErrorOutOfDeviceMemory` or "graphics memory" | The model server ran out of graphics memory: see [SERVERS.md, Memory](SERVERS.md#memory). |
 | "The documents do not allow an answer" | Nothing relevant was found: rephrase, check the document is indexed, or try *Search* first. |
@@ -282,10 +287,14 @@ Done:
     replaced by their text, illustrations kept, as a light EPUB (or PDF,
     HTML, Word, RTF, Markdown)
 
+16. The engine on the key: each zip holds its Python with the engine's
+    packages (without test suites, caches or Tk), checked in CI by importing
+    the engine with it; `ia-k.zip` merges the three systems into one key.
+    No `setup_python` step, except on an Intel Mac
+
 Next:
 
-16. **The engine frozen in the application**: no `setup_python` step, one
-    download to unzip on the key.
+- Tesseract on the key too, for scans on a computer without it.
 
 Later:
 

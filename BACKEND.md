@@ -11,7 +11,7 @@ interface uses.
 ## Command line
 
 `iak.bat` on Windows, `./iak.sh` on Linux, at the root of the IA-K folder
-(they use the portable Python installed by `setup_python`):
+(they use the portable Python of the key, in `build/python/`):
 
 ```
 ./iak.sh import ~/docs/*.pdf scans/page12.png     # copied into the library

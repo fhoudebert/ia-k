@@ -8,15 +8,20 @@ application, for a key or a disk.
 
 Result: dist/ia-k-<os>/ (and dist/ia-k-<os>.zip) holding the application,
 the backend, the setup scripts, the server launchers and the documentation.
-The portable Python, Tesseract, the models and the library are not included:
-setup_python.* installs Python on the key, the rest stays outside.
-The interface (app/) is inside the application, it is not copied.
+With --python, the portable Python installed by setup_python.* (build/python/
+<os>, every build/python/mac-* on macOS) goes in too, so that the key works
+once unzipped; its bytecode caches, test suites and Tk are left out, and the
+copy is checked by importing the engine with it. Tesseract, the models and
+the library are never included. The interface (app/) is inside the
+application, it is not copied.
 """
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import stat
+import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -43,6 +48,19 @@ BY_OS["mac"] = list(BY_OS["linux"])
 APP_NAME = {"windows": "ia-k.exe", "linux": "ia-k", "mac": "IA-K.app"}
 SKIP_DIRS = {"__pycache__", "tests", ".pytest_cache"}
 
+# Left out of the portable Python: unused by IA-K, and the bytecode caches
+# would be stale anyway (a zip keeps times to 2 seconds, so Python rebuilds
+# them on the key at the first start).
+PY_SKIP_STDLIB = {"__pycache__", "idlelib", "tkinter", "turtledemo", "ensurepip", "lib2to3",
+                  "test"}
+PY_SKIP_TCL = ("tcl", "tk", "itcl", "thread")   # Tcl/Tk data: lib/tcl9.0..., tcl/
+PY_SKIP_PACKAGE = {"tests", "test"}            # test suites inside site-packages
+# what the engine imports, checked with the copied Python
+CHECK = ("import encodings, sqlite3, ssl, pip._internal.cli.main, pymupdf, docx, numpy, bs4, "
+         "lxml.etree, iak.api, iak.book, iak.fulltext, iak.translate, iak.folders; "
+         "sqlite3.connect(':memory:').execute('create virtual table t using fts5(x)'); "
+         "print('engine ok:', pymupdf.__version__, numpy.__version__)")
+
 
 def copy_tree(src: Path, dst: Path) -> None:
     for path in sorted(src.rglob("*")):
@@ -57,7 +75,73 @@ def copy_tree(src: Path, dst: Path) -> None:
             shutil.copy2(path, target)
 
 
-def make(exe: Path, os_name: str, out: Path, zip_it: bool = True) -> Path:
+def python_dirs(os_name: str, base: Path) -> list[Path]:
+    """The installed portable Pythons for this system, complete ones only."""
+    if os_name == "mac":
+        found = sorted(p for p in base.glob("mac-*") if p.is_dir())
+    else:
+        found = [base / os_name]
+    for p in found:
+        if not (p / ".complete").is_file():
+            raise SystemExit(f"no complete portable Python in {p}: run setup_python first")
+    if not found:
+        raise SystemExit(f"no portable Python in {base}: run setup_python.sh first")
+    return found
+
+
+def python_skipped(rel: Path, is_dir: bool) -> bool:
+    """Paths left out, inside a python-build-standalone tree: Linux and macOS
+    (lib/python3.12/..., lib/tcl9.0) or Windows (Lib/..., tcl/)."""
+    parts = [p.lower() for p in rel.parts]
+    if "__pycache__" in parts or rel.suffix in (".pyc", ".pyo"):
+        return True
+    dirs = parts if is_dir else parts[:-1]
+    # names differing only by case (exFAT keys), as setup_python.sh drops them
+    if dirs[:2] in (["share", "terminfo"], ["share", "man"]):
+        return True
+    # Tcl/Tk data, used only by tkinter
+    if dirs[:1] == ["tcl"] or (dirs[:1] == ["lib"] and len(dirs) > 1
+                               and dirs[1].startswith(PY_SKIP_TCL)):
+        return True
+    if "site-packages" in dirs:
+        inside = dirs[dirs.index("site-packages") + 1:]
+        return any(p in PY_SKIP_PACKAGE for p in inside[1:])
+    # the standard library: lib/python3.12/<name> or Lib/<name>
+    stdlib = dirs[2:3] if dirs[:1] == ["lib"] and dirs[1:2] and dirs[1].startswith("python3") \
+        else dirs[1:2] if dirs[:1] == ["lib"] else []
+    return bool(stdlib) and stdlib[0] in PY_SKIP_STDLIB
+
+
+def copy_python(src: Path, dst: Path) -> int:
+    size = 0
+    for path in sorted(src.rglob("*")):
+        rel = path.relative_to(src)
+        if path.is_symlink() or python_skipped(rel, path.is_dir()):
+            continue
+        target = dst / rel
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+            size += path.stat().st_size
+    return size
+
+
+def check_python(folder: Path, py_dir: Path) -> None:
+    exe = py_dir / ("python.exe" if (py_dir / "python.exe").exists() else "bin/python3.12")
+    env = dict(os.environ, PYTHONPATH=str(folder / "backend"), PYTHONDONTWRITEBYTECODE="1",
+               PYTHONNOUSERSITE="1", PYTHONUTF8="1")
+    env.pop("PYTHONHOME", None)
+    r = subprocess.run([str(exe), "-s", "-c", CHECK], env=env, cwd=folder,
+                       capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit(f"the portable Python in {py_dir} fails:\n{r.stderr.strip()}")
+    print(f"{py_dir.name}: {r.stdout.strip()}")
+
+
+def make(exe: Path, os_name: str, out: Path, zip_it: bool = True,
+         python: Path | None = None, check: bool = True) -> Path:
     if not (exe.is_dir() if os_name == "mac" else exe.is_file()):
         raise SystemExit(f"application not found: {exe}")
     folder = out / f"ia-k-{os_name}"
@@ -79,6 +163,13 @@ def make(exe: Path, os_name: str, out: Path, zip_it: bool = True) -> Path:
             (folder / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, folder / rel)
     (folder / "data").mkdir()
+    if python is not None:
+        for src in python_dirs(os_name, python):
+            dst = folder / "build" / "python" / src.name
+            size = copy_python(src, dst)
+            print(f"{src.name}: {size / 1e6:.0f} MB of Python copied")
+            if check:
+                check_python(folder, dst)
     if os_name in ("linux", "mac"):
         exes = [r for r in BY_OS[os_name] if r.endswith(".sh")]
         exes.append(f"{name}/Contents/MacOS/ia-k" if os_name == "mac" else name)
@@ -110,8 +201,14 @@ def main() -> int:
     ap.add_argument("--os", required=True, choices=sorted(BY_OS), dest="os_name")
     ap.add_argument("--out", type=Path, default=ROOT / "dist")
     ap.add_argument("--no-zip", action="store_true")
+    ap.add_argument("--python", nargs="?", type=Path, const=ROOT / "build" / "python",
+                    metavar="DIR", help="include the portable Python installed by setup_python "
+                    "(from build/python, or DIR)")
+    ap.add_argument("--no-check", action="store_true",
+                    help="do not run the included Python (built for another processor)")
     args = ap.parse_args()
-    result = make(args.exe, args.os_name, args.out, not args.no_zip)
+    result = make(args.exe, args.os_name, args.out, not args.no_zip, args.python,
+                  not args.no_check)
     size = result.stat().st_size if result.is_file() else sum(
         p.stat().st_size for p in result.rglob("*") if p.is_file())
     print(f"{result} ({size / 1e6:.1f} MB)")

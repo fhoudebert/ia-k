@@ -4,10 +4,12 @@
 #
 #  Installs a complete, relocatable CPython (python-build-standalone,
 #  stripped build, about 100 MB; 260 MB with the packages) in
-#  build/python/linux (build/python/mac on a Mac) and the packages of
+#  build/python/linux (build/python/mac-aarch64 or mac-x86_64 on a Mac, one
+#  per processor, so one key serves both kinds of Mac) and the packages of
 #  backend/requirements.lock into it. Unlike a venv, it does not depend on the
-#  Python of the computer: the key works on any x86-64 Linux, or any Mac of
-#  the same processor family (Apple silicon or Intel). Windows has its own
+#  Python of the computer: the key works on any x86-64 Linux, or any Mac.
+#  The zips built by CI already hold it (Apple silicon only for macOS): this
+#  is then only needed to update it, or on an Intel Mac. Windows has its own
 #  copy (setup_python.bat); all can live side by side on the same key.
 #
 #  Safe to run again: an existing Python is kept, packages are brought to
@@ -44,11 +46,21 @@ sha256_check() {
 }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEST="$ROOT/build/python/$OS"
+if [ "$OS" = mac ]; then DEST="$ROOT/build/python/mac-${TRIPLE%%-*}"; else DEST="$ROOT/build/python/$OS"; fi
 PY="$DEST/bin/python3.12"
 
 if [ "${1:-}" = "--force" ]; then
     rm -rf "$DEST"
+fi
+# Earlier versions installed the Mac Python in build/python/mac: if it is the
+# build of this processor, it is moved (same drive, instant) to its new name.
+OLD="$ROOT/build/python/mac"
+if [ "$OS" = mac ] && [ ! -d "$DEST" ] && [ -f "$OLD/.complete" ]; then
+    want="${TRIPLE%%-*}"; [ "$want" = aarch64 ] && want=arm64
+    if [ "$("$OLD/bin/python3.12" -c 'import platform; print(platform.machine())' 2>/dev/null)" = "$want" ]; then
+        echo "[1/3] Moving build/python/mac to ${DEST#"$ROOT/"}"
+        mv "$OLD" "$DEST"
+    fi
 fi
 # A Python is kept only with the marker of a finished install: an
 # interrupted one (files missing) is installed again.

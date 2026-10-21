@@ -13,8 +13,9 @@ ne part sur Internet.
 - **Portable** : IA-K tient dans un dossier, sur une clé USB ou un disque, et
   fonctionne sous **Windows, Linux et macOS**, y compris depuis la même clé
   exFAT, avec une bibliothèque commune.
-- **Sans installation sur l'ordinateur** : un Python complet est installé sur
-  la clé (`setup_python`), une fois par système.
+- **Sans installation** : on décompresse un seul fichier (`ia-k.zip`, tous
+  systèmes) sur la clé, Python et moteur compris ; rien n'est écrit sur
+  l'ordinateur. Seul un Mac Intel demande une fois `setup_python.sh`.
 - **Modèles locaux** au format GGUF, servis par llama.cpp (`llama-server`) :
   Gemma 4 pour les réponses, EmbeddingGemma pour la recherche par le sens,
   TranslateGemma pour la traduction, Qwen3-VL pour la lecture des pages.
