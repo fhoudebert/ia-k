@@ -1,11 +1,12 @@
 """Doubtful OCR words: confidence, the library's vocabulary, odd letters; the
 pages worth reading again; their correction by the text model."""
 import json
+import re
 import threading
 
 import pytest
 
-from iak import api, doubt, servers, transcription
+from iak import api, correction, doubt, servers, transcription
 from iak.analyze import AnalysisError
 from iak.library import Library
 
@@ -81,12 +82,17 @@ def test_word_lists(lib, tmp_path, monkeypatch):
     assert "rnarines" not in {s["word"] for s in doubt.unit(lib, unit)["suspects"]}
 
 
+FIXES = {"reliéur": "relieur", "at1as": "atlas", "rnarines": "marines"}
+
+
 def fix_reply(req):
+    """The fake text model: one line per numbered doubtful word."""
     prompt = req["messages"][-1]["content"]
-    assert isinstance(prompt, str) and "⟦" in prompt      # text only, doubtful words marked
-    page = prompt.split("<ocr>\n", 1)[1].split("\n</ocr>")[0]
-    return (page.replace("⟦reliéur⟧", "relieur").replace("⟦at1as⟧", "atlas")
-            .replace("⟦rnarines⟧", "marines"))
+    assert isinstance(prompt, str)                        # text only
+    out = []
+    for m in re.finditer(r"^(\d+)\. .*?⟦(.+?)⟧", prompt, re.M):
+        out.append(f"{m.group(1)}: {FIXES.get(m.group(2), m.group(2))}")
+    return "\n".join(out)
 
 
 def test_fix_with_the_text_model(lib):
@@ -94,8 +100,13 @@ def test_fix_with_the_text_model(lib):
     chat = FakeChat(vision=False, reply=fix_reply)
     try:
         r = transcription.read_page(lib, chat.client(), unit, "fix")
-        assert r.method == "fix" and "relieur a reçu l'atlas des cartes marines" in r.text
-        assert "⟦" not in r.text and 0.7 < r.score < 1
+        assert r.method == "fix" and r.text == OCR.replace("reliéur", "relieur").replace(
+            "at1as", "atlas").replace("rnarines", "marines")
+        assert 0.7 < r.score < 1
+        src = json.loads(lib.con.execute("SELECT sources FROM analyses WHERE id=?",
+                                         (r.id,)).fetchone()[0])
+        assert src["kept"] == 3 and src["refused"] == 0
+        assert {c["word"]: c["new"] for c in src["changes"]} == FIXES
         transcription.apply(lib, r.id)
         assert lib.units(doc)[0]["text"] == r.text
         assert transcription.page_reader(lib, unit)["task"] == "fix"
@@ -143,13 +154,73 @@ def test_api(tmp_path, native_pdf):
         chat.close()
 
 
-def test_only_the_marked_words_change():
-    old = "Le reliéur a\nreçu l'at1as des cartes."
-    sus = [{"start": 3, "end": 10}, {"start": 20, "end": 25}]          # reliéur, at1as
-    assert old[3:10] == "reliéur" and old[20:25] == "at1as"
-    # the model also changed "cartes" and joined the lines: only the marked words stay
-    new = "Le relieur a reçu l'atlas des Cartes."
-    assert transcription.only_marked(old, new, sus) == "Le relieur a\nreçu l'atlas des cartes."
-    # a doubtful word split in two by the model
-    assert transcription.only_marked("un motjoint ici", "un mot joint ici",
-                                     [{"start": 3, "end": 11}]) == "un mot joint ici"
+def test_judging_the_proposals():
+    vocab = {"atlas", "relieur", "mot", "joint", "arrêtera"}
+    assert correction.judge("at1as", "atlas", vocab) == "known"
+    assert correction.judge("francais", "français", set()) == "close"     # one letter
+    assert correction.judge("arréle", "arrêtèle", vocab) == "too different"
+    assert correction.judge("arréle", "arrêtera", vocab) == "known"
+    assert correction.judge("motjoint", "mot joint", vocab) == "known"
+    assert correction.judge("atlas", "atlas", vocab) is None
+    assert correction.judge("rnot", "m0t", vocab) == "odd"
+    # the vision model has seen the letters: more may change
+    assert correction.judge("cbarte", "charte", set(), loose=True) == "close"
+    text = "Le reliéur arréle ici."
+    sus = [{"word": "reliéur", "start": 3, "end": 10}, {"word": "arréle", "start": 11, "end": 17}]
+    new, changes = correction.apply_changes(text, sus, {0: "relieur", 1: "arrêtèle"}, vocab)
+    assert new == "Le relieur arréle ici."
+    assert [(c["new"], c["kept"], c["why"]) for c in changes] == [
+        ("relieur", True, "known"), ("arrêtèle", False, "too different")]
+
+
+def test_answers_and_context():
+    text = "Le relieur reçut l'at1as, au printemps."
+    s = {"word": "at1as", "start": 19, "end": 24}
+    assert text[19:24] == "at1as"
+    assert correction.context(text, s) == "Le relieur reçut l'⟦at1as⟧, au printemps."
+    raw = "1: atlas\n2. « relieur »\n- 3) marines (corrigé)\n9: x\nvoici"
+    assert correction.parse_answer(raw, range(1, 4)) == {1: "atlas", 2: "relieur", 3: "marines"}
+    # a line read again by the vision model, aligned with its OCR
+    line = "Le reliéur a reçu l'at1as des cartes"
+    sus = [(0, {"word": "reliéur", "start": 3}), (1, {"word": "at1as", "start": 20})]
+    assert correction.proposals_from_line(line, "Le relieur a reçu l'atlas des Cartes", sus) \
+        == {0: "relieur", 1: "atlas"}
+
+
+
+
+def test_focus_reads_the_doubtful_lines(tmp_path, native_pdf):
+    """Targeted vision: the line holding doubtful words, cut out of the page."""
+    seen = []
+
+    def reply(req):
+        content = req["messages"][-1]["content"]
+        img = content[1]["image_url"]["url"]
+        assert img.startswith("data:image/png;base64,")
+        seen.append(len(img))
+        return "Le relieur a reçu l'atlas des cartes marines et il le rend au printemps avec une Reliure."
+    chat = FakeChat(vision=True, reply=reply)
+    try:
+        with Library(tmp_path / "lib") as lib:
+            doc = lib.import_file(native_pdf).doc_id
+            good = tmp_path / "good.txt"                     # the vocabulary
+            good.write_text(GOOD + "\n", encoding="utf-8")
+            lib.import_file(good)
+            unit = lib.units(doc)[0]["id"]
+            lib.con.execute("UPDATE units SET text=?, source='ocr', boxes=?, width=900,"
+                            " height=1270 WHERE id=?",
+                            (OCR, json.dumps(boxes_for(OCR, low=("reliéur",))), unit))
+            lib.con.commit()
+            r = transcription.read_page(lib, chat.client(), unit, "focus")
+            assert r.method == "focus" and "relieur a reçu l'atlas des cartes marines" in r.text
+            assert r.text.endswith("avec une Reliure.") and len(seen) == 1       # one line
+            src = json.loads(lib.con.execute("SELECT sources FROM analyses WHERE id=?",
+                                             (r.id,)).fetchone()[0])
+            assert src["lines"] == 1 and src["kept"] == 3
+            # no boxes: no place to look at
+            lib.con.execute("UPDATE units SET boxes=NULL WHERE id=?", (unit,))
+            lib.con.commit()
+            with pytest.raises(AnalysisError, match="no place|no doubtful"):
+                transcription.read_page(lib, chat.client(), unit, "focus")
+    finally:
+        chat.close()

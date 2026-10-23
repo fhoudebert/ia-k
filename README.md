@@ -173,10 +173,15 @@ vocabulary: the books' spellings, old French included; add word lists in
 `config/words/`), or whose letters look like an OCR slip (`at1as`, `aTlas`).
 A click selects the word in the text and frames it on the page; *show them
 on the page* frames them all. Pages with many of them have an orange dot in
-the list. *Fix the doubtful words (text model)* has the chat model correct
-only those words, without the image (much faster than the vision model);
-like the other readings it is a proposal, with its differences. *Read pages
-again…* can take the pages with doubtful words, and fix them this way. Pages already read are not read again, so a cancelled run
+the list. Two ways correct only those words, much faster than reading the
+whole page again: *Fix the doubtful words (text model)* gives each one, in
+its sentence and with the close words of your books, to the chat model;
+*Read the doubtful words again on the image (targeted vision)* cuts out the
+lines that hold them and has the vision model read them. Each proposed word
+is checked (a word of the library, or a few letters away from the OCR's) and
+the reading lists the words corrected and the proposals refused; like the
+other readings it is a proposal, with its differences. *Read pages again…*
+can take the pages with doubtful words, and correct them either way. Pages already read are not read again, so a cancelled run
 goes on where it stopped. Pages whose text comes from the model are marked
 ·VL in the list. Best with Qwen3-VL-8B (`serveurs-vl.bat`); Gemma 4 with its
 vision projector works too.

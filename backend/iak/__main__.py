@@ -121,9 +121,11 @@ def main(argv: list[str] | None = None) -> int:
                    help="low: OCR pages below --threshold (default); doubt: pages with "
                         "doubtful words; ocr: every OCR page")
     p.add_argument("--threshold", type=float, default=80, help="OCR confidence, 0-100")
-    p.add_argument("--method", choices=("correct", "transcribe", "fix"), default="correct",
+    p.add_argument("--method", choices=("correct", "transcribe", "fix", "focus"),
+                   default="correct",
                    help="correct the OCR text from the image (default), read the image alone, "
-                        "or fix the doubtful words with the text model (no image)")
+                        "fix the doubtful words with the text model (no image), or read "
+                        "again the lines holding them with the vision model (focus)")
     p.add_argument("--replace", action="store_true",
                    help="make each reading the page's text (pages corrected by hand are kept)")
     p.add_argument("--refresh", action="store_true", help="read pages already read again")

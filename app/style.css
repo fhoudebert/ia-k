@@ -298,3 +298,9 @@ button.link.inline { padding: 0 2px; font-size: inherit; }
 .doubt-word.unknown, .doubt-word.chars { background: rgba(214, 120, 0, .10); }
 .page-marks .doubt-mark { background: rgba(230, 120, 0, .18); outline: 1.5px solid rgba(214, 110, 0, .9); }
 .page-marks .doubt-mark.current { background: rgba(230, 60, 0, .30); outline: 2px solid rgba(200, 40, 0, 1); }
+.word-changes { margin: 6px 0; display: flex; flex-wrap: wrap; gap: 4px; font-size: 12px; }
+.word-changes .meta { flex-basis: 100%; }
+.word-changes .change { border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
+.word-changes .change.refused { opacity: .6; text-decoration: line-through; }
+.word-changes del { color: var(--muted); }
+.word-changes ins { text-decoration: none; font-weight: 600; }

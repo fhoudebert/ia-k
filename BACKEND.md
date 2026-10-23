@@ -241,12 +241,26 @@ temporary file.
   `[?]` for unreadable words; up to 3,000 tokens per page (when correcting,
   about one and a half times the OCR text). Repetition is discouraged
   (presence penalty 1.5, as Qwen recommends for Qwen3-VL) and a line repeated
-  at the end is dropped: small vision models can loop. `fix`: the text
-  (chat) model gets the page's text with its doubtful words between ⟦ ⟧
-  (below) and corrects only those it is sure of; no image, so much faster.
-  Of its answer only the changes to doubtful words are kept (word for word,
-  or doubtful words split or joined): an unmarked word it changed, the line
-  breaks or punctuation it tidied go back to the page's text.
+  at the end is dropped: small vision models can loop.
+- **Doubtful words only** (`iak/correction.py`), much faster than a whole
+  page. `fix`, the text (chat) model: each doubtful word (below) is sent
+  numbered, between ⟦ ⟧ with 7 words on each side, and with up to 3 close
+  words of the library (the same letters but for the accents, else the
+  nearest of about the same length, difflib 0.8); the model answers one
+  line per word, "n: word" (30 words per request, about 14 tokens of answer
+  each). `focus`, targeted vision: each text line holding doubtful words (at
+  most 80 per page) is cut out of the page image around its words' boxes,
+  enlarged to about 48 pixels a line, and read alone by the vision model;
+  the reading is aligned with the OCR line word by word and only the
+  doubtful words take it (a word split in two too). Every proposal is then
+  judged: kept when the library knows the word, or when it is close to the
+  OCR's (edit distance at most a quarter of its letters, half with the
+  vision model that saw them) without odd letters; refused otherwise. A
+  capital stays a capital. The reading stores the list of changes, kept and
+  refused, with the reason (`sources.changes`, `kept`, `refused`). Measured
+  on a noisy scan of 283 words, 37 doubtful, 2 processor cores: Gemma 4 E2B
+  (`fix`) 12 words corrected, 3 refused, 76 s; Qwen3-VL-2B (`focus`, 21
+  lines) 20 corrected, 1 refused, 66 s, all right.
 - **Readings.** Stored as analyses (task `correct` or `transcribe`) with
   their model, their agreement with the page's text at the time (share of
   words in common, whatever their order, 0-1: `score`) and whether the answer was cut by
@@ -257,8 +271,8 @@ temporary file.
   afterwards no longer counts as one.
 - **A document.** Pages: `low` (OCR pages below the confidence threshold, 80
   by default, or nearly empty), `doubt` (pages with at least 5 % of
-  doubtful words), `ocr`, `all`; with `fix`, a page without doubtful word is
-  skipped. Pages already read by the same
+  doubtful words), `ocr`, `all`; with `fix` or `focus`, a page without
+  doubtful word is skipped. Pages already read by the same
   model with the same method are skipped (unless `refresh`), so a cancelled
   job goes on where it stopped; with `replace`, pages corrected by hand are
   kept.
@@ -407,7 +421,7 @@ The interface talks to the engine through an HTTP API:
 | `POST /api/look` `{"unit_id": 42, "task": "error"}` or `"question"` | job |
 | `POST /api/summarize` `{"doc_id": 3}`, `POST /api/compare` `{"doc_ids": [3, 7]}` | jobs |
 | `GET /api/analyses[?doc=3]`, `GET /api/jobs`, `GET /api/jobs/<id>` | stored results, jobs |
-| `POST /api/read` `{"unit_id"` or `"doc_id", "pages", "threshold", "method", "replace", "refresh"}` | job: page readings by the vision model (`fix`: the text model) |
+| `POST /api/read` `{"unit_id"` or `"doc_id", "pages", "threshold", "method", "replace", "refresh"}` | job: page readings by the vision model (`fix`: the text model on the doubtful words; `focus`: the vision model on their lines) |
 | `GET /api/units/<id>/doubts`, `GET /api/documents/<id>/doubts` | doubtful OCR words of a page, doubt of each page |
 | `GET /api/analyses/<id>/diff`, `POST /api/analyses/<id>/apply` | word differences with the page's text; use a reading as the text |
 | `POST /api/units/<id>/restore` | back to the extracted text |

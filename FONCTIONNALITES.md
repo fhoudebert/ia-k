@@ -101,8 +101,12 @@ ne part sur Internet.
   de confiance, inconnus de la bibliothèque (son propre vocabulaire, ancien
   français compris, et des listes de mots ajoutées) ou aux lettres suspectes
   (`at1as`) ; un clic les montre dans le texte et sur l'image, et les pages
-  qui en ont beaucoup sont signalées. Le modèle de texte peut **corriger les
-  seuls mots douteux**, sans l'image, bien plus vite que la vision.
+  qui en ont beaucoup sont signalées. On peut **corriger les seuls mots
+  douteux**, bien plus vite qu'en relisant toute la page : par le modèle de
+  texte (chaque mot dans sa phrase, avec les mots proches de vos livres), ou
+  par la **vision ciblée** (les seules lignes concernées, découpées dans
+  l'image). Chaque mot proposé est vérifié ; les corrections gardées et les
+  propositions refusées sont affichées.
 - Chaque lecture est une **proposition** : taux de concordance avec le texte
   actuel, **différences mot à mot**, puis « Utiliser comme texte de la page »
   ou retour au texte extrait.

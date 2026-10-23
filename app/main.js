@@ -882,8 +882,9 @@ async function loadAnalyses() {
       dateStyle: "short", timeStyle: "short" });
     const what = a.task === "summary" ? t("analysis.summary")
       : (t(`viewer.task.${a.task}`) + (a.question ? ` : ${a.question}` : ""));
-    const reading = ["transcribe", "correct", "fix"].includes(a.task);
-    const meta = [what, unit ? unit.label : null, a.model || null, when];
+    const reading = ["transcribe", "correct", "fix", "focus"].includes(a.task);
+    const model = a.model ? a.model.split(/[\\/]/).pop().replace(/\.gguf$/i, "") : null;
+    const meta = [what, unit ? unit.label : null, model, when];
     if (reading && a.score !== null && a.score !== undefined) {
       meta.push(t("reading.score", { pct: Math.round(a.score * 100) }));
     }
@@ -891,6 +892,8 @@ async function loadAnalyses() {
       el("div", { class: "meta" }, meta.filter(Boolean).join(" · "), " · ",
          analysisExportButtons(a.id)));
     if (reading) {
+      // a correction of doubtful words: the words first, the page after
+      if (a.sources && a.sources.changes) item.append(wordChanges(a.sources));
       item.append(el("div", { class: "text" }, a.text));
       if (a.sources && a.sources.truncated) item.append(el("p", { class: "badge warn" }, t("reading.truncated")));
       if (unit) item.append(readingActions(a, unit, item));
@@ -899,6 +902,19 @@ async function loadAnalyses() {
     }
     box.append(item);
   }
+}
+
+/** The words a correction of doubtful words changed, and those it refused. */
+function wordChanges(src) {
+  const box = el("div", { class: "word-changes" },
+    el("div", { class: "meta" }, t("reading.changes", { kept: src.kept || 0, refused: src.refused || 0,
+                                                       n: src.doubtful || 0 })));
+  for (const c of src.changes) {
+    box.append(el("span", { class: c.kept ? "change kept" : "change refused",
+                             title: t(`reading.why.${c.why}`) },
+      el("del", {}, c.word), " → ", c.kept ? el("ins", {}, c.new) : c.new));
+  }
+  return box;
 }
 
 /** Buttons of a page reading: use it as the page text, show the differences. */
@@ -1093,7 +1109,7 @@ async function runLook() {
   $("#analyses").prepend(pending);
   try {
     // reading the page again: a proposal for its text
-    const { job } = ["correct", "transcribe", "fix"].includes(task)
+    const { job } = ["correct", "transcribe", "fix", "focus"].includes(task)
       ? await post("/api/read", { unit_id: u.id, method: task })
       : await post("/api/look", { unit_id: u.id, task, question, lang: getLang() });
     const done = await waitJob(job);
