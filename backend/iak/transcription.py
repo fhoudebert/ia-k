@@ -1,11 +1,14 @@
 """Reading pages again with the vision model, to correct or replace the text
 Tesseract gave: difficult scans, old prints, tables, columns.
 
-Two methods for a page:
-- "transcribe": the model reads the image alone;
-- "correct": the model gets the image AND the current text, and corrects
-  that text where the image shows it is wrong. The model invents less, and
-  the page keeps its line structure.
+Three methods for a page:
+- "transcribe": the vision model reads the image alone;
+- "correct": the vision model gets the image AND the current text, and
+  corrects that text where the image shows it is wrong. The model invents
+  less, and the page keeps its line structure;
+- "fix": the text (chat) model gets the text with its doubtful words marked
+  (iak.doubt) and corrects only those it is sure of from their letters and
+  context. No image: much faster, for the usual OCR slips.
 
 A reading is stored as an analysis (task transcribe or correct) with its
 agreement with the page's text at the time (0-1, share of words in common): a low agreement
@@ -26,7 +29,9 @@ from dataclasses import dataclass
 from .analyze import SYSTEM, AnalysisError, _escape, _model_name, _save, render_unit
 from .servers import Client
 
-METHODS = ("transcribe", "correct")
+METHODS = ("transcribe", "correct", "fix")
+VISION_METHODS = ("transcribe", "correct")
+_TASKS_SQL = "(" + ", ".join(f"'{m}'" for m in METHODS) + ")"
 
 COMMON = (
     "Keep the original spelling, punctuation, capitals and abbreviations exactly as "
@@ -46,6 +51,15 @@ PROMPTS = {
                "missed, tables. Change nothing that is already right. Give the corrected page once: a "
                "table appears only as the Markdown table, not also as the OCR's lines. " + COMMON,
 }
+FIX_PROMPT = (
+    "Below is the text of a printed page as read by OCR. The words between ⟦ and ⟧ "
+    "are doubtful: the OCR may have misread them (letters confused such as rn/m, li/h, "
+    "c/e, n/u, 1/l/I, 0/o, a long s ſ read as f, a word split or two words joined). "
+    "Correct a marked word only when its letters and the sentence make the right word "
+    "certain; otherwise leave it exactly as it is. Do not change any word that is not "
+    "marked. Keep the original spelling, even old, and the punctuation, capitals and "
+    "line breaks of the page: do not modernise, translate or complete the text. "
+    "Output the whole page, without the ⟦ ⟧ marks, without any comment.")
 
 # a dense page is about 4,000 characters, 1 token = about 3 characters
 MAX_TOKENS = 3000
@@ -138,12 +152,92 @@ def transcribe_png(client: Client, png: bytes, max_tokens: int = MAX_TOKENS) -> 
     return _drop_loop(_clean(text))
 
 
+def fix_page(lib, client: Client, unit_id: int, max_tokens: int = MAX_TOKENS) -> Reading:
+    """Correct the doubtful words of a page with the text model; the reading
+    is stored, not applied. AnalysisError NOTHING_DOUBTFUL when no word is."""
+    from . import doubt
+    unit = lib.con.execute("SELECT doc_id, text FROM units WHERE id=?", (unit_id,)).fetchone()
+    if unit is None:
+        raise AnalysisError(f"no unit {unit_id}")
+    found = doubt.unit(lib, unit_id)
+    # the trusted pages have none: look at the page as OCR left it
+    if not found["suspects"]:
+        raise AnalysisError(NOTHING_DOUBTFUL)
+    marked = doubt.marked(unit["text"], found["suspects"])
+    prompt = f"{FIX_PROMPT}\n\n<ocr>\n{_escape(marked, 'ocr')}\n</ocr>"
+    budget = min(max_tokens, max(400, int(len(unit["text"]) / 2.5 * 1.3) + 200))
+    info: dict = {}
+    t0 = time.perf_counter()
+    text = client.chat([{"role": "system", "content": SYSTEM},
+                        {"role": "user", "content": prompt}],
+                       max_tokens=budget, temperature=0.1, info=info)
+    seconds = time.perf_counter() - t0
+    text = _drop_loop(_clean(text)).replace("⟦", "").replace("⟧", "")
+    if text:
+        text = only_marked(unit["text"], text, found["suspects"])
+    if not text:
+        raise AnalysisError("the model returned an empty reading")
+    truncated = info.get("finish_reason") == "length"
+    score = agreement(unit["text"], text)
+    rid = _save(lib.con, unit["doc_id"], unit_id, "fix", text, "", "", _model_name(client))
+    with lib.con:
+        lib.con.execute("UPDATE analyses SET score=?, sources=? WHERE id=?",
+                        (score, json.dumps({"seconds": round(seconds, 1),
+                                            "truncated": truncated,
+                                            "doubtful": found["doubtful"]}), rid))
+    return Reading(rid, unit_id, "fix", text, score, truncated, seconds)
+
+
+NOTHING_DOUBTFUL = "no doubtful word on this page"
+
+
+def only_marked(old: str, new: str, suspects: list[dict]) -> str:
+    """The model's text, keeping only its changes to doubtful words: anything
+    else it changed (an unmarked word, the line breaks, punctuation it
+    tidied) goes back to the page's text. A small model does not always keep
+    to "change only the marked words"."""
+    spans = [(x["start"], x["end"]) for x in suspects]
+
+    def doubtful(a: int, b: int) -> bool:
+        return any(a < e and s_ < b for s_, e in spans)
+    ta = [(m.start(), m.group()) for m in re.finditer(r"\s+|[^\s]+", old)]
+    tb = [m.group() for m in re.finditer(r"\s+|[^\s]+", new)]
+    sm = difflib.SequenceMatcher(None, [t for _, t in ta], tb, autojunk=False)
+    out: list[str] = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        olds = ta[i1:i2]
+        if tag == "equal":
+            out += [t for _, t in olds]
+            continue
+        owords = [(p, t) for p, t in olds if not t.isspace()]
+        nwords = [t for t in tb[j1:j2] if not t.isspace()]
+        if len(owords) == len(nwords):
+            # word for word: a doubtful word takes the model's, the spaces stay
+            repl = iter(nwords)
+            for p, t in olds:
+                if t.isspace():
+                    out.append(t)
+                else:
+                    w = next(repl)
+                    out.append(w if doubtful(p, p + len(t)) else t)
+        elif owords and all(doubtful(p, p + len(t)) for p, t in owords):
+            # doubtful words split or joined: the model's words, the page's spacing around
+            lead = olds[0][1] if olds[0][1].isspace() else ""
+            tail = olds[-1][1] if len(olds) > 1 and olds[-1][1].isspace() else ""
+            out += [lead, " ".join(nwords), tail]
+        else:
+            out += [t for _, t in olds]
+    return "".join(out)
+
+
 def read_page(lib, client: Client, unit_id: int, method: str = "transcribe",
               max_side: int = DEFAULT_SIDE, max_tokens: int = MAX_TOKENS) -> Reading:
     """Read one page or image again with the vision model; the reading is
-    stored, not applied."""
+    stored, not applied. Method "fix" uses the text model (fix_page)."""
     if method not in METHODS:
         raise AnalysisError(f"unknown method {method}: {', '.join(METHODS)}")
+    if method == "fix":
+        return fix_page(lib, client, unit_id, max_tokens)
     unit = lib.con.execute("SELECT doc_id, text FROM units WHERE id=?", (unit_id,)).fetchone()
     if unit is None:
         raise AnalysisError(f"no unit {unit_id}")
@@ -188,7 +282,7 @@ def apply(lib, analysis_id: int) -> int:
     lib.set_unit_text(a["unit_id"], a["text"])
     with lib.con:
         lib.con.execute("UPDATE analyses SET applied=NULL WHERE unit_id=? AND task IN"
-                        " ('transcribe', 'correct')", (a["unit_id"],))
+                        f" {_TASKS_SQL}", (a["unit_id"],))
         lib.con.execute("UPDATE analyses SET applied=? WHERE id=?", (time.time(), analysis_id))
     return a["unit_id"]
 
@@ -202,7 +296,7 @@ def restore(lib, unit_id: int) -> None:
     with lib.con:
         lib.con.execute("UPDATE units SET text=text_extracted, edited=0 WHERE id=?", (unit_id,))
         lib.con.execute("UPDATE analyses SET applied=NULL WHERE unit_id=? AND task IN"
-                        " ('transcribe', 'correct')", (unit_id,))
+                        f" {_TASKS_SQL}", (unit_id,))
     lib.reindex(u["doc_id"], [unit_id])
 
 
@@ -218,7 +312,8 @@ def page_reader(lib, unit_id: int) -> dict | None:
 def select_pages(lib, doc_id: int, pages: str = "low",
                  threshold: float = LOW_CONFIDENCE) -> list:
     """Units of a PDF or image document to read again: "low" (OCR pages below
-    the confidence threshold, or nearly empty), "ocr" (every OCR page), "all"."""
+    the confidence threshold, or nearly empty), "doubt" (pages with doubtful
+    words, iak.doubt), "ocr" (every OCR page), "all"."""
     doc = lib.document(doc_id)
     if doc is None:
         raise KeyError(f"no document {doc_id}")
@@ -231,8 +326,12 @@ def select_pages(lib, doc_id: int, pages: str = "low",
     ocr = [u for u in units if u["source"] == "ocr"]
     if pages == "ocr":
         return ocr
+    if pages == "doubt":
+        from . import doubt
+        flagged = {d["unit_id"] for d in doubt.document(lib, doc_id) if d["doubt"]}
+        return [u for u in units if u["id"] in flagged]
     if pages != "low":
-        raise AnalysisError("pages is low, ocr or all")
+        raise AnalysisError("pages is low, doubt, ocr or all")
     return [u for u in ocr if (u["ocr_conf"] is not None and u["ocr_conf"] < threshold)
             or len(u["text"].strip()) < 40]
 
@@ -264,7 +363,13 @@ def read_document(lib, client: Client, doc_id: int, method: str = "correct",
             out["skipped"] += 1
             rid = done["id"]
         else:
-            r = read_page(lib, client, u["id"], method, max_side)
+            try:
+                r = read_page(lib, client, u["id"], method, max_side)
+            except AnalysisError as exc:
+                if str(exc) != NOTHING_DOUBTFUL:
+                    raise
+                out["skipped"] += 1                 # fix: nothing to correct here
+                continue
             out["read"] += 1
             out["truncated"] += r.truncated
             rid = r.id

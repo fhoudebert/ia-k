@@ -31,6 +31,8 @@ const state = {
   collection: null,            // id of the collection shown in the library, or null
   folders: [],                 // followed folders
   seenJobs: new Set(),         // finished jobs already taken into account
+  doubts: {},                  // unit id -> {doubtful, ratio, doubt} of the open document
+  unitDoubts: null,            // the doubtful words of the page shown
   started: false,              // first jobs poll done
   imageUrl: null,
 };
@@ -301,12 +303,12 @@ function renderCollections() {
   $("#coll-chips").replaceChildren(chip(null, t("coll.all"), state.documents.length),
     ...state.collections.map((c) => chip(c.id, c.name, c.n_docs)));
   $("#coll-tools").hidden = !state.collection;
+  // where the ticked documents go: another collection than the one shown
   const target = $("#coll-target");
   const keep = target.value;
-  target.replaceChildren(...state.collections.map((c) =>
-    el("option", { value: String(c.id) }, c.name)));
-  if (state.collections.some((c) => String(c.id) === keep)) target.value = keep;
-  else if (state.collection) target.value = String(state.collection);
+  const others = state.collections.filter((c) => c.id !== state.collection);
+  target.replaceChildren(...others.map((c) => el("option", { value: String(c.id) }, c.name)));
+  if (others.some((c) => String(c.id) === keep)) target.value = keep;
   updateSelection();
 }
 
@@ -319,12 +321,14 @@ function updateSelection() {
   const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
   $("#coll-selection").hidden = !ids.length;
   $("#coll-selected").textContent = t("coll.selected", { n: ids.length });
-  const hasColls = state.collections.length > 0;
-  $("#coll-target").hidden = $("#coll-add").hidden = !hasColls;
   const cur = currentCollection();
+  const hasTargets = state.collections.some((c) => c.id !== state.collection);
+  $("#coll-target").hidden = $("#coll-add").hidden = !hasTargets;
+  $("#coll-move").hidden = !(cur && hasTargets);
+  $("#coll-move").textContent = t("coll.move");
   $("#coll-remove").hidden = !cur;
   if (cur) $("#coll-remove").textContent = t("coll.remove", { name: cur.name });
-  if (!hasColls) $("#coll-selected").textContent += ` — ${t("coll.none_yet")}`;
+  if (!state.collections.length) $("#coll-selected").textContent += ` — ${t("coll.none_yet")}`;
 }
 
 async function changeMembers(collectionId, add, remove) {
@@ -333,6 +337,34 @@ async function changeMembers(collectionId, add, remove) {
   toast(add.length ? t("coll.added", { n: r.added, name }) : t("coll.removed", { n: r.removed, name }));
   state.selected.clear();
   await loadLibrary();
+}
+
+async function moveMembers(fromId, toId, ids) {
+  const r = await post(`/api/collections/${fromId}/move`, { to: toId, doc_ids: ids });
+  const name = (state.collections.find((c) => c.id === toId) || {}).name || "";
+  toast(t("coll.moved", { n: r.moved, name }));
+  state.selected.clear();
+  await loadLibrary();
+}
+
+/** The collections of the open document, as chips to switch on and off. */
+function renderDocCollections() {
+  const box = $("#doc-colls-box");
+  box.hidden = !state.doc || !state.collections.length;
+  if (box.hidden) return;
+  const d = state.documents.find((x) => x.id === state.doc.id);
+  const mine = new Set((d && d.collections) || []);
+  $("#doc-colls").replaceChildren(...state.collections.map((c) => el("button", {
+    class: `coll-chip${mine.has(c.id) ? " active" : ""}`, type: "button",
+    title: t(mine.has(c.id) ? "viewer.coll_out" : "viewer.coll_in", { name: c.name }),
+    onclick: () => setDocCollections(state.doc.id, mine.has(c.id)
+      ? [...mine].filter((x) => x !== c.id) : [...mine, c.id]).catch(fail) }, c.name)));
+}
+
+async function setDocCollections(docId, ids) {
+  await request("PUT", `/api/documents/${docId}/collections`, { collections: ids });
+  await loadLibrary();
+  renderDocCollections();
 }
 
 async function createCollection(ev) {
@@ -663,13 +695,16 @@ async function openDoc(docId, unitId = null, passageId = null) {
     state.units = units;
     $("#tab-viewer").hidden = false;
     $("#viewer-title").textContent = doc.name;
+    state.doubts = {};
     renderUnitList();
+    loadDocDoubts(docId).catch(() => {});
     const hasPages = doc.kind === "pdf" || doc.kind === "image";
     $("#analyse-box").hidden = !hasPages;
     $("#viewer-reread").hidden = !hasPages;
     $("#reread-panel").hidden = true;
     $("#viewer-fulltext").hidden = !(hasPages || doc.kind === "epub");
     $("#fulltext-panel").hidden = true;
+    renderDocCollections();
     show("viewer");
     await selectUnit(unitId || (units[0] && units[0].id), passageId);
     await loadAnalyses();
@@ -680,6 +715,7 @@ function renderUnitList() {
   const current = state.unit ? state.unit.id : null;
   $("#unit-list").replaceChildren(...state.units.map((u) => el("li", {
     class: [u.source === "ocr" ? "ocr" : "", u.reader ? "vl" : "",
+            state.doubts[u.id] && state.doubts[u.id].doubt ? "doubt" : "",
             u.id === current ? "active" : ""].filter(Boolean).join(" "),
     dataset: { id: u.id }, title: u.label, onclick: () => selectUnit(u.id) }, u.label)));
 }
@@ -690,6 +726,7 @@ async function refreshUnits() {
   const keep = state.unit ? state.unit.id : null;
   state.units = await get(`/api/documents/${state.doc.id}/units`);
   renderUnitList();
+  loadDocDoubts(state.doc.id).catch(() => {});
   if (keep) await selectUnit(keep);
 }
 
@@ -724,6 +761,81 @@ async function selectUnit(unitId, passageId = null) {
       if (state.unit && state.unit.id === unitId) img.src = state.imageUrl;
     } catch (e) { fail(e); }
     if (passageId) markPassage(passageId, unitId).catch(() => {});
+  }
+  loadDoubts(u).catch(() => {});
+}
+
+// ------------------------------------------------------------------ doubtful words
+
+/** Which pages of the open document have many doubtful words (unit list). */
+async function loadDocDoubts(docId) {
+  const rows = await get(`/api/documents/${docId}/doubts`);
+  if (!state.doc || state.doc.id !== docId) return;
+  state.doubts = Object.fromEntries(rows.map((r) => [r.unit_id, r]));
+  renderUnitList();
+}
+
+/** The doubtful words of the page shown: chips that select the word in the
+ * text and show it on the page image. */
+async function loadDoubts(u) {
+  const box = $("#doubts-box");
+  box.hidden = true;
+  state.unitDoubts = null;
+  if (u.source !== "ocr" || u.edited) return;
+  const d = await get(`/api/units/${u.id}/doubts`);
+  if (!state.unit || state.unit.id !== u.id) return;
+  state.unitDoubts = d;
+  if (!d.doubtful) return;
+  box.hidden = false;
+  $("#doubts-title").textContent = t("doubt.title", { n: d.doubtful,
+    pct: Math.round(d.ratio * 100) });
+  $("#doubts-list").replaceChildren(...d.suspects.map((s) => el("button", {
+    type: "button", class: `doubt-word ${s.reasons.join(" ")}`,
+    title: [...s.reasons.map((r) => t(`doubt.why.${r}`)),
+            s.conf === null || s.conf === undefined ? null : t("doubt.conf", { conf: Math.round(s.conf) })]
+      .filter(Boolean).join(" · "),
+    onclick: () => showDoubt(s) }, s.word)));
+  renderDoubtMarks();
+}
+
+function doubtMark(s, d, cls = "") {
+  const [x0, y0, x1, y1] = s.box;
+  return el("div", { class: `doubt-mark ${cls}`,
+    style: `left:${(x0 / d.width) * 100}%;top:${(y0 / d.height) * 100}%;` +
+           `width:${((x1 - x0) / d.width) * 100}%;height:${((y1 - y0) / d.height) * 100}%` });
+}
+
+/** Every doubtful word framed on the page image, when asked. */
+function renderDoubtMarks() {
+  const d = state.unitDoubts;
+  const layer = $("#page-marks");
+  layer.querySelectorAll(".doubt-mark").forEach((m) => m.remove());
+  if (!d || !d.width || !$("#doubts-marks").checked) return;
+  layer.append(...d.suspects.filter((s) => s.box).map((s) => doubtMark(s, d)));
+}
+
+/** One doubtful word: selected in the text (found again near its place if
+ * the text was edited since), and shown on the image. */
+function showDoubt(s) {
+  const ta = $("#unit-text");
+  let i = ta.value.substr(s.start, s.word.length) === s.word ? s.start
+    : ta.value.indexOf(s.word, Math.max(0, s.start - 80));
+  if (i < 0) i = ta.value.indexOf(s.word);
+  if (i >= 0) {
+    ta.focus();
+    ta.setSelectionRange(i, i + s.word.length);
+    // bring the selection into view: put the caret line near the top
+    const line = ta.value.slice(0, i).split("\n").length - 1;
+    const lh = parseFloat(getComputedStyle(ta).lineHeight) || 18;
+    ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 3);
+  }
+  const d = state.unitDoubts;
+  const layer = $("#page-marks");
+  layer.querySelectorAll(".doubt-mark.current").forEach((m) => m.remove());
+  if (d && d.width && s.box) {
+    const m = doubtMark(s, d, "current");
+    layer.append(m);
+    m.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 }
 
@@ -770,7 +882,7 @@ async function loadAnalyses() {
       dateStyle: "short", timeStyle: "short" });
     const what = a.task === "summary" ? t("analysis.summary")
       : (t(`viewer.task.${a.task}`) + (a.question ? ` : ${a.question}` : ""));
-    const reading = a.task === "transcribe" || a.task === "correct";
+    const reading = ["transcribe", "correct", "fix"].includes(a.task);
     const meta = [what, unit ? unit.label : null, a.model || null, when];
     if (reading && a.score !== null && a.score !== undefined) {
       meta.push(t("reading.score", { pct: Math.round(a.score * 100) }));
@@ -857,6 +969,7 @@ async function openFulltext() {
   const epub = state.doc.kind === "epub";
   f.format.hidden = epub;
   f.method.hidden = !epub;
+  $("#fulltext-notes").hidden = epub;
   $("#fulltext-note").textContent = t(epub ? "ft.note_epub" : "ft.note_pdf");
   $("#fulltext-files").replaceChildren();          // not the previous document's
   f.hidden = false;
@@ -933,14 +1046,17 @@ async function makeFulltext(ev) {
   const name = state.doc.name;
   try {
     const { job } = await post(`/api/documents/${docId}/fulltext`, {
-      format: f.format.value, method: f.method.value, illustrations: f.illustrations.checked });
+      format: f.format.value, method: f.method.value, illustrations: f.illustrations.checked,
+      notes: f.notes.checked });
     const done = waitJob(job);                    // starts the polling, shows the progress
     const r = await done;
     if (r.status === "cancelled") { toast(t("ft.cancelled")); return; }
     if (r.status === "error") { fail(r.error); return; }
     const x = r.result;
     toast(t("ft.done", { file: x.file, before: sizeLabel(x.size_before), after: sizeLabel(x.size_after),
-                         n: x.illustrations }) + (state.doc && state.doc.id === docId ? "" : ` (${name})`));
+                         n: x.illustrations })
+          + (x.notes ? `, ${t("ft.notes_done", { n: x.notes })}` : "")
+          + (state.doc && state.doc.id === docId ? "" : ` (${name})`));
     if (state.doc && state.doc.id === docId) await loadFulltextFiles();
   } catch (e) { fail(e); }
 }
@@ -977,7 +1093,7 @@ async function runLook() {
   $("#analyses").prepend(pending);
   try {
     // reading the page again: a proposal for its text
-    const { job } = task === "correct" || task === "transcribe"
+    const { job } = ["correct", "transcribe", "fix"].includes(task)
       ? await post("/api/read", { unit_id: u.id, method: task })
       : await post("/api/look", { unit_id: u.id, task, question, lang: getLang() });
     const done = await waitJob(job);
@@ -1765,6 +1881,12 @@ function wire() {
       changeMembers(Number($("#coll-target").value), ids, []).catch(fail);
     }
   });
+  $("#coll-move").addEventListener("click", () => {
+    const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
+    if (ids.length && state.collection && $("#coll-target").value) {
+      moveMembers(state.collection, Number($("#coll-target").value), ids).catch(fail);
+    }
+  });
   $("#coll-remove").addEventListener("click", () => {
     const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
     if (ids.length && state.collection) changeMembers(state.collection, [], ids).catch(fail);
@@ -1794,6 +1916,7 @@ function wire() {
   $("#reread-close").addEventListener("click", () => { $("#reread-panel").hidden = true; });
   $("#reread-panel").addEventListener("submit", startReread);
   $("#viewer-fulltext").addEventListener("click", () => openFulltext().catch(fail));
+  $("#doubts-marks").addEventListener("change", renderDoubtMarks);
   $("#activity").addEventListener("click", () => {
     show("library");
     $("#jobs-list").scrollIntoView({ block: "nearest" });

@@ -124,8 +124,10 @@ folders.
 **Collections.** Group documents by subject, project or source: tick
 documents, *+ New collection* (or *Add to the collection* for an existing
 one). A document can be in several collections; the chips above the list
-show one collection at a time, where documents can be removed from it, and
-the collection renamed or deleted (its documents stay in the library). In
+show one collection at a time, where documents can be removed from it or
+moved to another one (*Move to the collection*), and the collection renamed
+or deleted (its documents stay in the library). In the viewer, the
+*Collections* chips of a document put it in or take it out of each one. In
 *Search* and *Questions*, a collection limits the passages to its documents,
 alone or with a type or a document.
 
@@ -140,9 +142,13 @@ is highlighted in yellow on the page.
 image, or a PDF with an OCR layer), a light document of real text an e-reader
 can reflow: the library's text (OCR, your corrections, the vision model's
 readings) replaces the pictures of the pages, headings are found from the
-size of the letters, running heads and page numbers go, paragraphs are joined
-across pages, and the illustrations (photographs, engravings, maps) are cut
-out of the pages and kept in place. As EPUB, or PDF on A5 pages, HTML, Word,
+size of the letters, running heads and page numbers go, the paragraphs are
+rebuilt from the page as a reader sees them (an indented first line, a short
+last line, extra space; not every line Tesseract found misaligned) and joined
+across pages, the notes at the foot of the pages are linked to their calls
+(*link the notes*: footnotes on EPUB readers, linked notes in HTML, a list at
+the end of each chapter elsewhere), and the illustrations (photographs,
+engravings, maps) are cut out of the pages and kept in place. As EPUB, or PDF on A5 pages, HTML, Word,
 RTF or Markdown, much lighter than the scan (how much depends on the
 illustrations kept).
 For an EPUB made of pictures of scanned pages, each picture of text is read
@@ -159,7 +165,18 @@ before *Use as the page's text*. Nothing is replaced until you choose to, and
 *Restore the extracted text* goes back. *Read pages again…* does it for a whole
 document: the poor OCR pages (confidence below 80 %), every OCR page or every
 page, proposing readings or replacing the text directly — never on pages you
-corrected by hand. Pages already read are not read again, so a cancelled run
+corrected by hand.
+
+**Doubtful words.** Under the text of an OCR page, *Doubtful words* lists the
+words Tesseract was unsure of, that the library does not know (its own
+vocabulary: the books' spellings, old French included; add word lists in
+`config/words/`), or whose letters look like an OCR slip (`at1as`, `aTlas`).
+A click selects the word in the text and frames it on the page; *show them
+on the page* frames them all. Pages with many of them have an orange dot in
+the list. *Fix the doubtful words (text model)* has the chat model correct
+only those words, without the image (much faster than the vision model);
+like the other readings it is a proposal, with its differences. *Read pages
+again…* can take the pages with doubtful words, and fix them this way. Pages already read are not read again, so a cancelled run
 goes on where it stopped. Pages whose text comes from the model are marked
 ·VL in the list. Best with Qwen3-VL-8B (`serveurs-vl.bat`); Gemma 4 with its
 vision projector works too.

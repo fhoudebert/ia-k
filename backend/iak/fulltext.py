@@ -23,8 +23,8 @@ from pathlib import Path
 
 import numpy as np
 
-from . import bookformats, ocr
-from .book import BookError, _text_blocks, join_lines
+from . import bookformats, layout, ocr
+from .book import BookError, join_lines
 
 GRID = 60                     # cells across a page for the illustration search
 MIN_AREA = 0.012              # an illustration covers at least this share of the page
@@ -32,7 +32,6 @@ RENDER_DPI = 100              # page rendered to look for illustrations
 CROP_DPI = 150                # resolution of the illustrations kept
 JPEG_QUALITY = 82
 SCAN_COVER = 0.7              # a picture covering this much of a page is the scan itself
-_END = re.compile(r"[.!?:;»\"”)\]…]$")
 
 
 class FullTextError(RuntimeError):
@@ -193,22 +192,10 @@ def page_pictures(page, word_rects_pt) -> list[tuple[float, bookformats.Picture]
 
 
 def _native_items(page, illustrations: bool) -> list[Item]:
-    """Text blocks with their font size, and pictures, in reading order."""
-    entries = []
-    for b in page.get_text("dict").get("blocks", []):
-        if b.get("type") != 0:
-            continue
-        text, weight, nch = "", 0.0, 0
-        for line in b.get("lines", []):
-            lt = re.sub(r"\s+", " ", "".join(s.get("text", "") for s in line.get("spans", []))).strip()
-            for s in line.get("spans", []):
-                n = len(s.get("text", "").strip())
-                weight += s.get("size", 0) * n
-                nch += n
-            if lt:
-                text = join_lines(text, lt)
-        if text:
-            entries.append((b["bbox"][1], Item("text", text, round(weight / max(nch, 1), 1))))
+    """Paragraphs with their type size (layout: indents, spacing, short
+    lines), and pictures, in reading order."""
+    entries = [(top, Item("text", t, round(size, 1)))
+               for t, size, top in layout.paragraphs(layout.native_lines(page))]
     if illustrations:
         words = text_rects([list(w[:4]) + [w[4], None] for w in page.get_text("words")])
         for top, pic in page_pictures(page, words):
@@ -217,28 +204,10 @@ def _native_items(page, illustrations: bool) -> list[Item]:
     return [it for _, it in entries]
 
 
-def _sizes_from_boxes(paras: list[Item], boxes) -> None:
-    """A font size for OCR paragraphs, from the height of their words' boxes
-    (so that headings stand out as on a native page). The boxes follow the
-    text word for word unless it was corrected: then no size is given."""
-    words = [b for b in boxes if str(b[4]).strip()]
-    counts = [len(p.text.split()) for p in paras]
-    if not words or sum(counts) != len(words):
-        return
-    i = 0
-    for p, n in zip(paras, counts):
-        heights = sorted(b[3] - b[1] for b in words[i:i + n])
-        i += n
-        if heights:
-            # the median word, rounded: capitals and descenders even out
-            p.size = round(heights[len(heights) // 2] * 0.75, 0)
-
-
 def _ocr_items(page, text: str, boxes, illustrations: bool) -> list[Item]:
     """The library's text of a page (OCR, corrected...) as paragraphs, and its
     illustrations placed where they are on the page."""
-    paras = [Item("text", t) for t in _text_blocks(text)]
-    _sizes_from_boxes(paras, boxes or [])
+    paras = [Item("text", t, size) for t, size in layout.ocr_paragraphs(text, boxes or [])]
     if not illustrations:
         return paras
     rects = text_rects(boxes or [])
@@ -263,9 +232,47 @@ def _ocr_items(page, text: str, boxes, illustrations: bool) -> list[Item]:
     return out
 
 
-def assemble(pages: list[list[Item]]) -> list[tuple]:
+PAGE_NO = re.compile(r"[\d\s\-–—.|]+|(page|p\.)\s*\d+|[ivxlcdm]{1,6}\.?", re.I)
+
+
+def _page_notes(items: list[Item], body: float | None) -> tuple[list[Item], list[list[str]]]:
+    """The notes at the foot of a page (smaller type, starting with a mark),
+    taken out of its items: (items left, [[mark, text]])."""
+    if not body:
+        return items, []
+    texts = [i for i, it in enumerate(items) if it.kind == "text"]
+    k = None
+    for i in reversed(texts):
+        it = items[i]
+        if PAGE_NO.fullmatch(it.text):
+            continue
+        if it.size and it.size < body * layout.NOTE_SIZE:
+            k = i
+            continue
+        break
+    if k is None:
+        return items, []
+    zone = [i for i in texts if i >= k and not PAGE_NO.fullmatch(items[i].text)]
+    first = next((j for j, i in enumerate(zone) if layout.note_mark(items[i].text)), None)
+    if first is None:
+        return items, []
+    notes: list[list[str]] = []
+    for i in zone[first:]:
+        m = layout.note_mark(items[i].text)
+        if m:
+            notes.append(list(m))
+        else:                                    # a note going on in another paragraph
+            notes[-1][1] = join_lines(notes[-1][1], items[i].text)
+    gone = set(zone[first:])
+    return [it for i, it in enumerate(items) if i not in gone], notes
+
+
+def assemble(pages: list[list[Item]], notes: bool = True) -> list[tuple]:
     """Blocks for bookformats: headings from the font sizes, running heads and
-    page numbers removed, paragraphs joined across pages."""
+    page numbers removed, paragraphs joined across pages (also when the next
+    one starts with a capital, when the first plainly goes on: no full stop,
+    a lowercase letter, a comma or a hyphen at its end), and the notes at the
+    foot of the pages linked to their calls (layout)."""
     sizes = Counter()
     for items in pages:
         for it in items:
@@ -283,31 +290,48 @@ def assemble(pages: list[list[Item]]) -> list[tuple]:
             cnt.update({norm(t) for t in texts[:2] + texts[-2:] if len(t) < 120})
         running = {k for k, v in cnt.items() if v >= max(3, 0.3 * len(pages))}
     blocks: list[list] = []
+    n_notes = 0
+    known = layout.words(it.text for items in pages for it in items if it.kind == "text") \
+        if notes else {}
     for items in pages:
+        found = []
+        if notes:
+            items, found = _page_notes(items, body)
+        page_notes = []
+        if found:
+            texts = [it.text for it in items if it.kind == "text"]
+            for mark, text in found:
+                n_notes += 1
+                layout.link_call(texts, mark, n_notes, known)
+                page_notes.append(["note", (n_notes, text)])
+            it_texts = iter(texts)
+            for it in items:
+                if it.kind == "text":
+                    it.text = next(it_texts)
         for it in items:
             if it.kind == "img":
                 blocks.append(["img", it.pic])
                 continue
             t = it.text
-            if re.fullmatch(r"[\d\s\-–—.|]+|(page|p\.)\s*\d+|[ivxlcdm]{1,6}\.?", t, re.I) \
-                    or norm(t) in running:
+            if PAGE_NO.fullmatch(t) or norm(t) in running:
                 continue
             kind = "p"
             if body and it.size and it.size >= body * 1.6 and len(t) < 150:
                 kind = "h1"
             elif body and it.size and it.size >= body * 1.2 and len(t) < 200:
                 kind = "h2"
-            prev = next((b for b in reversed(blocks) if b[0] != "img"), None)
+            prev = next((b for b in reversed(blocks) if b[0] not in ("img", "note")), None)
             if (kind == "p" and prev is not None and prev[0] == "p"
-                    and not _END.search(prev[1]) and t[:1].islower()):
+                    and layout.continues(layout.strip_calls(prev[1], lambda n: ""), t)):
                 prev[1] = join_lines(prev[1], t)     # continued over a page break
                 continue
             blocks.append([kind, t])
+        blocks += page_notes
     return [tuple(b) for b in blocks]
 
 
 def library_document(lib, doc_id: int, illustrations: bool = True, progress=None,
-                     cancelled=None) -> tuple[str, list[tuple], dict]:
+                     cancelled=None, notes: bool = True) -> tuple[str, list[tuple], dict]:
     """(title, blocks, counts) of a PDF or image document of the library."""
     import json
 
@@ -344,7 +368,9 @@ def library_document(lib, doc_id: int, illustrations: bool = True, progress=None
     counts["pages"] = len(pages)
     meta = json.loads(doc["meta"] or "{}")
     title = meta.get("title") or Path(doc["name"]).stem
-    return title, assemble(pages), counts
+    blocks = assemble(pages, notes)
+    counts["notes"] = sum(1 for k, _ in blocks if k == "note")
+    return title, blocks, counts
 
 
 # ---------------------------------------------------------------- EPUB pictures
@@ -396,8 +422,8 @@ def read_picture(data: bytes, langs: str, tesseract: str | None, illustrations: 
         return r
     if vision is not None:
         r.text = vision(png) or r.text
-    r.paras = [Item("text", t) for t in _text_blocks(r.text)]
-    _sizes_from_boxes(r.paras, res.boxes)
+    r.paras = [Item("text", t, size) for t, size in
+               layout.ocr_paragraphs(r.text, res.boxes if vision is None else [])]
     if illustrations:
         # the picture as a page, to look for its illustrations as on a PDF page
         with pymupdf.open(stream=png, filetype="png") as doc:
@@ -602,7 +628,8 @@ def outputs(lib, doc_id: int) -> list[dict]:
 
 
 def convert(lib, doc_id: int, fmt: str = "epub", illustrations: bool = True,
-            method: str = "ocr", vision=None, progress=None, cancelled=None) -> dict:
+            method: str = "ocr", vision=None, progress=None, cancelled=None,
+            notes: bool = True) -> dict:
     """Make the full-text version of a library document; returns its file
     name and counts. EPUB documents stay EPUB; method "vision" reads their
     pictures with vision(png) -> text."""
@@ -625,8 +652,9 @@ def convert(lib, doc_id: int, fmt: str = "epub", illustrations: bool = True,
         raise FullTextError(f"{doc['name']} is already text ({doc['kind']})")
     if fmt not in FORMATS:
         raise FullTextError(f"format is one of {', '.join(FORMATS)}")
-    title, blocks, counts = library_document(lib, doc_id, illustrations, progress, cancelled)
-    if not any(k != "img" for k, _ in blocks):
+    title, blocks, counts = library_document(lib, doc_id, illustrations, progress, cancelled,
+                                             notes)
+    if not any(k not in ("img", "note") for k, _ in blocks):
         raise FullTextError("no text in this document: read it with OCR (re-extract) first")
     lang = (json.loads(doc["meta"] or "{}").get("language") or "").split("-")[0] or \
         _guess_lang(blocks)
@@ -639,5 +667,5 @@ def convert(lib, doc_id: int, fmt: str = "epub", illustrations: bool = True,
 
 def _guess_lang(blocks) -> str:
     from . import translate
-    sample = " ".join(t for k, t in blocks if k != "img")[:20000]
+    sample = " ".join(t for k, t in blocks if k not in ("img", "note"))[:20000]
     return translate.detect_language(sample) or "fr"

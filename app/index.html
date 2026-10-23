@@ -85,6 +85,7 @@
         <span id="coll-selected"></span>
         <select id="coll-target"></select>
         <button id="coll-add" data-i18n="coll.add"></button>
+        <button id="coll-move" hidden></button>
         <button id="coll-remove" class="link" hidden></button>
       </div>
       <div id="drop-zone" class="drop-zone">
@@ -309,6 +310,7 @@
         <span data-i18n="reread.title"></span>
         <select name="pages">
           <option value="low" data-i18n="reread.pages.low"></option>
+          <option value="doubt" data-i18n="reread.pages.doubt"></option>
           <option value="ocr" data-i18n="reread.pages.ocr"></option>
           <option value="all" data-i18n="reread.pages.all"></option>
         </select>
@@ -317,6 +319,7 @@
         <select name="method">
           <option value="correct" data-i18n="reread.method.correct"></option>
           <option value="transcribe" data-i18n="reread.method.transcribe"></option>
+          <option value="fix" data-i18n="reread.method.fix"></option>
         </select>
         <label class="check"><input type="checkbox" name="replace">
           <span data-i18n="reread.replace"></span></label>
@@ -339,6 +342,8 @@
         </select>
         <label class="check"><input type="checkbox" name="illustrations" checked>
           <span data-i18n="ft.illustrations"></span></label>
+        <label class="check" id="fulltext-notes"><input type="checkbox" name="notes" checked>
+          <span data-i18n="ft.notes"></span></label>
         <button class="primary" data-i18n="ft.make"></button>
         <button type="button" class="link close" id="fulltext-close">×</button>
         <div class="ft-progress" id="fulltext-progress" hidden>
@@ -362,6 +367,10 @@
           <p id="page-no-image" class="muted" data-i18n="viewer.no_image" hidden></p>
         </section>
         <section class="side">
+          <div class="doc-colls" id="doc-colls-box" hidden>
+            <h4 data-i18n="viewer.collections"></h4>
+            <div id="doc-colls" class="coll-chips"></div>
+          </div>
           <div class="side-head">
             <h4 data-i18n="viewer.text"></h4>
             <span id="unit-badges"></span>
@@ -371,11 +380,20 @@
             <button id="unit-save" data-i18n="viewer.save"></button>
             <button id="unit-restore" class="link" data-i18n="viewer.restore" hidden></button>
           </div>
+          <div class="doubts" id="doubts-box" hidden>
+            <div class="doubts-head">
+              <strong id="doubts-title"></strong>
+              <label class="check"><input type="checkbox" id="doubts-marks">
+                <span data-i18n="doubt.on_page"></span></label>
+            </div>
+            <div id="doubts-list" class="doubts-list"></div>
+          </div>
           <div class="analyse" id="analyse-box">
             <h4 data-i18n="viewer.analyse"></h4>
             <select id="look-task">
               <option value="describe" data-i18n="viewer.task.describe"></option>
               <option value="correct" data-i18n="viewer.task.correct"></option>
+              <option value="fix" data-i18n="viewer.task.fix"></option>
               <option value="transcribe" data-i18n="viewer.task.transcribe"></option>
               <option value="error" data-i18n="viewer.task.error"></option>
               <option value="extract" data-i18n="viewer.task.extract"></option>

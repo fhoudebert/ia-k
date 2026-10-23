@@ -113,3 +113,43 @@ def of_documents(con) -> dict[int, list[int]]:
     for doc_id, cid in con.execute("SELECT doc_id, collection_id FROM collection_docs"):
         out.setdefault(doc_id, []).append(cid)
     return out
+
+
+def move(con, from_id: int, to_id: int, doc_ids: list[int]) -> int:
+    """Take documents out of one collection and into another, at once.
+    Returns how many left the first one."""
+    get(con, from_id)
+    get(con, to_id)
+    if from_id == to_id:
+        raise CollectionError("choose another collection to move to")
+    in_from = {r[0] for r in con.execute(
+        "SELECT doc_id FROM collection_docs WHERE collection_id=?", (from_id,))}
+    ids = [d for d in doc_ids if d in in_from]
+    now = time.time()
+    with con:
+        con.executemany("INSERT OR IGNORE INTO collection_docs (collection_id, doc_id, added_at)"
+                        " VALUES (?, ?, ?)", [(to_id, d, now) for d in ids])
+        con.executemany("DELETE FROM collection_docs WHERE collection_id=? AND doc_id=?",
+                        [(from_id, d) for d in ids])
+    return len(ids)
+
+
+def set_for_document(con, doc_id: int, collection_ids: list[int]) -> list[int]:
+    """The collections of one document, given all at once (the viewer)."""
+    if con.execute("SELECT 1 FROM documents WHERE id=?", (doc_id,)).fetchone() is None:
+        raise KeyError(f"no document {doc_id}")
+    wanted = set(collection_ids)
+    known = {r[0] for r in con.execute("SELECT id FROM collections")}
+    if wanted - known:
+        raise KeyError(f"no collection {min(wanted - known)}")
+    now = time.time()
+    with con:
+        for (cid,) in con.execute("SELECT collection_id FROM collection_docs WHERE doc_id=?",
+                                  (doc_id,)).fetchall():
+            if cid not in wanted:
+                con.execute("DELETE FROM collection_docs WHERE doc_id=? AND collection_id=?",
+                            (doc_id, cid))
+        con.executemany("INSERT OR IGNORE INTO collection_docs (collection_id, doc_id, added_at)"
+                        " VALUES (?, ?, ?)", [(c, doc_id, now) for c in sorted(wanted)])
+    return sorted(r[0] for r in con.execute(
+        "SELECT collection_id FROM collection_docs WHERE doc_id=?", (doc_id,)))

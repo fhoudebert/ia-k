@@ -3,8 +3,12 @@ in the library, a text or Markdown file): PDF, EPUB, HTML, DOCX, RTF,
 Markdown, text.
 
 The book is a list of blocks (kind, text): h1 and h2 headings, p paragraphs,
-li list items, quote, code; and ("img", Picture) for an illustration (RTF
-and text cannot show them: RTF gets them as pictures, text a mark). EPUB is cut into chapters at h1 headings (or
+li list items, quote, code; ("img", Picture) for an illustration (RTF
+and text cannot show them: RTF gets them as pictures, text a mark); and
+("note", (n, text)) for note n, whose call is the mark layout.call(n) in a
+paragraph. Notes go to the end of the chapter of their call: EPUB 3
+footnotes (popups on readers that know them), linked both ways in HTML,
+superscripts and a list in PDF, Word and RTF, [^n] in Markdown. EPUB is cut into chapters at h1 headings (or
 every 150 blocks), for e-readers; the PDF is laid out on A5 pages, the size
 of a reader's screen, with fonts embedded by MuPDF (Latin, Greek, Cyrillic,
 Hebrew and CJK scripts; Arabic is not shaped well).
@@ -20,6 +24,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from .layout import CALL, split_calls, strip_calls
+
 FORMATS = ("pdf", "epub", "html", "docx", "rtf", "md", "txt")
 EXT = {f: "." + f for f in FORMATS}
 
@@ -34,6 +40,9 @@ pre { white-space: pre-wrap; font-family: monospace; font-size: .85em; }
 li { margin-bottom: .2em; }
 figure { margin: .8em 0; text-align: center; }
 figure img { max-width: 100%; height: auto; }
+a.noteref { text-decoration: none; }
+.notes { margin-top: 1.5em; border-top: 1px solid #999; padding-top: .4em; font-size: .85em; }
+.note p, p.note { text-indent: 0; margin: 0 0 .3em; }
 """
 
 
@@ -59,15 +68,63 @@ def pictures(blocks) -> list[Picture]:
     return [b[1] for b in blocks if b[0] == "img"]
 
 
+def place_notes(chapters: list[list[tuple]]) -> list[list[tuple]]:
+    """Each note at the end of the chapter where its call is (a note without
+    a call found stays where it is)."""
+    where = {}
+    for i, ch in enumerate(chapters):
+        for k, t in ch:
+            if k != "img" and k != "note" and isinstance(t, str):
+                for m in CALL.finditer(t):
+                    where.setdefault(int(m.group(1)), i)
+    out = [[] for _ in chapters]
+    moved = [[] for _ in chapters]
+    for i, ch in enumerate(chapters):
+        for b in ch:
+            if b[0] == "note" and b[1][0] in where:
+                moved[where[b[1][0]]].append(b)
+            else:
+                out[i].append(b)
+    return [o + m for o, m in zip(out, moved)]
+
+
+def arranged(blocks) -> list[tuple]:
+    """The blocks with the notes moved to the end of their chapter."""
+    if not any(b[0] == "note" for b in blocks):
+        return list(blocks)
+    return [b for ch in place_notes(_chapters(blocks)) for b in ch]
+
+
+def _inline(text: str, links: bool, epub: bool) -> str:
+    """Escaped text with its note calls as superscripts (linked to the note)."""
+    out = []
+    for piece in split_calls(text):
+        if isinstance(piece, int):
+            sup = f"<sup>{piece}</sup>"
+            if links:
+                kind = ' epub:type="noteref"' if epub else ""
+                out.append(f'<a class="noteref"{kind} href="#n{piece}" id="r{piece}">{sup}</a>')
+            else:
+                out.append(sup)
+        else:
+            out.append(_esc(piece))
+    return "".join(out)
+
+
 def _esc(text: str) -> str:
     return html.escape(text, quote=False)
 
 
-def html_body(blocks: list[tuple], src=None, width=None) -> str:
+def html_body(blocks: list[tuple], src=None, width=None, links: bool = True,
+              epub: bool = False) -> str:
     """src(picture) gives an image's address (default: a data URI); width(picture)
-    an optional CSS width."""
-    out, in_list = [], False
+    an optional CSS width; links: note calls and notes linked to each other;
+    epub: EPUB 3 footnotes (epub:type)."""
+    out, in_list, in_notes = [], False, False
     src = src or (lambda pic: pic.data_uri())
+
+    def inl(t):
+        return _inline(t, links, epub)
     for kind, text in blocks:
         if kind == "li" and not in_list:
             out.append("<ul>")
@@ -75,21 +132,38 @@ def html_body(blocks: list[tuple], src=None, width=None) -> str:
         elif kind != "li" and in_list:
             out.append("</ul>")
             in_list = False
+        if kind == "note" and not in_notes:
+            out.append('<section class="notes">' if not epub else
+                       '<section class="notes" epub:type="footnotes">')
+            in_notes = True
+        elif kind != "note" and in_notes:
+            out.append("</section>")
+            in_notes = False
         if kind in ("h1", "h2"):
-            out.append(f"<{kind}>{_esc(text)}</{kind}>")
+            out.append(f"<{kind}>{inl(text)}</{kind}>")
         elif kind == "li":
-            out.append(f"<li>{_esc(text)}</li>")
+            out.append(f"<li>{inl(text)}</li>")
         elif kind == "quote":
-            out.append(f"<blockquote><p>{_esc(text)}</p></blockquote>")
+            out.append(f"<blockquote><p>{inl(text)}</p></blockquote>")
         elif kind == "code":
-            out.append(f"<pre>{_esc(text)}</pre>")
+            out.append(f"<pre>{_esc(strip_calls(text))}</pre>")
         elif kind == "img":
             style = f' style="width:{width(text)}"' if width else ""
             out.append(f'<figure><img src="{html.escape(src(text))}" alt=""{style}/></figure>')
+        elif kind == "note":
+            n, body = text
+            mark = f'<a href="#r{n}">{n}</a>' if links else str(n)
+            if epub:
+                out.append(f'<aside class="note" epub:type="footnote" id="n{n}">'
+                           f"<p>{mark}. {inl(body)}</p></aside>")
+            else:
+                out.append(f'<p class="note" id="n{n}">{mark}. {inl(body)}</p>')
         else:
-            out.append(f"<p>{_esc(text)}</p>")
+            out.append(f"<p>{inl(text)}</p>")
     if in_list:
         out.append("</ul>")
+    if in_notes:
+        out.append("</section>")
     return "\n".join(out)
 
 
@@ -97,7 +171,7 @@ def write_html(blocks, title: str, lang: str, out: Path) -> None:
     out.write_text(
         f'<!DOCTYPE html>\n<html lang="{lang}">\n<head>\n<meta charset="utf-8">\n'
         f"<title>{_esc(title)}</title>\n<style>{CSS}</style>\n</head>\n<body>\n"
-        f"{html_body(blocks)}\n</body>\n</html>\n", encoding="utf-8")
+        f"{html_body(arranged(blocks))}\n</body>\n</html>\n", encoding="utf-8")
 
 
 def _chapters(blocks, size: int = 150) -> list[list[tuple[str, str]]]:
@@ -113,19 +187,20 @@ def _chapters(blocks, size: int = 150) -> list[list[tuple[str, str]]]:
 
 def write_epub(blocks, title: str, lang: str, out: Path) -> None:
     """EPUB 3 (with an NCX for older readers)."""
-    chapters = _chapters(blocks)
+    chapters = place_notes(_chapters(blocks))
     book_id = f"urn:uuid:{uuid.uuid4()}"
     titles = []
     for i, ch in enumerate(chapters, 1):
         head = next((t for k, t in ch if k in ("h1", "h2")), None)
-        titles.append(head or (title if i == 1 else f"{i}"))
+        titles.append(strip_calls(head, lambda n: "") if head else (title if i == 1 else f"{i}"))
 
     names = {id(p): f"images/i{n}.{p.ext}" for n, p in enumerate(pictures(blocks), 1)}
 
     def xhtml(i, ch):
-        body = html_body(ch, src=lambda pic: names[id(pic)])
+        body = html_body(ch, src=lambda pic: names[id(pic)], epub=True)
         return (f'<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n'
-                f'<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="{lang}" lang="{lang}">\n'
+                f'<html xmlns="http://www.w3.org/1999/xhtml" '
+                f'xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="{lang}" lang="{lang}">\n'
                 f"<head><title>{_esc(titles[i - 1])}</title>"
                 f'<link rel="stylesheet" type="text/css" href="style.css"/></head>\n'
                 f"<body>\n{body}\n</body>\n</html>\n")
@@ -202,7 +277,8 @@ def write_pdf(blocks, title: str, lang: str, out: Path) -> None:
     def width(pic):                 # about its size on the page, within the margins
         pt = pic.width / max(pic.dpi, 1) * 72 if pic.width else where.width
         return f"{min(pt, where.width):.0f}pt"
-    body = html_body(blocks, src=lambda pic: names[id(pic)], width=width)
+    # MuPDF lays out the notes as superscripts and a list, without links
+    body = html_body(arranged(blocks), src=lambda pic: names[id(pic)], width=width, links=False)
     story = pymupdf.Story(html=f'<body lang="{lang}">{body}</body>', user_css=css,
                           archive=archive)
     # laid out in memory, then saved once: on Windows a temporary file is still
@@ -236,15 +312,31 @@ def write_docx(blocks, title: str, lang: str, out: Path) -> None:
     d = docx.Document()
     d.core_properties.title = title
     d.core_properties.language = lang
-    for kind, text in blocks:
+    from docx.shared import Pt
+
+    def runs(par, text):                   # note calls as superscripts
+        for piece in split_calls(text):
+            if isinstance(piece, int):
+                par.add_run(str(piece)).font.superscript = True
+            else:
+                par.add_run(piece)
+        return par
+    for kind, text in arranged(blocks):
         if kind == "h1":
-            d.add_heading(text, 1)
+            d.add_heading(strip_calls(text, lambda n: ""), 1)
         elif kind == "h2":
-            d.add_heading(text, 2)
+            d.add_heading(strip_calls(text, lambda n: ""), 2)
         elif kind == "li":
-            d.add_paragraph(text, style="List Bullet")
+            runs(d.add_paragraph(style="List Bullet"), text)
         elif kind == "quote":
-            d.add_paragraph(text, style="Quote")
+            runs(d.add_paragraph(style="Quote"), text)
+        elif kind == "note":
+            n, body = text
+            par = d.add_paragraph()
+            par.add_run(f"{n}. ").font.superscript = False
+            runs(par, body)
+            for run in par.runs:
+                run.font.size = Pt(9)
         elif kind == "img":
             from docx.shared import Inches
             inches = min(6.0, text.width / max(text.dpi, 1)) if text.width else 5.0
@@ -253,7 +345,7 @@ def write_docx(blocks, title: str, lang: str, out: Path) -> None:
             except Exception:  # noqa: BLE001 - a picture python-docx cannot read
                 d.add_paragraph("[illustration]")
         else:
-            d.add_paragraph(text)
+            runs(d.add_paragraph(), text)
     d.save(str(out))
 
 
@@ -272,11 +364,20 @@ def _rtf(text: str) -> str:
     return "".join(out)
 
 
+def _rtf_calls(text: str) -> str:
+    return "".join(f"{{\\super {p}}}" if isinstance(p, int) else _rtf(p)
+                   for p in split_calls(text))
+
+
 def write_rtf(blocks, title: str, lang: str, out: Path) -> None:
     lines = ["{\\rtf1\\ansi\\ansicpg1252\\deff0",
              "{\\fonttbl{\\f0\\froman Times New Roman;}{\\f1\\fmodern Courier New;}}",
              f"{{\\info{{\\title {_rtf(title)}}}}}", "\\fs24"]
-    for kind, text in blocks:
+    for kind, text in arranged(blocks):
+        if kind == "note":
+            n, body = text
+            lines.append(f"{{\\pard\\sa60\\fs18 {n}. {_rtf_calls(body)}\\par}}")
+            continue
         if kind == "img":
             blip = "\\pngblip" if text.mime == "image/png" else "\\jpegblip"
             tw = int(min(6.0, text.width / max(text.dpi, 1)) * 1440) if text.width else 7200
@@ -284,7 +385,7 @@ def write_rtf(blocks, title: str, lang: str, out: Path) -> None:
             lines.append(f"{{\\pard\\qc\\sa120{{\\pict{blip}\\picw{text.width}\\pich{text.height}"
                          f"\\picwgoal{tw}\\pichgoal{th}\n{text.data.hex()}\n}}\\par}}")
             continue
-        t = _rtf(text)
+        t = _rtf_calls(text)
         if kind == "h1":
             lines.append(f"{{\\pard\\qc\\sb240\\sa120\\b\\fs32 {t}\\par}}")
         elif kind == "h2":
@@ -305,7 +406,13 @@ def write_text(blocks, title: str, lang: str, out: Path, markdown: bool) -> None
     """Markdown: illustrations in a folder <name>_images next to the file."""
     parts, prev_li = [], False
     n_img = 0
-    for kind, text in blocks:
+    for kind, text in arranged(blocks):
+        if kind == "note":
+            n, body = text
+            parts.append(f"[^{n}]: {strip_calls(body, lambda k: f'[^{k}]')}" if markdown
+                         else f"[{n}] {strip_calls(body)}")
+            prev_li = False
+            continue
         if kind == "img":
             n_img += 1
             if markdown:
@@ -317,6 +424,7 @@ def write_text(blocks, title: str, lang: str, out: Path, markdown: bool) -> None
                 parts.append("[illustration]")
             prev_li = False
             continue
+        text = strip_calls(text, (lambda k: f"[^{k}]") if markdown else (lambda k: f"[{k}]"))
         if markdown:
             line = {"h1": "# ", "h2": "## ", "li": "- ", "quote": "> "}.get(kind, "") + text
             if kind == "code":

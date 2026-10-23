@@ -79,7 +79,7 @@ h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: v
 .tabs { display: flex; gap: 4px; }
 .tabs button { border: none; background: none; padding: 8px 12px; border-radius: var(--radius); }
 .tabs button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-.servers { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.servers { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; flex: 1 1 260px; justify-content: flex-end; }
 .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .pill.ok::before, .pill.ko::before, .pill.none::before { content: "●"; margin-right: 4px; }
 .pill.ok::before { color: var(--ok); }
@@ -283,3 +283,18 @@ button.link.inline { padding: 0 2px; font-size: inherit; }
 .activity:not([hidden]) + .servers { margin-left: 0; }
 .ft-progress { display: flex; align-items: center; gap: 8px; flex-basis: 100%; }
 .ft-progress progress { width: 220px; }
+.doc-colls { margin-bottom: 10px; }
+.doc-colls .coll-chips { margin-top: 4px; }
+.doc-colls .coll-chip { font-size: 12px; padding: 2px 10px; }
+
+/* doubtful OCR words */
+.units li.doubt::before { content: "●"; color: var(--warn, #c77700); font-size: 9px; margin-right: 4px; vertical-align: 1px; }
+.doubts { margin: 8px 0 4px; font-size: 13px; }
+.doubts-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.doubts-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; max-height: 120px; overflow-y: auto; }
+.doubt-word { font-size: 12px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--line);
+  background: var(--surface); font-family: ui-monospace, Menlo, Consolas, monospace; }
+.doubt-word.conf { border-color: var(--warn, #c77700); }
+.doubt-word.unknown, .doubt-word.chars { background: rgba(214, 120, 0, .10); }
+.page-marks .doubt-mark { background: rgba(230, 120, 0, .18); outline: 1.5px solid rgba(214, 110, 0, .9); }
+.page-marks .doubt-mark.current { background: rgba(230, 60, 0, .30); outline: 2px solid rgba(200, 40, 0, 1); }
