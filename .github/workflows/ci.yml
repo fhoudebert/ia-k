@@ -2,6 +2,7 @@
 # - backend: Python tests (Tesseract with French data installed for the OCR tests)
 # - desktop: Rust tests, release build, portable folder with its Python and its
 #   Tesseract as a downloadable zip for each system
+# - msrv: the application built and tested with its minimum Rust (1.90)
 # - key: the three zips merged into one key for all systems (ia-k.zip)
 # Runs on every push and pull request, and by hand (Actions > CI > Run workflow).
 name: CI
@@ -155,6 +156,28 @@ jobs:
           path: dist/ia-k-${{ matrix.portable }}.zip
           if-no-files-found: error
           retention-days: 30
+
+  # the oldest Rust the application builds with (rust-version in Cargo.toml)
+  msrv:
+    name: Rust 1.90 (minimum)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Linux libraries for Tauri
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+
+      - uses: dtolnay/rust-toolchain@1.90
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Tests with the locked dependencies
+        working-directory: src-tauri
+        run: cargo test --locked
 
   key:
     name: Key for all systems

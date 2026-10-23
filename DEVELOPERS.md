@@ -60,8 +60,8 @@ Checked on a real exFAT volume: setup, command line and application.
 
 ## Building the application
 
-Requirements: Rust 1.88 or later (rustup; edition 2024, `rust-version`
-in `src-tauri/Cargo.toml`), Node.js for the Tauri command line, and on Linux
+Requirements: Rust 1.90 or later (rustup; see *Rust and Tauri versions*
+below), Node.js for the Tauri command line, and on Linux
 `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`; on Windows the MSVC build
 tools (WebView2 is part of Windows 10 and 11); on macOS the Xcode command
 line tools (`xcode-select --install`).
@@ -125,12 +125,43 @@ kept, names differing only by case refused (exFAT).
 portable zip with its Python and its Tesseract (`setup_python` and
 `build_tesseract.py` run first), kept 30 days as
 the run's *Artifacts* (`ia-k-windows`, `ia-k-linux`, `ia-k-mac`), and the
-`key` job merges them into `ia-k` (`ia-k.zip`, all systems). The `msrv` job builds and
-tests the application with Rust 1.88 and the locked dependencies. Edition
-2024 picks Cargo's resolver 3, which follows `rust-version`: `cargo update`
-chooses the newest versions that still build with 1.88 (Tauri 2.11 for now,
-2.12 needs 1.90), so raise `rust-version` to take newer ones. Check it locally with
-[actionlint](https://github.com/rhysd/actionlint).
+`key` job merges them into `ia-k` (`ia-k.zip`, all systems). The desktop
+builds use the latest stable Rust; the `msrv` job builds and tests the
+application with Rust 1.90, the minimum, and the locked dependencies. Check
+it locally with [actionlint](https://github.com/rhysd/actionlint).
+
+## Rust and Tauri versions
+
+`src-tauri/Cargo.toml` declares `edition = "2024"` and `rust-version =
+"1.90"`. With edition 2024 Cargo uses resolver 3, which follows
+`rust-version`: `cargo update` locks the newest versions that still build
+with Rust 1.90, and leaves out the ones that need a newer Rust.
+
+| Crate | Locked | Needs Rust |
+|---|---|---|
+| tauri | 2.12.5 | 1.90 |
+| tauri-build, tauri-codegen, tauri-macros | 2.7.4 | 1.90 |
+| tauri-plugin-dialog | 2.8.3 | 1.90 |
+| tauri-runtime / -wry, tauri-utils | 2.12 / 2.10 | 1.90 |
+| muda | 0.20.0 | 1.90 |
+| uuid | 1.28.0 | 1.89 |
+
+Tauri 2.12 is what sets the minimum: with Rust 1.88 the resolver falls back
+to Tauri 2.11 (muda 0.19, uuid 1.26). The Tauri command line
+(`@tauri-apps/cli` in `package.json`, `^2.12.3`) is of the same minor version
+as the crate, so `tauri build` reports no mismatch. Checked with Rust 1.90:
+`cargo test --locked`, `cargo clippy --all-targets` (no warning) and
+`tauri build`.
+
+To move to a newer Tauri that needs a newer Rust: raise `rust-version`, run
+`cargo update` in `src-tauri/`, update `dtolnay/rust-toolchain@1.xx` in the
+`msrv` job and this section, then commit `Cargo.lock`. A dependency that
+needs more than `rust-version` makes `cargo +1.90 test --locked` fail, and so
+the `msrv` job.
+
+Edition 2024 marks `std::env::set_var` as `unsafe`: the code reads the
+environment but never changes it (the test of `find_root` gives its value
+to `find_root_from` instead).
 
 macOS: one universal application (`--target universal-apple-darwin`, Apple
 silicon and Intel) bundled as `IA-K.app` (`--bundles app`), ad hoc signed
