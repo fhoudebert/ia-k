@@ -71,7 +71,7 @@ h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: v
 /* layout */
 #app { height: 100vh; display: flex; flex-direction: column; }
 .topbar {
-  display: flex; align-items: center; gap: 16px; padding: 8px 16px;
+  display: flex; align-items: center; gap: 6px 16px; padding: 8px 16px; flex-wrap: wrap;
   background: var(--surface); border-bottom: 1px solid var(--line);
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; white-space: nowrap; }
@@ -79,7 +79,7 @@ h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: v
 .tabs { display: flex; gap: 4px; }
 .tabs button { border: none; background: none; padding: 8px 12px; border-radius: var(--radius); }
 .tabs button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-.servers { display: flex; gap: 6px; margin-left: auto; }
+.servers { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .pill.ok::before, .pill.ko::before, .pill.none::before { content: "●"; margin-right: 4px; }
 .pill.ok::before { color: var(--ok); }
@@ -273,3 +273,13 @@ button.link.inline { padding: 0 2px; font-size: inherit; }
 .export-links { white-space: nowrap; }
 .export-links button + button::before { content: "· "; color: var(--muted); }
 .book-fmt { padding: 2px 6px; font-size: 13px; }
+
+/* work in progress: a turning ring before the label */
+.busy::before { content: ""; display: inline-block; width: .75em; height: .75em; margin-right: 6px;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  vertical-align: -1px; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.activity { color: var(--accent); white-space: nowrap; margin-left: auto; }
+.activity:not([hidden]) + .servers { margin-left: 0; }
+.ft-progress { display: flex; align-items: center; gap: 8px; flex-basis: 100%; }
+.ft-progress progress { width: 220px; }

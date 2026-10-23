@@ -240,3 +240,20 @@ def test_keep_alive_after_unread_bodies(stack):
     r = conn.getresponse()
     assert r.status == 200 and json.loads(r.read())["documents"] == 0
     conn.close()
+
+
+def test_library_lock(tmp_path):
+    first = api.lock_library(tmp_path / "lib")
+    try:
+        with pytest.raises(api.LibraryInUse, match="library in use"):
+            api.lock_library(tmp_path / "lib")
+    finally:
+        first.close()
+    api.lock_library(tmp_path / "lib").close()          # free again once closed
+
+
+def test_locked_database_message():
+    import sqlite3
+    assert api._locked(sqlite3.OperationalError("database is locked"))
+    assert not api._locked(sqlite3.OperationalError("no such table: x"))
+    assert "another IA-K" in api.BUSY

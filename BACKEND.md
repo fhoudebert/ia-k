@@ -314,14 +314,22 @@ The interface talks to the engine through an HTTP API:
 - **Lifetime.** With `--watch-stdin` (used by the application) the engine
   stops when its standard input closes, that is when the application ends,
   even abruptly.
+- **One engine per library.** `serve` holds `<library>/iak.lock` (a system
+  lock, released when the process ends, even killed). A second `serve` on the
+  same library, such as a second IA-K window opened by another `serveurs-…`
+  file, prints `IAK_ERROR library in use: …` and exits with code 3; the
+  application shows that instead of a crash. The other commands (`iak.sh
+  import`, `search`…) still work next to it.
 - **Jobs.** Import, embedding, re-extraction, page analysis and readings,
   summaries, comparisons and translations run one at a time: the call returns
   `{"job": id}` (202) and `GET /api/jobs/<id>` gives status, progress and
-  result. A queued job can be cancelled; a reading of several pages stops
-  between two pages.
+  result (and `doc_id` for a job about one document). A queued job can be
+  cancelled; a reading of several pages, a full-text version and a folder
+  scan stop between two pages or files (status `cancelled`).
 - **Errors.** `{"error": "..."}` with 400, 401 (token), 403 (host or origin),
   404, 409 (not configured, wrong embedding model, impossible task), 502
-  (model server).
+  (model server), 503 (database locked: another writer held it for more than
+  30 s).
 
 | Method and path | Purpose |
 |---|---|
@@ -351,7 +359,7 @@ The interface talks to the engine through an HTTP API:
 | `POST /api/read` `{"unit_id"` or `"doc_id", "pages", "threshold", "method", "replace", "refresh"}` | job: page readings by the vision model |
 | `GET /api/analyses/<id>/diff`, `POST /api/analyses/<id>/apply` | word differences with the page's text; use a reading as the text |
 | `POST /api/units/<id>/restore` | back to the extracted text |
-| `POST /api/jobs/<id>/cancel` | cancel a queued job, or stop a reading between two pages |
+| `POST /api/jobs/<id>/cancel` | cancel a queued job, or stop a reading, a full-text version or a scan |
 | `POST /api/export/conversation` `{"turns": [{"question", "text", "status", "sources", "scope"}], "lang", "single", "path"}` | Markdown of an answer or a conversation (returned, or written to `path`) |
 | `GET /api/analyses/<id>/markdown?lang=fr`, `POST /api/analyses/<id>/export` `{"path", "lang"}` | an analysis as Markdown |
 | `GET /api/languages` | languages offered for translation |

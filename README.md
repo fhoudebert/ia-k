@@ -233,6 +233,8 @@ Good to know:
 
 | What you see | What to do |
 |---|---|
+| "This library is already open in another IA-K window" | Two IA-K were started (two `serveurs-…` files, for instance): use the window already open, or close it and click *Try again*. |
+| "The library is busy (database is locked)" | Another program writes in the library: another IA-K on it (see above), or a long command line import. Wait a moment and do it again. |
 | "The IA-K engine could not start" | Read `data/iak-backend.log`; if `build/python/` has no folder for this system (an Intel Mac, a folder built from the sources), run `setup_python` once. |
 | Chat, Meaning or Translation shown in red at the top | The model server is not running or not at that address: start it, check *Settings*. |
 | An error mentioning `ErrorOutOfDeviceMemory` or "graphics memory" | The model server ran out of graphics memory: see [SERVERS.md, Memory](SERVERS.md#memory). |

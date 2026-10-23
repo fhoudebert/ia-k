@@ -214,6 +214,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "serve":
         from . import api
+        try:
+            lock = api.lock_library(args.library)  # noqa: F841 (held while serving)
+        except api.LibraryInUse as exc:
+            # read by the application, which shows it instead of a crash
+            print(f"IAK_ERROR {exc}", flush=True)
+            print(exc, file=sys.stderr)
+            return 3
         app = api.App(args.library, host, args.lang, args.ocr_langs, args.tesseract,
                       token=args.token, origins=set(args.allow_origin),
                       config=ROOT / "config" / "servers.toml")

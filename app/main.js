@@ -68,7 +68,13 @@ function toast(message, error = false) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => { box.hidden = true; }, error ? 8000 : 4000);
 }
-const fail = (e) => toast(t("error.generic", { msg: e.message || e }), true);
+/** Error text for the reader: known engine messages in the interface language. */
+function errorText(msg) {
+  msg = String(msg || "");
+  if (/database is locked/.test(msg)) return t("error.locked");
+  return msg;
+}
+const fail = (e) => toast(t("error.generic", { msg: errorText(e.message || e) }), true);
 
 // ------------------------------------------------------------------ text rendering
 
@@ -140,7 +146,8 @@ function show(view) {
   if (view === "search") $("#search-input").focus();
   if (view === "ask") $("#ask-input").focus();
   if (view === "settings") loadSettings().catch(fail);
-  if (view === "translate") enterTranslate().catch(fail);
+  if (view === "translate") return enterTranslate().catch(fail);
+  return Promise.resolve();
 }
 
 // ------------------------------------------------------------------ jobs
@@ -159,7 +166,7 @@ async function pollJobs() {
   }
   let libraryChanged = false;
   for (const job of state.jobs) {
-    const finished = job.status === "done" || job.status === "error";
+    const finished = ["done", "error", "cancelled"].includes(job.status);
     if (finished && state.waiters.has(job.id)) {
       state.waiters.get(job.id)(job);
       state.waiters.delete(job.id);
@@ -177,7 +184,12 @@ async function pollJobs() {
   pollJobs.timer = setTimeout(pollJobs, active || state.waiters.size ? 1000 : 6000);
 }
 
+// jobs that stop when asked while running (the others only while queued)
+const CANCELLABLE = new Set(["read", "fulltext", "scan"]);
+
 function renderJobs() {
+  renderActivity();
+  renderFulltextProgress();
   const ul = $("#jobs-list");
   ul.replaceChildren();
   const recent = state.jobs.slice(0, 8);
@@ -191,8 +203,8 @@ function renderJobs() {
       li.append(el("progress", { max: p.total, value: p.done || 0 }), `${p.done || 0}/${p.total}`);
     }
     if (p.file && j.status === "running") li.append(el("span", { class: "muted" }, p.file.split(/[\\/]/).pop()));
-    if (j.error) li.append(el("span", { class: "status-error" }, j.error));
-    if ((j.status === "queued" || (j.status === "running" && j.kind === "read")) && !j.cancel) {
+    if (j.error) li.append(el("span", { class: "status-error" }, errorText(j.error)));
+    if ((j.status === "queued" || (j.status === "running" && CANCELLABLE.has(j.kind))) && !j.cancel) {
       li.append(el("button", { class: "link", onclick: () =>
         post(`/api/jobs/${j.id}/cancel`).then(pollJobs, fail) }, t("jobs.cancel")));
     }
@@ -208,6 +220,20 @@ function renderJobs() {
     }
     ul.append(li);
   }
+}
+
+/** The jobs still to do, in the top bar: seen from every tab. */
+function renderActivity() {
+  const active = state.jobs.filter((j) => j.status === "queued" || j.status === "running");
+  const b = $("#activity");
+  b.hidden = !active.length;
+  if (!active.length) return;
+  const run = active.find((j) => j.status === "running") || active[0];
+  const p = run.progress || {};
+  let text = t(`jobs.kind.${run.kind}`);
+  if (run.status === "running" && p.total > 1) text += ` ${p.done || 0}/${p.total}`;
+  if (active.length > 1) text += ` ${t("jobs.more", { n: active.length - 1 })}`;
+  b.textContent = text;
 }
 
 // ------------------------------------------------------------------ library
@@ -865,25 +891,58 @@ async function saveFulltext(docId, x) {
   toast(t("export.saved", { path: r.path }));
 }
 
+/** The full-text job of a document still to finish, if any. */
+function fulltextJob(docId) {
+  return state.jobs.find((j) => j.kind === "fulltext" && j.doc_id === docId &&
+                         (j.status === "queued" || j.status === "running"));
+}
+
+/** Progress of the document's full-text job in its panel and on its button
+ * (again when coming back to the document while it runs). */
+function renderFulltextProgress() {
+  const box = $("#fulltext-progress");
+  const j = state.doc ? fulltextJob(state.doc.id) : null;
+  $("#fulltext-panel button.primary").disabled = !!j;
+  $("#viewer-fulltext").classList.toggle("busy", !!j);
+  box.hidden = !j;
+  if (!j) return;
+  const p = j.progress || {};
+  const bar = box.querySelector("progress");
+  let text;
+  if (j.cancel) text = t("ft.cancelling");
+  else if (j.status === "queued") text = t("ft.queued");
+  else if (p.total && p.done >= p.total) text = t("ft.writing");
+  else if (p.total) text = t("ft.page", { done: (p.done || 0) + 1, total: p.total });
+  else text = t("ft.running");
+  if (p.total && j.status === "running" && p.done < p.total) {
+    bar.max = p.total;
+    bar.value = p.done || 0;
+  } else {
+    bar.removeAttribute("value");                 // moving bar: no measure yet
+  }
+  $("#fulltext-progress-text").textContent = text;
+  $("#fulltext-cancel").hidden = j.cancel;
+  $("#fulltext-cancel").onclick = () => post(`/api/jobs/${j.id}/cancel`).then(pollJobs, fail);
+}
+
 async function makeFulltext(ev) {
   ev.preventDefault();
-  if (!state.doc) return;
+  if (!state.doc || fulltextJob(state.doc.id)) return;
   const f = $("#fulltext-panel");
   const docId = state.doc.id;
-  const button = f.querySelector("button.primary");
-  button.disabled = true;
+  const name = state.doc.name;
   try {
     const { job } = await post(`/api/documents/${docId}/fulltext`, {
       format: f.format.value, method: f.method.value, illustrations: f.illustrations.checked });
-    toast(t("ft.running"));
-    const done = await waitJob(job);
-    if (done.status === "error") { fail(done.error); return; }
-    const r = done.result;
-    toast(t("ft.done", { file: r.file, before: sizeLabel(r.size_before), after: sizeLabel(r.size_after),
-                         n: r.illustrations }));
+    const done = waitJob(job);                    // starts the polling, shows the progress
+    const r = await done;
+    if (r.status === "cancelled") { toast(t("ft.cancelled")); return; }
+    if (r.status === "error") { fail(r.error); return; }
+    const x = r.result;
+    toast(t("ft.done", { file: x.file, before: sizeLabel(x.size_before), after: sizeLabel(x.size_after),
+                         n: x.illustrations }) + (state.doc && state.doc.id === docId ? "" : ` (${name})`));
     if (state.doc && state.doc.id === docId) await loadFulltextFiles();
   } catch (e) { fail(e); }
-  finally { button.disabled = false; }
 }
 
 async function startReread(ev) {
@@ -1149,11 +1208,12 @@ function renderTranslateDocs() {
   tr.docId = sel.value ? Number(sel.value) : null;
 }
 
-function setMode(mode) {
+function setMode(mode, load = true) {
   document.querySelector(`input[name="tr-mode"][value="${mode}"]`).checked = true;
   $("#tr-text-mode").hidden = mode !== "text";
   $("#tr-doc-mode").hidden = mode !== "doc";
   $("#tr-book-mode").hidden = mode !== "book";
+  if (!load) return;
   if (mode === "doc") loadTranslations().catch(fail);
   if (mode === "book") { renderBookDocs(); loadBooks().catch(fail); }
 }
@@ -1161,8 +1221,8 @@ function setMode(mode) {
 function trLanguages() {
   const src = $("#tr-src").value;
   const tgt = $("#tr-tgt").value;
-  store("iak.tr.src", src);
-  store("iak.tr.tgt", tgt);
+  if (src) store("iak.tr.src", src);              // empty before the languages load
+  if (tgt) store("iak.tr.tgt", tgt);
   return { src, tgt };
 }
 
@@ -1206,6 +1266,7 @@ async function translateText() {
 function trError(msg) {
   if (/could not be detected/.test(msg)) return t("tr.detect_failed");
   if (/no translation or chat server/.test(msg)) return t("tr.no_server");
+  if (/is already in .*: choose another target language/.test(msg)) return t("tr.same_lang_short");
   return msg;
 }
 
@@ -1215,6 +1276,7 @@ async function loadTranslations() {
   tr.docId = $("#tr-doc").value ? Number($("#tr-doc").value) : null;
   if (!tr.docId) { list.replaceChildren(); info.textContent = t("tr.choose_doc_hint"); return; }
   const { tgt } = trLanguages();
+  if (!tgt) return;                               // the languages are not loaded yet
   const data = await get(`/api/documents/${tr.docId}/translations?tgt=${encodeURIComponent(tgt)}`);
   // the document or the language changed meanwhile: a newer call shows it
   if (Number($("#tr-doc").value) !== tr.docId || $("#tr-tgt").value !== tgt) return;
@@ -1226,6 +1288,7 @@ async function loadTranslations() {
     t("tr.doc_state", { done, total: data.units.length, tgt: langName(tgt) }),
     stale ? t("tr.doc_stale", { n: stale }) : null,
     data.src ? t("tr.doc_lang", { lang: langName(data.src) }) : null,
+    data.src && data.src === tgt ? t("tr.same_lang", { lang: langName(tgt) }) : null,
     data.languages.filter((l) => l !== tgt).length
       ? t("tr.doc_other", { langs: data.languages.filter((l) => l !== tgt).map(langName).join(", ") }) : null,
   ].filter(Boolean).join(" · ");
@@ -1304,14 +1367,26 @@ async function exportTranslation() {
 async function translateFromViewer() {
   if (!state.doc || !state.unit) return;
   const unitId = state.unit.id;
-  tr.docId = state.doc.id;
-  show("translate");
-  setMode("doc");
-  $("#tr-doc").value = String(tr.docId);
-  await loadTranslations();
-  const row = tr.rows.find((u) => u.unit_id === unitId);
+  const docId = state.doc.id;
+  tr.docId = docId;
+  setMode("doc", false);
+  // the tab fills its lists first (the languages on the first visit), keeping
+  // this document, then loads its translations
+  await show("translate");
+  if ($("#tr-doc").value !== String(docId)) {
+    $("#tr-doc").value = String(docId);
+    await loadTranslations();
+  }
+  if (tr.docId !== docId) return;
   const li = document.querySelector(`#tr-units li[data-unit="${unitId}"]`);
   if (li) li.scrollIntoView({ block: "start" });
+  const { tgt } = trLanguages();
+  if (tr.detected && tr.detected === tgt) {      // French into French: choose the language
+    $("#tr-tgt").focus();
+    toast(t("tr.same_lang", { lang: langName(tgt) }), true);
+    return;
+  }
+  const row = tr.rows.find((u) => u.unit_id === unitId);
   if (row && (row.text === null || row.stale)) {
     await translateUnit(unitId, false);
     const again = document.querySelector(`#tr-units li[data-unit="${unitId}"]`);
@@ -1641,7 +1716,8 @@ async function boot() {
   } catch (e) {
     $("#boot-message").textContent = t("app.error");
     $("#boot-message").className = "error";
-    $("#boot-detail").textContent = e.message + (e.log ? `\n${t("app.log", { path: e.log })}` : "");
+    const msg = /^library in use/.test(e.message) ? t("app.in_use") : e.message;
+    $("#boot-detail").textContent = msg + (e.log ? `\n${t("app.log", { path: e.log })}` : "");
     $("#boot-retry").hidden = !TAURI;
     return;
   }
@@ -1718,6 +1794,10 @@ function wire() {
   $("#reread-close").addEventListener("click", () => { $("#reread-panel").hidden = true; });
   $("#reread-panel").addEventListener("submit", startReread);
   $("#viewer-fulltext").addEventListener("click", () => openFulltext().catch(fail));
+  $("#activity").addEventListener("click", () => {
+    show("library");
+    $("#jobs-list").scrollIntoView({ block: "nearest" });
+  });
   $("#fulltext-close").addEventListener("click", () => { $("#fulltext-panel").hidden = true; });
   $("#fulltext-panel").addEventListener("submit", makeFulltext);
   $("#reread-panel").pages.addEventListener("change", () => {

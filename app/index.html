@@ -27,6 +27,7 @@
         <button data-view="viewer" data-i18n="nav.viewer" hidden id="tab-viewer"></button>
         <button data-view="settings" data-i18n="nav.settings"></button>
       </nav>
+      <button class="link activity busy" id="activity" hidden data-i18n-title="jobs.see"></button>
       <div class="servers" id="servers"></div>
       <button class="link" id="lang-switch" data-i18n="lang.switch"></button>
     </header>
@@ -340,6 +341,11 @@
           <span data-i18n="ft.illustrations"></span></label>
         <button class="primary" data-i18n="ft.make"></button>
         <button type="button" class="link close" id="fulltext-close">×</button>
+        <div class="ft-progress" id="fulltext-progress" hidden>
+          <progress></progress>
+          <span id="fulltext-progress-text"></span>
+          <button type="button" class="link" id="fulltext-cancel" data-i18n="jobs.cancel"></button>
+        </div>
         <p class="muted ft-note" id="fulltext-note"></p>
         <ul id="fulltext-files" class="ft-files"></ul>
       </form>

@@ -24,6 +24,7 @@ import queue
 import re
 import secrets
 import shutil
+import sqlite3
 import sys
 import threading
 import time
@@ -49,6 +50,48 @@ CONTENT_TYPES = {
 TAURI_ORIGINS = {"tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"}
 MAX_BODY = 4 << 20
 
+# "database is locked": SQLite waited 30 s (db.connect) for another writer
+BUSY = ("the library is busy (database is locked): another IA-K is probably open on "
+        "the same library, or a long write did not end within 30 s; try again in a "
+        "moment, or close the other IA-K")
+
+
+def _locked(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc)
+
+
+class LibraryInUse(RuntimeError):
+    pass
+
+
+def lock_library(folder: str | Path):
+    """Hold <library>/iak.lock while serving, so that a second IA-K (another
+    window, a second launcher) on the same library is refused instead of
+    fighting over the database. The system releases the lock when the process
+    ends, even killed. Keep the returned file open."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    fh = open(folder / "iak.lock", "a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        fh.close()
+        raise LibraryInUse(f"library in use: {folder} is already open in another IA-K") from exc
+    except OSError as exc:
+        if os.name == "nt":
+            fh.close()
+            raise LibraryInUse(f"library in use: {folder} is already open in another IA-K") \
+                from exc
+        # a filesystem without locks (some network shares): serve without
+        print(f"warning: cannot lock {folder / 'iak.lock'}: {exc}", file=sys.stderr)
+    return fh
+
 
 class ApiError(Exception):
     def __init__(self, status: int, message: str):
@@ -72,7 +115,8 @@ class Job:
     finished: float | None = None
 
     def public(self) -> dict:
-        return {"id": self.id, "kind": self.kind, "status": self.status, "cancel": self.cancel,
+        return {"id": self.id, "kind": self.kind, "doc_id": self.params.get("doc_id"),
+                "status": self.status, "cancel": self.cancel,
                 "progress": self.progress, "result": self.result, "error": self.error,
                 "created": self.created, "finished": self.finished}
 
@@ -195,6 +239,8 @@ class App:
             except (analyze.AnalysisError, servers.ServerError, embed.EmbeddingMismatch,
                     translate.TranslateError, KeyError, OSError) as exc:
                 job.status, job.error = "error", str(exc)
+            except sqlite3.OperationalError as exc:
+                job.status, job.error = "error", BUSY if _locked(exc) else f"database: {exc}"
             except Exception as exc:  # report, keep the worker alive
                 job.status, job.error = "error", f"{type(exc).__name__}: {exc}"
                 traceback.print_exc()
@@ -315,6 +361,8 @@ def job_fulltext(app: App, lib: Library, job: Job):
                                 p.get("illustrations", True), p.get("method", "ocr"), vision,
                                 _progress(job, "fulltext"), lambda: job.cancel)
     except (fulltext.FullTextError, ocr.OcrError) as exc:
+        if job.cancel:
+            return {"cancelled": True}
         raise ApiError(409, str(exc))
 
 
@@ -588,6 +636,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json(502, {"error": str(exc)})
         except (KeyError, ValueError, TypeError) as exc:
             self._json(400, {"error": f"bad request: {exc}"})
+        except sqlite3.OperationalError as exc:
+            if not _locked(exc):
+                traceback.print_exc()
+            self._json(503 if _locked(exc) else 500,
+                       {"error": BUSY if _locked(exc) else f"database: {exc}"})
         except Exception as exc:
             traceback.print_exc()
             self._json(500, {"error": f"{type(exc).__name__}: {exc}"})

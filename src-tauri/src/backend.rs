@@ -6,6 +6,8 @@
 //! root is found from the executable's location, or from `IAK_ROOT`.
 //! The backend announces itself on its first stdout line:
 //!     IAK_API {"url": "http://127.0.0.1:PORT", "token": "...", "version": "..."}
+//! or, when it refuses to start (the library is open in another IA-K):
+//!     IAK_ERROR library in use: ...
 //! Its stderr goes to `data/iak-backend.log`.
 
 use serde::Serialize;
@@ -221,6 +223,14 @@ impl Backend {
             let mut announced = false;
             while let Some(Ok(line)) = lines.next() {
                 if announced {
+                    continue;
+                }
+                // the backend refused to start (another IA-K on the same library)
+                if let Some(msg) = line.strip_prefix("IAK_ERROR ") {
+                    let mut i = reader_info.lock().unwrap();
+                    i.status = "error".into();
+                    i.error = msg.trim().to_string();
+                    announced = true;
                     continue;
                 }
                 if let Some(json) = line.strip_prefix("IAK_API ") {

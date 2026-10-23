@@ -328,8 +328,8 @@ def library_document(lib, doc_id: int, illustrations: bool = True, progress=None
         for i, page in enumerate(pdf, 1):
             if cancelled and cancelled():
                 raise FullTextError("cancelled")
-            if progress:
-                progress(i, len(pdf))
+            if progress:                         # pages done, before this one
+                progress(i - 1, len(pdf))
             u = by_page.get(i)
             if u is not None and (u["source"] != "native" or u["edited"]):
                 boxes = json.loads(u["boxes"]) if u["boxes"] else []
@@ -339,6 +339,8 @@ def library_document(lib, doc_id: int, illustrations: bool = True, progress=None
                 items = _native_items(page, illustrations)
             counts["illustrations"] += sum(1 for it in items if it.kind == "img")
             pages.append(items)
+        if progress:                             # every page read: the file is written next
+            progress(len(pdf), len(pdf))
     counts["pages"] = len(pages)
     meta = json.loads(doc["meta"] or "{}")
     title = meta.get("title") or Path(doc["name"]).stem
