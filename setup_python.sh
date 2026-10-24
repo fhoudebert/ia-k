@@ -133,7 +133,10 @@ echo "[3/3] Checking"
 "$PY" -c "import pymupdf, docx, numpy, bs4, sqlite3; \
 c = sqlite3.connect(':memory:'); c.execute('create virtual table t using fts5(x)'); \
 print('PyMuPDF', pymupdf.__version__, '- numpy', numpy.__version__, '- SQLite', sqlite3.sqlite_version, 'with FTS5')"
-if command -v tesseract >/dev/null; then
+KEY_TESS="$ROOT/build/tesseract/${DEST##*/}/tesseract"
+if [ -x "$KEY_TESS" ]; then
+    echo "Tesseract: on the key, build/tesseract/${DEST##*/} (languages in build/tesseract/tessdata)"
+elif command -v tesseract >/dev/null; then
     langs="$(tesseract --list-langs 2>/dev/null | tail -n +2 | tr '\n' ' ')"
     echo "Tesseract: $(command -v tesseract) - languages: $langs"
     if [ "$OS" = mac ]; then fra_hint="brew install tesseract-lang"; else fra_hint="sudo apt install tesseract-ocr-fra"; fi

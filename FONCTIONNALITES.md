@@ -14,8 +14,9 @@ ne part sur Internet.
   fonctionne sous **Windows, Linux et macOS**, y compris depuis la même clé
   exFAT, avec une bibliothèque commune.
 - **Sans installation** : on décompresse un seul fichier (`ia-k.zip`, tous
-  systèmes) sur la clé, Python et moteur compris ; rien n'est écrit sur
-  l'ordinateur. Seul un Mac Intel demande une fois `setup_python.sh`.
+  systèmes) sur la clé, Python, moteur et OCR compris ; rien n'est écrit sur
+  l'ordinateur. Seul un Mac Intel demande une fois `setup_python.sh` (et
+  Tesseract par Homebrew).
 - **Modèles locaux** au format GGUF, servis par llama.cpp (`llama-server`) :
   Gemma 4 pour les réponses, EmbeddingGemma pour la recherche par le sens,
   TranslateGemma pour la traduction, Qwen3-VL pour la lecture des pages.
@@ -31,9 +32,10 @@ ne part sur Internet.
 - Import de **PDF, scans, images, captures d'écran, EPUB, DOCX, HTML, TXT et
   Markdown**, par bouton ou glisser-déposer ; copie dans la bibliothèque ou
   simple référence au fichier.
-- **OCR** (Tesseract) des pages scannées, avec la confiance de lecture de
-  chaque page ; langues réglables (`fra+eng`, `fra+frm` pour le moyen
-  français…).
+- **OCR** (Tesseract, fourni sur la clé avec le français, l'anglais, le
+  moyen français et le latin) des pages scannées, avec la confiance de
+  lecture de chaque page ; langues réglables (`fra+eng`, `fra+frm` pour le
+  moyen français…).
 - **Dossiers** : « Importer un dossier… » (ou déposer un dossier sur la
   fenêtre) référence tous ses documents, sous-dossiers compris, dans une
   collection du nom du dossier. Un dossier **surveillé** est examiné chaque
@@ -41,8 +43,9 @@ ne part sur Internet.
   dossier situé sur la clé est retrouvé d'un ordinateur à l'autre, quelle que
   soit la lettre du lecteur.
 - **Collections** : des groupes de documents nommés (par sujet, projet,
-  fonds…) ; un document peut appartenir à plusieurs collections, et une
-  collection peut limiter la recherche et les questions.
+  fonds…) ; un document peut appartenir à plusieurs collections, passer de
+  l'une à l'autre (« Déplacer vers la collection »), ou être rangé depuis la
+  visionneuse ; une collection peut limiter la recherche et les questions.
 - Visionneuse : la page à gauche, son texte à droite, **correction du texte**
   conservée même après une nouvelle extraction.
 - Sauvegarde automatique de la base avant chaque suppression ou mise à jour ;
@@ -77,7 +80,11 @@ ne part sur Internet.
 - « Texte intégral… » transforme un **PDF scanné** (ou une image) en document
   léger fait de vrai texte, que la liseuse remet en page : le texte de la
   bibliothèque (OCR, corrections, relectures) remplace les images des pages,
-  les titres sont retrouvés, en-têtes et numéros de page retirés, et les
+  les titres sont retrouvés, en-têtes et numéros de page retirés, les
+  **paragraphes reconstitués** d'après la page (alinéa, dernière ligne
+  courte, espace ; plus de coupures à chaque ligne mal alignée) et recollés
+  d'une page à l'autre, les **notes** de bas de page reliées à leurs appels
+  (notes EPUB, liens en HTML, liste en fin de chapitre ailleurs), et les
   **illustrations** (photos, gravures, cartes) sont découpées et gardées à
   leur place. En EPUB, PDF A5, HTML, Word, RTF ou Markdown, bien plus léger
   que le scan (selon les illustrations gardées).
@@ -90,6 +97,16 @@ ne part sur Internet.
 - Le modèle de vision **corrige le texte de Tesseract** à partir de l'image,
   ou relit l'image seule : livres anciens, colonnes, tableaux (rendus en
   Markdown).
+- **Mots douteux** : sous le texte d'une page OCR, les mots lus avec peu
+  de confiance, inconnus de la bibliothèque (son propre vocabulaire, ancien
+  français compris, et des listes de mots ajoutées) ou aux lettres suspectes
+  (`at1as`) ; un clic les montre dans le texte et sur l'image, et les pages
+  qui en ont beaucoup sont signalées. On peut **corriger les seuls mots
+  douteux**, bien plus vite qu'en relisant toute la page : par le modèle de
+  texte (chaque mot dans sa phrase, avec les mots proches de vos livres), ou
+  par la **vision ciblée** (les seules lignes concernées, découpées dans
+  l'image). Chaque mot proposé est vérifié ; les corrections gardées et les
+  propositions refusées sont affichées.
 - Chaque lecture est une **proposition** : taux de concordance avec le texte
   actuel, **différences mot à mot**, puis « Utiliser comme texte de la page »
   ou retour au texte extrait.

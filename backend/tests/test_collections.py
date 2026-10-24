@@ -132,3 +132,39 @@ def test_api(tmp_path, native_pdf, docx_file):
         srv.shutdown()
         srv.server_close()
         chat.close()
+
+
+def test_move_and_document_collections(tmp_path, native_pdf, docx_file):
+    app = api.App(tmp_path / "lib", servers.Host("t"), token=TOKEN)
+    srv = api.make_server(app)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    try:
+        with Library(tmp_path / "lib") as l:
+            pdf = l.import_file(native_pdf).doc_id
+            docx = l.import_file(docx_file).doc_id
+            a = collection.create(l.con, "A")["id"]
+            b = collection.create(l.con, "B")["id"]
+            collection.add(l.con, a, [pdf, docx])
+        # moved: out of A, into B; a document not in A is left alone
+        s, r, _ = call(port, "POST", f"/api/collections/{a}/move", {"to": b, "doc_ids": [pdf]})
+        assert s == 200 and r["moved"] == 1
+        assert call(port, "POST", f"/api/collections/{a}/move", {"to": a, "doc_ids": [docx]})[0] \
+            == 400
+        assert call(port, "POST", f"/api/collections/{a}/move", {"to": 99, "doc_ids": [docx]})[0] \
+            == 404
+        _, docs, _ = call(port, "GET", "/api/documents")
+        assert {d["id"]: d["collections"] for d in docs} == {pdf: [b], docx: [a]}
+        # all the collections of one document at once
+        s, r, _ = call(port, "PUT", f"/api/documents/{docx}/collections", {"collections": [b]})
+        assert s == 200 and r["collections"] == [b]
+        s, r, _ = call(port, "PUT", f"/api/documents/{docx}/collections", {"collections": [a, b]})
+        assert r["collections"] == [a, b]
+        assert call(port, "PUT", f"/api/documents/{docx}/collections", {"collections": []})[1] \
+            == {"collections": []}
+        assert call(port, "PUT", f"/api/documents/{docx}/collections", {"collections": [99]})[0] \
+            == 404
+        assert call(port, "PUT", "/api/documents/999/collections", {"collections": []})[0] == 404
+    finally:
+        srv.shutdown()
+        srv.server_close()

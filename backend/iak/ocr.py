@@ -1,8 +1,9 @@
 """Tesseract OCR through its command-line program.
 
 The command line is used rather than a Python binding so that the same code
-works with the system Tesseract on Linux and with a copy carried on the key
-on Windows (set its path in the preferences).
+works with the Tesseract carried on the key (build/tesseract/<os>/, made by
+scripts/build_tesseract.py, its languages in build/tesseract/tessdata) and
+with one installed on the computer.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import io
 import os
 import shutil
 import subprocess
+import platform
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -37,12 +39,55 @@ MAC_DEFAULTS = ["/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract",
                 "/opt/local/bin/tesseract"]
 
 
-def find_tesseract(explicit: str | None = None) -> str:
-    # a copy carried on the key (build/tesseract) comes first after explicit choices
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# the copy carried on the key: build/tesseract/<os>/ and the shared tessdata/
+KEY = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                   "build", "tesseract")
+
+
+def key_os() -> str:
+    if os.name == "nt":
+        return "windows"
+    if sys.platform == "darwin":
+        return "mac-aarch64" if platform.machine() == "arm64" else "mac-x86_64"
+    return "linux"
+
+
+def key_tesseract() -> str | None:
     exe = "tesseract.exe" if os.name == "nt" else "tesseract"
-    candidates = [explicit, os.environ.get("IAK_TESSERACT"),
-                  os.path.join(root, "build", "tesseract", exe), shutil.which("tesseract")]
+    # build/tesseract/<exe> is the place of earlier versions (Windows)
+    for p in (os.path.join(KEY, key_os(), exe), os.path.join(KEY, exe)):
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def tessdata_for(exe: str) -> str | None:
+    """The language folder of a Tesseract carried on the key, else None (the
+    installed ones know theirs, or TESSDATA_PREFIX says it)."""
+    try:
+        inside = os.path.commonpath([os.path.abspath(exe), KEY]) == KEY
+    except ValueError:                       # another drive
+        inside = False
+    if not inside:
+        return None
+    for d in (os.path.join(os.path.dirname(exe), "tessdata"), os.path.join(KEY, "tessdata")):
+        if os.path.isdir(d):
+            return d
+    return None
+
+
+def _env(exe: str) -> dict | None:
+    td = tessdata_for(exe)
+    if td is None:
+        return None
+    # one thread per page: IA-K reads pages one after the other
+    return dict(os.environ, TESSDATA_PREFIX=td, OMP_THREAD_LIMIT="1")
+
+
+def find_tesseract(explicit: str | None = None) -> str:
+    # the copy carried on the key comes first after explicit choices
+    candidates = [explicit, os.environ.get("IAK_TESSERACT"), key_tesseract(),
+                  shutil.which("tesseract")]
     if os.name == "nt":
         candidates += WINDOWS_DEFAULTS
     elif sys.platform == "darwin":
@@ -58,7 +103,7 @@ def find_tesseract(explicit: str | None = None) -> str:
 def available_langs(tesseract: str | None = None) -> list[str]:
     exe = find_tesseract(tesseract)
     out = subprocess.run([exe, "--list-langs"], capture_output=True, text=True,
-                         encoding="utf-8", errors="replace", timeout=30)
+                         encoding="utf-8", errors="replace", timeout=30, env=_env(exe))
     lines = (out.stdout or out.stderr).splitlines()
     return [ln.strip() for ln in lines[1:] if ln.strip()]
 
@@ -111,7 +156,7 @@ def ocr_image_bytes(png: bytes, langs: str = DEFAULT_LANGS,
         with os.fdopen(fd, "wb") as fh:
             fh.write(png)
         proc = subprocess.run([exe, path, "stdout", "-l", langs, "tsv"],
-                              capture_output=True, timeout=timeout)
+                              capture_output=True, timeout=timeout, env=_env(exe))
     finally:
         try:
             os.unlink(path)

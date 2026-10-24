@@ -4,8 +4,8 @@ version = "0.1.0"
 description = "IA-K, a local and portable document assistant"
 authors = ["fhoudebert"]
 license = "MIT"
-edition = "2021"
-rust-version = "1.77"
+edition = "2024"
+rust-version = "1.90"
 
 [lib]
 name = "iak_lib"

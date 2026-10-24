@@ -117,14 +117,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-ocr", action="store_true", help="do not give the OCR text")
     p = sub.add_parser("reread")
     p.add_argument("id", type=int, help="document id (PDF or image)")
-    p.add_argument("--pages", choices=("low", "ocr", "all"), default="low",
-                   help="low: OCR pages below --threshold (default); ocr: every OCR page")
+    p.add_argument("--pages", choices=("low", "doubt", "ocr", "all"), default="low",
+                   help="low: OCR pages below --threshold (default); doubt: pages with "
+                        "doubtful words; ocr: every OCR page")
     p.add_argument("--threshold", type=float, default=80, help="OCR confidence, 0-100")
-    p.add_argument("--method", choices=("correct", "transcribe"), default="correct",
-                   help="correct the OCR text from the image (default), or read the image alone")
+    p.add_argument("--method", choices=("correct", "transcribe", "fix", "focus"),
+                   default="correct",
+                   help="correct the OCR text from the image (default), read the image alone, "
+                        "fix the doubtful words with the text model (no image), or read "
+                        "again the lines holding them with the vision model (focus)")
     p.add_argument("--replace", action="store_true",
                    help="make each reading the page's text (pages corrected by hand are kept)")
     p.add_argument("--refresh", action="store_true", help="read pages already read again")
+    p = sub.add_parser("doubts", help="doubtful OCR words, by page")
+    p.add_argument("id", type=int, help="document id")
+    p.add_argument("--page", help="one page (its label, e.g. 12): its doubtful words")
     p = sub.add_parser("summarize")
     p.add_argument("id", type=int)
     p.add_argument("--refresh", action="store_true", help="ignore a stored summary")
@@ -151,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--format", default="epub", choices=("epub", "pdf", "html", "docx", "rtf", "md"),
                    help="for a PDF or an image (an EPUB stays EPUB); default epub")
     p.add_argument("--no-illustrations", action="store_true", help="text only")
+    p.add_argument("--no-notes", action="store_true",
+                   help="leave the notes at the foot of the pages as paragraphs")
     p.add_argument("--vision", action="store_true",
                    help="EPUB: read its pictures of text with the vision model, not Tesseract")
     p.add_argument("-o", "--out", type=Path, help="copy the result here")
@@ -214,6 +223,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "serve":
         from . import api
+        try:
+            lock = api.lock_library(args.library)  # noqa: F841 (held while serving)
+        except api.LibraryInUse as exc:
+            # read by the application, which shows it instead of a crash
+            print(f"IAK_ERROR {exc}", flush=True)
+            print(exc, file=sys.stderr)
+            return 3
         app = api.App(args.library, host, args.lang, args.ocr_langs, args.tesseract,
                       token=args.token, origins=set(args.allow_origin),
                       config=ROOT / "config" / "servers.toml")
@@ -336,7 +352,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.target.isdigit():
                     r = fulltext.convert(lib, int(args.target), args.format,
                                          not args.no_illustrations,
-                                         "vision" if args.vision else "ocr", vision, progress)
+                                         "vision" if args.vision else "ocr", vision, progress,
+                                         notes=not args.no_notes)
                     out = fulltext.output_dir(lib, int(args.target)) / r["file"]
                 else:
                     src = Path(args.target)
@@ -523,11 +540,44 @@ def main(argv: list[str] | None = None) -> int:
                 print(md, end="")
             return 0
 
+        if args.cmd == "doubts":
+            from . import doubt
+            if lib.document(args.id) is None:
+                _out(f"no document {args.id}")
+                return 1
+            rows = doubt.document(lib, args.id)
+            if args.page:
+                row = next((x for x in rows if x["label"] in (args.page, f"p. {args.page}")), None)
+                if row is None:
+                    _out(f"no page {args.page}")
+                    return 1
+                d = doubt.unit(lib, row["unit_id"])
+                for s_ in d["suspects"]:
+                    conf = "" if s_["conf"] is None else f"  conf {s_['conf']:.0f}"
+                    _out(f"  {s_['word']:<24} {', '.join(s_['reasons'])}{conf}")
+                _out(f"{d['doubtful']} doubtful word(s) of {d['words']} ({d['ratio']:.0%})")
+                return 0
+            for x in rows:
+                if x["doubtful"]:
+                    mark = "  <- read again" if x["doubt"] else ""
+                    _out(f"  {x['label']:<10} {x['doubtful']:>4} / {x['words']:<5} "
+                         f"{x['ratio']:>5.0%}{mark}")
+            n = sum(x["doubt"] for x in rows)
+            _out(f"{n} page(s) of {len(rows)} worth reading again "
+                 f"(at least {doubt.DOUBT_RATIO:.0%} doubtful words)")
+            return 0
+
         if args.cmd == "reread":
             from . import transcription
             try:
-                client = analyze.vision_client(host, host.api_key, args.vision_server,
-                                               args.server)
+                if args.method == "fix":
+                    url = args.server or host.chat
+                    if not url:
+                        raise analyze.AnalysisError("no chat server configured")
+                    client = servers.Client(url, host.api_key, timeout=600)
+                else:
+                    client = analyze.vision_client(host, host.api_key, args.vision_server,
+                                                   args.server)
                 r = transcription.read_document(
                     lib, client, args.id, args.method, args.pages, args.threshold,
                     args.replace, args.refresh,

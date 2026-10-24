@@ -32,7 +32,8 @@ interface uses.
 ./iak.sh embed [--rebuild]                        # vectors for search by meaning
 ./iak.sh look 42 --task describe|transcribe|error|extract   # page analysis
 ./iak.sh look 42 --ask "Quel est le montant total ?"
-./iak.sh reread 3 [--pages low|ocr|all] [--method correct|transcribe] [--replace]
+./iak.sh reread 3 [--pages low|doubt|ocr|all] [--method correct|transcribe|fix] [--replace]
+./iak.sh doubts 3 [--page 12]                     # doubtful OCR words, by page
 ./iak.sh summarize 3 [--refresh]                  # summary with [p. N] labels
 ./iak.sh compare 3 7 --question "dates"           # common points, differences
 ./iak.sh analyses 3                               # stored analyses
@@ -72,8 +73,10 @@ suits exFAT keys that may be unplugged.
   rendered at 300 dpi and read by Tesseract; images always are, small
   screenshots enlarged twice first. Word boxes and confidence are kept, for
   highlighting passages and spotting doubtful pages. Tesseract is looked for
-  in `build/tesseract/`, `IAK_TESSERACT`, the `PATH`, then
-  `C:\Program Files\Tesseract-OCR`.
+  in `--tesseract` / `IAK_TESSERACT`, on the key (`build/tesseract/<os>/`,
+  run with `TESSDATA_PREFIX` set to the shared `build/tesseract/tessdata`),
+  the `PATH`, then the usual places (`C:\Program Files\Tesseract-OCR`,
+  Homebrew, MacPorts).
 - **Corrections.** A corrected unit is reindexed alone; the extracted text is
   kept beside it, and extracting again keeps the correction.
 - **Duplicates.** A file whose content is already in the library is not
@@ -183,7 +186,33 @@ temporary file.
   found on the rendered page; a picture covering most of a page is the scan
   itself and is searched the same way. Then, as for books: headings from the
   sizes, running heads and page numbers removed, paragraphs joined across
-  pages.
+  pages, also when the next page starts with a capital if the paragraph
+  plainly goes on (no full stop; a lowercase letter, a comma or a hyphen at
+  its end).
+- **Paragraphs** (`iak/layout.py`). From the lines of the page: the word
+  boxes of an OCR page (when they still follow its text word for word), the
+  lines and type sizes of a native page. A new paragraph starts at another
+  type size (15 %), after extra space (more than the usual gap plus 0.8
+  line), at an indented first line (0.8 line, not a whole indented block), after a
+  short line (2.5 lines from the margin) that ends a sentence or is followed
+  by a capital, at a centred line, at a note mark in a smaller type, and at a
+  new PDF text block that does not go on from the previous one; otherwise
+  the line goes on (hyphenation removed). Without usable boxes (a page
+  corrected by hand), Tesseract's paragraphs, joined where one plainly goes
+  on.
+- **Notes.** At the foot of a page, the paragraphs in a type at most 88 % of
+  the body's that start with a mark (`1`, `(1)`, `1.`, `*`, `†`, `a)`) are
+  notes, with the paragraphs that follow them; the first call of the same
+  mark after a word on the page (`atlas¹`, `atlas1`, `atlas (1)`, `atlas[1]`;
+  `!` or `?` right after a word, Tesseract's usual reading of a superscript
+  1 or 2; or a letter `i`, `l`, `z` stuck to a word, when the word without
+  it is in the document and with it is not: `atlasi`, never `lui`) is linked
+  to it. Notes are numbered through the
+  document and go to the end of their call's chapter: EPUB 3 footnotes
+  (`epub:type="noteref"`/`"footnote"`), linked both ways in HTML,
+  superscripts and a list in PDF, Word and RTF, `[^n]` in Markdown. A note
+  whose call is not found is kept, unlinked. `"notes": false` (CLI
+  `--no-notes`) leaves them as paragraphs.
 - **Finding illustrations.** The page is rendered in grey at 100 dpi; the
   words' rectangles are blanked (except "words" of low confidence or great
   size: Tesseract reads hatching that way); a grid of cells marks those with
@@ -213,6 +242,25 @@ temporary file.
   about one and a half times the OCR text). Repetition is discouraged
   (presence penalty 1.5, as Qwen recommends for Qwen3-VL) and a line repeated
   at the end is dropped: small vision models can loop.
+- **Doubtful words only** (`iak/correction.py`), much faster than a whole
+  page. `fix`, the text (chat) model: each doubtful word (below) is sent
+  numbered, between ⟦ ⟧ with 7 words on each side, and with up to 3 close
+  words of the library (the same letters but for the accents, else the
+  nearest of about the same length, difflib 0.8); the model answers one
+  line per word, "n: word" (30 words per request, about 14 tokens of answer
+  each). `focus`, targeted vision: each text line holding doubtful words (at
+  most 80 per page) is cut out of the page image around its words' boxes,
+  enlarged to about 48 pixels a line, and read alone by the vision model;
+  the reading is aligned with the OCR line word by word and only the
+  doubtful words take it (a word split in two too). Every proposal is then
+  judged: kept when the library knows the word, or when it is close to the
+  OCR's (edit distance at most a quarter of its letters, half with the
+  vision model that saw them) without odd letters; refused otherwise. A
+  capital stays a capital. The reading stores the list of changes, kept and
+  refused, with the reason (`sources.changes`, `kept`, `refused`). Measured
+  on a noisy scan of 283 words, 37 doubtful, 2 processor cores: Gemma 4 E2B
+  (`fix`) 12 words corrected, 3 refused, 76 s; Qwen3-VL-2B (`focus`, 21
+  lines) 20 corrected, 1 refused, 66 s, all right.
 - **Readings.** Stored as analyses (task `correct` or `transcribe`) with
   their model, their agreement with the page's text at the time (share of
   words in common, whatever their order, 0-1: `score`) and whether the answer was cut by
@@ -222,12 +270,29 @@ temporary file.
   says which pages have a model's text (`reader`); a page corrected by hand
   afterwards no longer counts as one.
 - **A document.** Pages: `low` (OCR pages below the confidence threshold, 80
-  by default, or nearly empty), `ocr`, `all`. Pages already read by the same
+  by default, or nearly empty), `doubt` (pages with at least 5 % of
+  doubtful words), `ocr`, `all`; with `fix` or `focus`, a page without
+  doubtful word is skipped. Pages already read by the same
   model with the same method are skipped (unless `refresh`), so a cancelled
   job goes on where it stopped; with `replace`, pages corrected by hand are
   kept.
 - **Server.** The vision server when it answers, else the chat server when
-  it has a vision projector.
+  it has a vision projector; the chat server for `fix`.
+- **Doubtful words** (`iak/doubt.py`, OCR pages not corrected by hand). A
+  word is doubtful when Tesseract's confidence is below 60 and it is not a
+  known word (below 30 even if known: noisy scans give low confidences to
+  words read right), when it is unknown to the library (lowercase, 3 letters
+  or more, confidence under 90), or when its letters look like an OCR slip
+  (letters and digits mixed but 1er, 2e…; a capital inside a lowercase word;
+  | ¦ ¢ © ® ° § ~ ^ _; one letter four times). The known words are the
+  library's own: native text, pages corrected by hand, OCR words read with
+  a confidence of 90 or more seen twice, so old spellings of the books
+  themselves are known; plain text files in `config/words/` (one word per
+  line, `#` comments) add more (a lexicon, the names of a fonds). The
+  vocabulary is kept in memory until the pages change. A page's score is
+  its share of doubtful words. `GET /api/units/<id>/doubts` (words, offsets
+  in the text, boxes on the image, reasons) and `/api/documents/<id>/doubts`
+  (score of each page).
 
 ## Translation
 
@@ -312,14 +377,22 @@ The interface talks to the engine through an HTTP API:
 - **Lifetime.** With `--watch-stdin` (used by the application) the engine
   stops when its standard input closes, that is when the application ends,
   even abruptly.
+- **One engine per library.** `serve` holds `<library>/iak.lock` (a system
+  lock, released when the process ends, even killed). A second `serve` on the
+  same library, such as a second IA-K window opened by another `serveurs-…`
+  file, prints `IAK_ERROR library in use: …` and exits with code 3; the
+  application shows that instead of a crash. The other commands (`iak.sh
+  import`, `search`…) still work next to it.
 - **Jobs.** Import, embedding, re-extraction, page analysis and readings,
   summaries, comparisons and translations run one at a time: the call returns
   `{"job": id}` (202) and `GET /api/jobs/<id>` gives status, progress and
-  result. A queued job can be cancelled; a reading of several pages stops
-  between two pages.
+  result (and `doc_id` for a job about one document). A queued job can be
+  cancelled; a reading of several pages, a full-text version and a folder
+  scan stop between two pages or files (status `cancelled`).
 - **Errors.** `{"error": "..."}` with 400, 401 (token), 403 (host or origin),
   404, 409 (not configured, wrong embedding model, impossible task), 502
-  (model server).
+  (model server), 503 (database locked: another writer held it for more than
+  30 s).
 
 | Method and path | Purpose |
 |---|---|
@@ -342,14 +415,17 @@ The interface talks to the engine through an HTTP API:
 | `PUT /api/folders/<id>` `{"watch", "copy", "recursive"}`, `POST /api/folders/<id>/scan`, `DELETE /api/folders/<id>` | settings; scan now (job); stop following |
 | `GET`, `PUT` `{"name"}`, `DELETE /api/collections/<id>` | one collection: its documents, rename, delete |
 | `POST /api/collections/<id>/documents` `{"add": [ids], "remove": [ids]}` | put documents in it or take them out |
+| `POST /api/collections/<id>/move` `{"to": id, "doc_ids": [ids]}` | move documents out of it into another collection |
+| `PUT /api/documents/<id>/collections` `{"collections": [ids]}` | every collection of one document at once |
 | `POST /api/ask/stream` (same body) | server-sent events: `sources`, `token`…, `done` or `error` |
 | `POST /api/look` `{"unit_id": 42, "task": "error"}` or `"question"` | job |
 | `POST /api/summarize` `{"doc_id": 3}`, `POST /api/compare` `{"doc_ids": [3, 7]}` | jobs |
 | `GET /api/analyses[?doc=3]`, `GET /api/jobs`, `GET /api/jobs/<id>` | stored results, jobs |
-| `POST /api/read` `{"unit_id"` or `"doc_id", "pages", "threshold", "method", "replace", "refresh"}` | job: page readings by the vision model |
+| `POST /api/read` `{"unit_id"` or `"doc_id", "pages", "threshold", "method", "replace", "refresh"}` | job: page readings by the vision model (`fix`: the text model on the doubtful words; `focus`: the vision model on their lines) |
+| `GET /api/units/<id>/doubts`, `GET /api/documents/<id>/doubts` | doubtful OCR words of a page, doubt of each page |
 | `GET /api/analyses/<id>/diff`, `POST /api/analyses/<id>/apply` | word differences with the page's text; use a reading as the text |
 | `POST /api/units/<id>/restore` | back to the extracted text |
-| `POST /api/jobs/<id>/cancel` | cancel a queued job, or stop a reading between two pages |
+| `POST /api/jobs/<id>/cancel` | cancel a queued job, or stop a reading, a full-text version or a scan |
 | `POST /api/export/conversation` `{"turns": [{"question", "text", "status", "sources", "scope"}], "lang", "single", "path"}` | Markdown of an answer or a conversation (returned, or written to `path`) |
 | `GET /api/analyses/<id>/markdown?lang=fr`, `POST /api/analyses/<id>/export` `{"path", "lang"}` | an analysis as Markdown |
 | `GET /api/languages` | languages offered for translation |

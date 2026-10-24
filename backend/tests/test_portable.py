@@ -75,3 +75,21 @@ def test_merge(tmp_path):
     case = make_zip(tmp_path / "ia-k-case.zip", "ia-k-mac", {"IAK.sh": (b"", 0o100755)})
     with pytest.raises(SystemExit, match="case"):
         mp.merge([lin, case], tmp_path / "y.zip")
+
+
+def test_tesseract_on_the_key(tmp_path, monkeypatch):
+    import os
+
+    from iak import ocr
+    key = tmp_path / "build" / "tesseract"
+    exe = key / ocr.key_os() / ("tesseract.exe" if os.name == "nt" else "tesseract")
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    (key / "tessdata").mkdir()
+    monkeypatch.setattr(ocr, "KEY", str(key))
+    monkeypatch.delenv("IAK_TESSERACT", raising=False)
+    assert ocr.find_tesseract() == str(exe)
+    env = ocr._env(str(exe))
+    assert env["TESSDATA_PREFIX"] == str(key / "tessdata") and env["OMP_THREAD_LIMIT"] == "1"
+    # an installed Tesseract keeps its own languages
+    assert ocr._env(str(tmp_path / "usr" / "bin" / "tesseract")) is None

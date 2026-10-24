@@ -231,6 +231,9 @@ def translate_unit(lib, tr: Translator, unit_id: int, src: str, tgt: str,
     u = lib.con.execute("SELECT doc_id, text FROM units WHERE id=?", (unit_id,)).fetchone()
     if u is None:
         raise KeyError(f"no unit {unit_id}")
+    if src == tgt:
+        raise TranslateError(f"the document is already in {LANGUAGES.get(tgt, tgt)}: "
+                             "choose another target language")
     h = _hash(u["text"])
     if not refresh:
         row = lib.con.execute("SELECT text FROM translations WHERE unit_id=? AND tgt=? AND"
@@ -253,6 +256,9 @@ def translate_document(lib, tr: Translator, doc_id: int, src: str | None, tgt: s
     src = src or document_language(lib, doc_id)
     if not src:
         raise TranslateError("the language of the document could not be detected: choose it")
+    if src == tgt:
+        raise TranslateError(f"the document is already in {LANGUAGES.get(tgt, tgt)}: "
+                             "choose another target language")
     units = lib.units(doc_id)
     done = cached = 0
     for i, u in enumerate(units, 1):

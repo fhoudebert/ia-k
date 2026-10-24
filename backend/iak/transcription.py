@@ -1,11 +1,15 @@
 """Reading pages again with the vision model, to correct or replace the text
 Tesseract gave: difficult scans, old prints, tables, columns.
 
-Two methods for a page:
-- "transcribe": the model reads the image alone;
-- "correct": the model gets the image AND the current text, and corrects
-  that text where the image shows it is wrong. The model invents less, and
-  the page keeps its line structure.
+Three methods for a page:
+- "transcribe": the vision model reads the image alone;
+- "correct": the vision model gets the image AND the current text, and
+  corrects that text where the image shows it is wrong. The model invents
+  less, and the page keeps its line structure;
+- "fix": the text (chat) model corrects the doubtful words (iak.doubt), each
+  given in its context; no image: much faster, for the usual OCR slips;
+- "focus": the vision model reads again only the lines that hold doubtful
+  words, cut out of the page; only those words change (iak.correction).
 
 A reading is stored as an analysis (task transcribe or correct) with its
 agreement with the page's text at the time (0-1, share of words in common): a low agreement
@@ -24,9 +28,12 @@ import time
 from dataclasses import dataclass
 
 from .analyze import SYSTEM, AnalysisError, _escape, _model_name, _save, render_unit
+from .correction import NO_PLACE, NOTHING_DOUBTFUL
 from .servers import Client
 
-METHODS = ("transcribe", "correct")
+METHODS = ("transcribe", "correct", "fix", "focus")
+VISION_METHODS = ("transcribe", "correct", "focus")
+_TASKS_SQL = "(" + ", ".join(f"'{m}'" for m in METHODS) + ")"
 
 COMMON = (
     "Keep the original spelling, punctuation, capitals and abbreviations exactly as "
@@ -46,7 +53,6 @@ PROMPTS = {
                "missed, tables. Change nothing that is already right. Give the corrected page once: a "
                "table appears only as the Markdown table, not also as the OCR's lines. " + COMMON,
 }
-
 # a dense page is about 4,000 characters, 1 token = about 3 characters
 MAX_TOKENS = 3000
 # a small vision model may repeat a line endlessly: the reading is capped
@@ -138,12 +144,43 @@ def transcribe_png(client: Client, png: bytes, max_tokens: int = MAX_TOKENS) -> 
     return _drop_loop(_clean(text))
 
 
+def correct_words(lib, client: Client, unit_id: int, method: str = "fix",
+                  progress=None) -> Reading:
+    """Correct the doubtful words of a page, with the text model ("fix") or
+    the vision model on the lines that hold them ("focus"); the reading is
+    stored, not applied. AnalysisError NOTHING_DOUBTFUL when no word is."""
+    from . import correction
+    unit = lib.con.execute("SELECT doc_id, text FROM units WHERE id=?", (unit_id,)).fetchone()
+    if unit is None:
+        raise AnalysisError(f"no unit {unit_id}")
+    t0 = time.perf_counter()
+    if method == "focus":
+        text, changes, info = correction.focus_words(lib, client, unit_id, progress)
+    else:
+        text, changes, info = correction.fix_words(lib, client, unit_id)
+    seconds = time.perf_counter() - t0
+    score = agreement(unit["text"], text)
+    rid = _save(lib.con, unit["doc_id"], unit_id, method, text, "", "", _model_name(client))
+    kept = sum(c["kept"] for c in changes)
+    with lib.con:
+        lib.con.execute("UPDATE analyses SET score=?, sources=? WHERE id=?",
+                        (score, json.dumps({**info, "seconds": round(seconds, 1),
+                                            "changes": changes, "kept": kept,
+                                            "refused": len(changes) - kept}), rid))
+    return Reading(rid, unit_id, method, text, score, info.get("truncated", False), seconds)
+
+
+
+
 def read_page(lib, client: Client, unit_id: int, method: str = "transcribe",
               max_side: int = DEFAULT_SIDE, max_tokens: int = MAX_TOKENS) -> Reading:
     """Read one page or image again with the vision model; the reading is
-    stored, not applied."""
+    stored, not applied. Methods "fix" (the text model) and "focus" correct
+    the doubtful words only (correct_words)."""
     if method not in METHODS:
         raise AnalysisError(f"unknown method {method}: {', '.join(METHODS)}")
+    if method in ("fix", "focus"):
+        return correct_words(lib, client, unit_id, method)
     unit = lib.con.execute("SELECT doc_id, text FROM units WHERE id=?", (unit_id,)).fetchone()
     if unit is None:
         raise AnalysisError(f"no unit {unit_id}")
@@ -188,7 +225,7 @@ def apply(lib, analysis_id: int) -> int:
     lib.set_unit_text(a["unit_id"], a["text"])
     with lib.con:
         lib.con.execute("UPDATE analyses SET applied=NULL WHERE unit_id=? AND task IN"
-                        " ('transcribe', 'correct')", (a["unit_id"],))
+                        f" {_TASKS_SQL}", (a["unit_id"],))
         lib.con.execute("UPDATE analyses SET applied=? WHERE id=?", (time.time(), analysis_id))
     return a["unit_id"]
 
@@ -202,7 +239,7 @@ def restore(lib, unit_id: int) -> None:
     with lib.con:
         lib.con.execute("UPDATE units SET text=text_extracted, edited=0 WHERE id=?", (unit_id,))
         lib.con.execute("UPDATE analyses SET applied=NULL WHERE unit_id=? AND task IN"
-                        " ('transcribe', 'correct')", (unit_id,))
+                        f" {_TASKS_SQL}", (unit_id,))
     lib.reindex(u["doc_id"], [unit_id])
 
 
@@ -218,7 +255,8 @@ def page_reader(lib, unit_id: int) -> dict | None:
 def select_pages(lib, doc_id: int, pages: str = "low",
                  threshold: float = LOW_CONFIDENCE) -> list:
     """Units of a PDF or image document to read again: "low" (OCR pages below
-    the confidence threshold, or nearly empty), "ocr" (every OCR page), "all"."""
+    the confidence threshold, or nearly empty), "doubt" (pages with doubtful
+    words, iak.doubt), "ocr" (every OCR page), "all"."""
     doc = lib.document(doc_id)
     if doc is None:
         raise KeyError(f"no document {doc_id}")
@@ -231,8 +269,12 @@ def select_pages(lib, doc_id: int, pages: str = "low",
     ocr = [u for u in units if u["source"] == "ocr"]
     if pages == "ocr":
         return ocr
+    if pages == "doubt":
+        from . import doubt
+        flagged = {d["unit_id"] for d in doubt.document(lib, doc_id) if d["doubt"]}
+        return [u for u in units if u["id"] in flagged]
     if pages != "low":
-        raise AnalysisError("pages is low, ocr or all")
+        raise AnalysisError("pages is low, doubt, ocr or all")
     return [u for u in ocr if (u["ocr_conf"] is not None and u["ocr_conf"] < threshold)
             or len(u["text"].strip()) < 40]
 
@@ -264,7 +306,13 @@ def read_document(lib, client: Client, doc_id: int, method: str = "correct",
             out["skipped"] += 1
             rid = done["id"]
         else:
-            r = read_page(lib, client, u["id"], method, max_side)
+            try:
+                r = read_page(lib, client, u["id"], method, max_side)
+            except AnalysisError as exc:
+                if str(exc) not in (NOTHING_DOUBTFUL, NO_PLACE):
+                    raise
+                out["skipped"] += 1                 # fix: nothing to correct here
+                continue
             out["read"] += 1
             out["truncated"] += r.truncated
             rid = r.id

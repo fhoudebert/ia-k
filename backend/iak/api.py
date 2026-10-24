@@ -24,6 +24,7 @@ import queue
 import re
 import secrets
 import shutil
+import sqlite3
 import sys
 import threading
 import time
@@ -33,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, analyze, answer, book, collection, db, embed, export, folders,
+from . import (__version__, analyze, answer, book, collection, db, doubt, embed, export, folders,
                fulltext, ocr, search, servers, transcription, translate)
 from .library import Library
 
@@ -48,6 +49,48 @@ CONTENT_TYPES = {
 }
 TAURI_ORIGINS = {"tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"}
 MAX_BODY = 4 << 20
+
+# "database is locked": SQLite waited 30 s (db.connect) for another writer
+BUSY = ("the library is busy (database is locked): another IA-K is probably open on "
+        "the same library, or a long write did not end within 30 s; try again in a "
+        "moment, or close the other IA-K")
+
+
+def _locked(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc)
+
+
+class LibraryInUse(RuntimeError):
+    pass
+
+
+def lock_library(folder: str | Path):
+    """Hold <library>/iak.lock while serving, so that a second IA-K (another
+    window, a second launcher) on the same library is refused instead of
+    fighting over the database. The system releases the lock when the process
+    ends, even killed. Keep the returned file open."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    fh = open(folder / "iak.lock", "a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        fh.close()
+        raise LibraryInUse(f"library in use: {folder} is already open in another IA-K") from exc
+    except OSError as exc:
+        if os.name == "nt":
+            fh.close()
+            raise LibraryInUse(f"library in use: {folder} is already open in another IA-K") \
+                from exc
+        # a filesystem without locks (some network shares): serve without
+        print(f"warning: cannot lock {folder / 'iak.lock'}: {exc}", file=sys.stderr)
+    return fh
 
 
 class ApiError(Exception):
@@ -72,7 +115,8 @@ class Job:
     finished: float | None = None
 
     def public(self) -> dict:
-        return {"id": self.id, "kind": self.kind, "status": self.status, "cancel": self.cancel,
+        return {"id": self.id, "kind": self.kind, "doc_id": self.params.get("doc_id"),
+                "status": self.status, "cancel": self.cancel,
                 "progress": self.progress, "result": self.result, "error": self.error,
                 "created": self.created, "finished": self.finished}
 
@@ -195,6 +239,8 @@ class App:
             except (analyze.AnalysisError, servers.ServerError, embed.EmbeddingMismatch,
                     translate.TranslateError, KeyError, OSError) as exc:
                 job.status, job.error = "error", str(exc)
+            except sqlite3.OperationalError as exc:
+                job.status, job.error = "error", BUSY if _locked(exc) else f"database: {exc}"
             except Exception as exc:  # report, keep the worker alive
                 job.status, job.error = "error", f"{type(exc).__name__}: {exc}"
                 traceback.print_exc()
@@ -313,8 +359,11 @@ def job_fulltext(app: App, lib: Library, job: Job):
     try:
         return fulltext.convert(lib, p["doc_id"], p.get("format", "epub"),
                                 p.get("illustrations", True), p.get("method", "ocr"), vision,
-                                _progress(job, "fulltext"), lambda: job.cancel)
+                                _progress(job, "fulltext"), lambda: job.cancel,
+                                p.get("notes", True))
     except (fulltext.FullTextError, ocr.OcrError) as exc:
+        if job.cancel:
+            return {"cancelled": True}
         raise ApiError(409, str(exc))
 
 
@@ -323,9 +372,11 @@ def job_vectors(app: App, lib: Library, job: Job):
 
 
 def job_read(app: App, lib: Library, job: Job):
-    """Read pages again with the vision model: one page, or a document."""
+    """Read pages again with the vision model (or correct their doubtful
+    words with the text model, method fix): one page, or a document."""
     p = job.params
-    client = analyze.vision_client(app.host, app.host.api_key)
+    client = app.chat() if p.get("method") == "fix" else \
+        analyze.vision_client(app.host, app.host.api_key)
     t0 = time.perf_counter()
     if p.get("unit_id"):
         job.progress = {"step": "read", "done": 0, "total": 1}
@@ -588,6 +639,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json(502, {"error": str(exc)})
         except (KeyError, ValueError, TypeError) as exc:
             self._json(400, {"error": f"bad request: {exc}"})
+        except sqlite3.OperationalError as exc:
+            if not _locked(exc):
+                traceback.print_exc()
+            self._json(503 if _locked(exc) else 500,
+                       {"error": BUSY if _locked(exc) else f"database: {exc}"})
         except Exception as exc:
             traceback.print_exc()
             self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
@@ -836,7 +892,8 @@ class Handler(BaseHTTPRequestHandler):
 
     @route("POST", r"/api/documents/(\d+)/fulltext")
     def fulltext_make(self, doc_id, query):
-        """{"format": "epub", "illustrations": true, "method": "ocr"|"vision"}: a job."""
+        """{"format": "epub", "illustrations": true, "notes": true,
+        "method": "ocr"|"vision"}: a job."""
         body = self._body()
         fmt = body.get("format", "epub")
         if fmt not in fulltext.FORMATS:
@@ -852,7 +909,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ApiError(409, f"{d['name']} is already text")
         job = self.app.submit("fulltext", {"doc_id": int(doc_id), "format": fmt,
                                            "illustrations": body.get("illustrations", True)
-                                           is not False, "method": method})
+                                           is not False, "method": method,
+                                           "notes": body.get("notes", True) is not False})
         self._json(202, {"job": job.id})
 
     def _fulltext_file(self, lib, doc_id, name) -> Path:
@@ -1018,6 +1076,33 @@ class Handler(BaseHTTPRequestHandler):
             out = self._collection(lib, cid)
         self._json(200, {**out, "added": added, "removed": removed})
 
+    @route("POST", r"/api/collections/(\d+)/move")
+    def collection_move(self, cid, query):
+        """{"to": collection id, "doc_ids": [...]}: out of this one, into that one."""
+        body = self._body()
+        with self.app.library() as lib:
+            self._collection(lib, cid)
+            try:
+                moved = collection.move(lib.con, int(cid), int(body.get("to") or 0),
+                                        [int(x) for x in body.get("doc_ids") or []])
+            except KeyError as exc:
+                raise ApiError(404, str(exc).strip("'"))
+            except collection.CollectionError as exc:
+                raise ApiError(400, str(exc))
+        self._json(200, {"moved": moved})
+
+    @route("PUT", r"/api/documents/(\d+)/collections")
+    def document_collections(self, doc_id, query):
+        """{"collections": [ids]}: every collection the document is in."""
+        body = self._body()
+        with self.app.library() as lib:
+            try:
+                ids = collection.set_for_document(
+                    lib.con, int(doc_id), [int(x) for x in body.get("collections") or []])
+            except KeyError as exc:
+                raise ApiError(404, str(exc).strip("'"))
+        self._json(200, {"collections": ids})
+
     # -------------------------------------------------- Markdown exports
     def _lang(self, value) -> str:
         return value if value in export.LABELS else self.app.lang
@@ -1085,7 +1170,7 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         method = body.get("method", "correct")
         if method not in transcription.METHODS:
-            raise ApiError(400, "method is transcribe or correct")
+            raise ApiError(400, "method is transcribe, correct or fix")
         params = {"method": method, "replace": bool(body.get("replace")),
                   "refresh": bool(body.get("refresh"))}
         if body.get("max_side"):
@@ -1381,6 +1466,21 @@ class Handler(BaseHTTPRequestHandler):
         return self.settings(query)
 
     # -------------------------------------------------- highlights
+    @route("GET", r"/api/units/(\d+)/doubts")
+    def unit_doubts(self, unit_id, query):
+        with self.app.library() as lib:
+            try:
+                self._json(200, doubt.unit(lib, int(unit_id)))
+            except KeyError:
+                raise ApiError(404, "no such page")
+
+    @route("GET", r"/api/documents/(\d+)/doubts")
+    def document_doubts(self, doc_id, query):
+        with self.app.library() as lib:
+            if lib.document(int(doc_id)) is None:
+                raise ApiError(404, "no such document")
+            self._json(200, doubt.document(lib, int(doc_id)))
+
     @route("GET", r"/api/passages/(\d+)/boxes")
     def passage_boxes(self, passage_id, query):
         with self.app.library() as lib:

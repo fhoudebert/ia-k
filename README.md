@@ -32,13 +32,16 @@ architecture).
   Gemma 4 for answers and EmbeddingGemma for search by meaning. IA-K does
   not start them; [SERVERS.md](SERVERS.md) explains how, with ready-made
   launchers.
-- **Tesseract** for scans and images: on Windows the
-  [UB Mannheim installer](https://github.com/UB-Mannheim/tesseract/wiki)
-  (tick French), on Linux `sudo apt install tesseract-ocr tesseract-ocr-fra`,
-  on macOS `brew install tesseract tesseract-lang` ([Homebrew](https://brew.sh)).
-  Without it, documents with real text still work.
-- About 250 MB on the key for each system (application and its Python),
-  plus your documents.
+- Nothing else for scans and images: the zips carry
+  [Tesseract](https://github.com/tesseract-ocr/tesseract) with French,
+  English, Middle French and Latin. On an Intel Mac, which it does not cover
+  yet, install it with `brew install tesseract tesseract-lang`
+  ([Homebrew](https://brew.sh)); a Tesseract installed on the computer is
+  used too when the key has none. Without any, documents with real text
+  still work.
+- About 260 MB on the key for each system (application, its Python and its
+  Tesseract) and 65 MB of language data shared by all, plus your
+  documents.
 
 ## Installing on a key or a disk
 
@@ -121,8 +124,10 @@ folders.
 **Collections.** Group documents by subject, project or source: tick
 documents, *+ New collection* (or *Add to the collection* for an existing
 one). A document can be in several collections; the chips above the list
-show one collection at a time, where documents can be removed from it, and
-the collection renamed or deleted (its documents stay in the library). In
+show one collection at a time, where documents can be removed from it or
+moved to another one (*Move to the collection*), and the collection renamed
+or deleted (its documents stay in the library). In the viewer, the
+*Collections* chips of a document put it in or take it out of each one. In
 *Search* and *Questions*, a collection limits the passages to its documents,
 alone or with a type or a document.
 
@@ -137,9 +142,13 @@ is highlighted in yellow on the page.
 image, or a PDF with an OCR layer), a light document of real text an e-reader
 can reflow: the library's text (OCR, your corrections, the vision model's
 readings) replaces the pictures of the pages, headings are found from the
-size of the letters, running heads and page numbers go, paragraphs are joined
-across pages, and the illustrations (photographs, engravings, maps) are cut
-out of the pages and kept in place. As EPUB, or PDF on A5 pages, HTML, Word,
+size of the letters, running heads and page numbers go, the paragraphs are
+rebuilt from the page as a reader sees them (an indented first line, a short
+last line, extra space; not every line Tesseract found misaligned) and joined
+across pages, the notes at the foot of the pages are linked to their calls
+(*link the notes*: footnotes on EPUB readers, linked notes in HTML, a list at
+the end of each chapter elsewhere), and the illustrations (photographs,
+engravings, maps) are cut out of the pages and kept in place. As EPUB, or PDF on A5 pages, HTML, Word,
 RTF or Markdown, much lighter than the scan (how much depends on the
 illustrations kept).
 For an EPUB made of pictures of scanned pages, each picture of text is read
@@ -156,7 +165,23 @@ before *Use as the page's text*. Nothing is replaced until you choose to, and
 *Restore the extracted text* goes back. *Read pages again…* does it for a whole
 document: the poor OCR pages (confidence below 80 %), every OCR page or every
 page, proposing readings or replacing the text directly — never on pages you
-corrected by hand. Pages already read are not read again, so a cancelled run
+corrected by hand.
+
+**Doubtful words.** Under the text of an OCR page, *Doubtful words* lists the
+words Tesseract was unsure of, that the library does not know (its own
+vocabulary: the books' spellings, old French included; add word lists in
+`config/words/`), or whose letters look like an OCR slip (`at1as`, `aTlas`).
+A click selects the word in the text and frames it on the page; *show them
+on the page* frames them all. Pages with many of them have an orange dot in
+the list. Two ways correct only those words, much faster than reading the
+whole page again: *Fix the doubtful words (text model)* gives each one, in
+its sentence and with the close words of your books, to the chat model;
+*Read the doubtful words again on the image (targeted vision)* cuts out the
+lines that hold them and has the vision model read them. Each proposed word
+is checked (a word of the library, or a few letters away from the OCR's) and
+the reading lists the words corrected and the proposals refused; like the
+other readings it is a proposal, with its differences. *Read pages again…*
+can take the pages with doubtful words, and correct them either way. Pages already read are not read again, so a cancelled run
 goes on where it stopped. Pages whose text comes from the model are marked
 ·VL in the list. Best with Qwen3-VL-8B (`serveurs-vl.bat`); Gemma 4 with its
 vision projector works too.
@@ -230,11 +255,13 @@ Good to know:
 
 | What you see | What to do |
 |---|---|
+| "This library is already open in another IA-K window" | Two IA-K were started (two `serveurs-…` files, for instance): use the window already open, or close it and click *Try again*. |
+| "The library is busy (database is locked)" | Another program writes in the library: another IA-K on it (see above), or a long command line import. Wait a moment and do it again. |
 | "The IA-K engine could not start" | Read `data/iak-backend.log`; if `build/python/` has no folder for this system (an Intel Mac, a folder built from the sources), run `setup_python` once. |
 | Chat, Meaning or Translation shown in red at the top | The model server is not running or not at that address: start it, check *Settings*. |
 | An error mentioning `ErrorOutOfDeviceMemory` or "graphics memory" | The model server ran out of graphics memory: see [SERVERS.md, Memory](SERVERS.md#memory). |
 | "The documents do not allow an answer" | Nothing relevant was found: rephrase, check the document is indexed, or try *Search* first. |
-| Scans give no text | Tesseract is missing or lacks the language: *Settings* lists the installed languages. |
+| Scans give no text | Tesseract is missing or lacks the language: *Settings* shows which Tesseract is used and its languages (on the key: `fra`, `eng`, `frm`, `lat`). |
 | Linux key: "cannot run, mounted noexec" | Remount the key with the `exec` option. |
 | macOS: "IA-K cannot be opened" or "is damaged" | The download is quarantined: `xattr -dr com.apple.quarantine` on the IA-K folder, then open it again. |
 
@@ -292,9 +319,13 @@ Done:
     the engine with it; `ia-k.zip` merges the three systems into one key.
     No `setup_python` step, except on an Intel Mac
 
+17. Tesseract on the key: built from its sources by CI, as one program per
+    system with nothing to install, and the standard language data for
+    French, English, Middle French and Latin, shared by all systems
+
 Next:
 
-- Tesseract on the key too, for scans on a computer without it.
+- More languages for Tesseract on the key, chosen when building it.
 
 Later:
 

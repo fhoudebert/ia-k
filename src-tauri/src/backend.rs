@@ -6,6 +6,8 @@
 //! root is found from the executable's location, or from `IAK_ROOT`.
 //! The backend announces itself on its first stdout line:
 //!     IAK_API {"url": "http://127.0.0.1:PORT", "token": "...", "version": "..."}
+//! or, when it refuses to start (the library is open in another IA-K):
+//!     IAK_ERROR library in use: ...
 //! Its stderr goes to `data/iak-backend.log`.
 
 use serde::Serialize;
@@ -41,8 +43,14 @@ pub struct Backend {
 /// executable or one of its parents (development builds live in
 /// src-tauri/target/debug), else the current folder.
 pub fn find_root() -> Option<PathBuf> {
+    find_root_from(std::env::var("IAK_ROOT").ok())
+}
+
+/// `find_root` with the value of IAK_ROOT given (the tests give theirs
+/// without changing the environment, which is unsafe in edition 2024).
+fn find_root_from(iak_root: Option<String>) -> Option<PathBuf> {
     let is_root = |p: &Path| p.join("backend").join("iak").join("__main__.py").is_file();
-    if let Ok(r) = std::env::var("IAK_ROOT") {
+    if let Some(r) = iak_root {
         let p = PathBuf::from(r);
         if is_root(&p) {
             return Some(p);
@@ -77,6 +85,10 @@ fn configured_library(root: &Path) -> Option<PathBuf> {
 /// inside the IA-K folder is stored relative to it.
 pub fn save_library(library: Option<&str>) -> Result<(), String> {
     let root = find_root().ok_or("IA-K folder not found")?;
+    save_library_in(&root, library)
+}
+
+fn save_library_in(root: &Path, library: Option<&str>) -> Result<(), String> {
     let path = root.join("config").join("app.json");
     let mut value: serde_json::Value = fs::read_to_string(&path)
         .ok()
@@ -90,7 +102,7 @@ pub fn save_library(library: Option<&str>) -> Result<(), String> {
             }
             fs::create_dir_all(&p).map_err(|e| format!("cannot create {l}: {e}"))?;
             let stored = p
-                .strip_prefix(&root)
+                .strip_prefix(root)
                 .map(|r| r.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_else(|_| p.to_string_lossy().into_owned());
             value["library"] = serde_json::Value::String(stored);
@@ -177,14 +189,7 @@ impl Backend {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::from(log));
-        let tess = root.join("build").join("tesseract");
-        let tess_exe = tess.join(if cfg!(windows) { "tesseract.exe" } else { "tesseract" });
-        if tess_exe.is_file() {
-            cmd.env("IAK_TESSERACT", &tess_exe);
-            if tess.join("tessdata").is_dir() {
-                cmd.env("TESSDATA_PREFIX", tess.join("tessdata"));
-            }
-        }
+        // the Tesseract of the key (build/tesseract/) is found by the engine
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -218,6 +223,14 @@ impl Backend {
             let mut announced = false;
             while let Some(Ok(line)) = lines.next() {
                 if announced {
+                    continue;
+                }
+                // the backend refused to start (another IA-K on the same library)
+                if let Some(msg) = line.strip_prefix("IAK_ERROR ") {
+                    let mut i = reader_info.lock().unwrap();
+                    i.status = "error".into();
+                    i.error = msg.trim().to_string();
+                    announced = true;
                     continue;
                 }
                 if let Some(json) = line.strip_prefix("IAK_API ") {
@@ -288,13 +301,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("iak-root-{}", std::process::id()));
         fs::create_dir_all(root.join("backend").join("iak")).unwrap();
         fs::write(root.join("backend").join("iak").join("__main__.py"), "").unwrap();
-        std::env::set_var("IAK_ROOT", &root);
-        assert_eq!(find_root().unwrap(), root);
+        let given = Some(root.to_str().unwrap().to_string());
+        assert_eq!(find_root_from(given).unwrap(), root);
         assert_eq!(configured_library(&root), None);
 
         // inside the IA-K folder: stored relative, so it follows the key
         let inside = root.join("bibliotheque");
-        save_library(Some(inside.to_str().unwrap())).unwrap();
+        save_library_in(&root, Some(inside.to_str().unwrap())).unwrap();
         let text = fs::read_to_string(root.join("config").join("app.json")).unwrap();
         assert!(text.contains("\"library\": \"bibliotheque\""), "{text}");
         assert_eq!(configured_library(&root).unwrap(), inside);
@@ -302,12 +315,12 @@ mod tests {
 
         // elsewhere: stored absolute
         let outside = std::env::temp_dir().join(format!("iak-lib-{}", std::process::id()));
-        save_library(Some(outside.to_str().unwrap())).unwrap();
+        save_library_in(&root, Some(outside.to_str().unwrap())).unwrap();
         assert_eq!(configured_library(&root).unwrap(), outside);
 
         // relative input refused; None goes back to data/
-        assert!(save_library(Some("relative/path")).is_err());
-        save_library(None).unwrap();
+        assert!(save_library_in(&root, Some("relative/path")).is_err());
+        save_library_in(&root, None).unwrap();
         assert_eq!(configured_library(&root), None);
 
         let _ = fs::remove_dir_all(&root);

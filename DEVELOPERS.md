@@ -60,7 +60,8 @@ Checked on a real exFAT volume: setup, command line and application.
 
 ## Building the application
 
-Requirements: Rust (rustup), Node.js for the Tauri command line, and on Linux
+Requirements: Rust 1.90 or later (rustup; see *Rust and Tauri versions*
+below), Node.js for the Tauri command line, and on Linux
 `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`; on Windows the MSVC build
 tools (WebView2 is part of Windows 10 and 11); on macOS the Xcode command
 line tools (`xcode-select --install`).
@@ -78,6 +79,7 @@ python scripts/make_portable.py --os mac --python \
     --exe src-tauri/target/universal-apple-darwin/release/bundle/macos/IA-K.app
 # one key for all systems, from the three zips (Linux first)
 python scripts/merge_portable.py dist/ia-k-linux.zip dist/ia-k-mac.zip dist/ia-k-windows.zip
+python scripts/build_tesseract.py             # build/tesseract, for --tesseract
 ```
 
 `make_portable.py` assembles `dist/ia-k-<os>/` and its zip: the application,
@@ -90,7 +92,26 @@ the standard library and of the packages, `idlelib`, `tkinter`, Tcl/Tk,
 `ensurepip`, `lib2to3`, `share/terminfo` and `share/man`; pip stays, for
 `setup_python` updates. It then imports the engine and its packages with the
 copied Python (`--no-check` skips it). About 215 MB unzipped, 80 MB zipped,
-per system. Builds are made on each system.
+per system. With `--tesseract` it adds the Tesseract of this system and the
+shared language data, and lists its languages with it. Builds are made on
+each system.
+
+## Portable Tesseract
+
+`scripts/build_tesseract.py` builds Tesseract 5.5.3 from its sources (git
+clones at fixed commits, checked) with CMake: zlib, libpng and Leptonica
+(PNG only: IA-K gives it PNG images) linked statically, without OpenMP,
+network, archives, TIFF or training tools, the C++ runtime linked in too
+(`-static-libstdc++` on Linux, `/MT` with Visual Studio). The result is one
+program of about 7 MB, `build/tesseract/<os>/tesseract[.exe]`, that needs
+only the system's C library; its SIMD code is chosen when it runs
+(`ENABLE_NATIVE` off). Built on `ubuntu-22.04`, it runs on any Linux with
+glibc 2.35 or later. The language data, `build/tesseract/tessdata`, is the
+standard models of tessdata 4.1.0 (fra, eng, frm, lat, checked against
+their SHA-256) with the output configs Tesseract needs (`tsv`); one copy
+serves all systems. About 5 minutes per system; CI keeps `build/tesseract`
+in its cache until the script changes. `iak.ocr` finds it before an
+installed Tesseract and runs it with `TESSDATA_PREFIX` set to that folder.
 
 `merge_portable.py` merges the zips into `dist/ia-k.zip` (folder `ia-k/`):
 shared files once (they must match, line endings aside), executable bits
@@ -101,10 +122,46 @@ kept, names differing only by case refused (exFAT).
 `.github/workflows/ci.yml` runs on every push, on `ubuntu-22.04` /
 `ubuntu-latest`, `windows-latest` and `macos-latest`: the engine tests
 (Tesseract with French data), the Rust tests, a release build and the
-portable zip with its Python (`setup_python` runs first), kept 30 days as
+portable zip with its Python and its Tesseract (`setup_python` and
+`build_tesseract.py` run first), kept 30 days as
 the run's *Artifacts* (`ia-k-windows`, `ia-k-linux`, `ia-k-mac`), and the
-`key` job merges them into `ia-k` (`ia-k.zip`, all systems). Check it locally with
-[actionlint](https://github.com/rhysd/actionlint).
+`key` job merges them into `ia-k` (`ia-k.zip`, all systems). The desktop
+builds use the latest stable Rust; the `msrv` job builds and tests the
+application with Rust 1.90, the minimum, and the locked dependencies. Check
+it locally with [actionlint](https://github.com/rhysd/actionlint).
+
+## Rust and Tauri versions
+
+`src-tauri/Cargo.toml` declares `edition = "2024"` and `rust-version =
+"1.90"`. With edition 2024 Cargo uses resolver 3, which follows
+`rust-version`: `cargo update` locks the newest versions that still build
+with Rust 1.90, and leaves out the ones that need a newer Rust.
+
+| Crate | Locked | Needs Rust |
+|---|---|---|
+| tauri | 2.12.5 | 1.90 |
+| tauri-build, tauri-codegen, tauri-macros | 2.7.4 | 1.90 |
+| tauri-plugin-dialog | 2.8.3 | 1.90 |
+| tauri-runtime / -wry, tauri-utils | 2.12 / 2.10 | 1.90 |
+| muda | 0.20.0 | 1.90 |
+| uuid | 1.28.0 | 1.89 |
+
+Tauri 2.12 is what sets the minimum: with Rust 1.88 the resolver falls back
+to Tauri 2.11 (muda 0.19, uuid 1.26). The Tauri command line
+(`@tauri-apps/cli` in `package.json`, `^2.12.3`) is of the same minor version
+as the crate, so `tauri build` reports no mismatch. Checked with Rust 1.90:
+`cargo test --locked`, `cargo clippy --all-targets` (no warning) and
+`tauri build`.
+
+To move to a newer Tauri that needs a newer Rust: raise `rust-version`, run
+`cargo update` in `src-tauri/`, update `dtolnay/rust-toolchain@1.xx` in the
+`msrv` job and this section, then commit `Cargo.lock`. A dependency that
+needs more than `rust-version` makes `cargo +1.90 test --locked` fail, and so
+the `msrv` job.
+
+Edition 2024 marks `std::env::set_var` as `unsafe`: the code reads the
+environment but never changes it (the test of `find_root` gives its value
+to `find_root_from` instead).
 
 macOS: one universal application (`--target universal-apple-darwin`, Apple
 silicon and Intel) bundled as `IA-K.app` (`--bundles app`), ad hoc signed
@@ -116,7 +173,8 @@ installs the `aarch64-` or `x86_64-apple-darwin` build of
 python-build-standalone of the Mac it runs on, and renames the
 `build/python/mac` of earlier versions when it is of that processor; until
 then the application and `iak.sh` still use it). The CI runner is an Apple
-silicon Mac, so `ia-k-mac.zip` holds `mac-aarch64` only.
+silicon Mac, so `ia-k-mac.zip` holds `mac-aarch64` only, for Python and for
+Tesseract (`build/tesseract/mac-aarch64`).
 
 ## Tests
 

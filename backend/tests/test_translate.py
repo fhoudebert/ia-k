@@ -222,3 +222,21 @@ def test_api_translation(tmp_path, native_pdf):
         srv.server_close()
         tg.close()
         chat.close()
+
+
+def test_same_language_is_refused(tmp_path, native_pdf):
+    tg = FakeTranslateGemma()
+    try:
+        tr = translate.Translator.connect(servers.Client(tg.url))
+        with Library(tmp_path / "lib") as lib:
+            doc = lib.import_file(native_pdf).doc_id
+            unit = lib.units(doc)[0]["id"]
+            # detected French, into French: nothing stored as a "translation"
+            with pytest.raises(translate.TranslateError, match="already in"):
+                translate.translate_document(lib, tr, doc, None, "fr")
+            with pytest.raises(translate.TranslateError, match="already in"):
+                translate.translate_unit(lib, tr, unit, "fr", "fr")
+            assert lib.con.execute("SELECT count(*) FROM translations").fetchone()[0] == 0
+        assert tg.prompts == []
+    finally:
+        tg.close()

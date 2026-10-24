@@ -86,7 +86,7 @@ def test_native_pdf(tmp_path):
     with Library(tmp_path / "lib") as lib:
         doc = lib.import_file(native_pdf_with_picture(tmp_path / "registre.pdf")).doc_id
         title, blocks, counts = fulltext.library_document(lib, doc)
-        assert counts == {"pages": 2, "illustrations": 1, "ocr_pages": 0}
+        assert counts == {"pages": 2, "illustrations": 1, "ocr_pages": 0, "notes": 0}
         kinds = [k for k, _ in blocks]
         assert kinds[0] == "h1" and kinds.count("img") == 1 and kinds.count("h1") == 2
         assert kinds.index("img") < kinds.index("h1", 1)                # on page 1
@@ -205,3 +205,124 @@ def test_api(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# ---------------------------------------------------------------- layout and notes
+
+from iak import layout  # noqa: E402
+
+
+def line(text, x0, y0, x1, h=10):
+    return {"text": text, "x0": x0, "y0": y0, "x1": x1, "y1": y0 + h, "h": h}
+
+
+def test_paragraphs_from_the_lines():
+    L = [line("Le registre de la bibliothèque mentionne", 20, 0, 300),   # indented
+         line("l'achat de trois volumes et d'un atlas, de", 0, 14, 300),
+         line("cartes marines.", 0, 28, 90),                            # short, ends
+         line("Le relieur reçut l'atlas au printemps et le", 0, 42, 300),
+         line("rendit à l'été.", 0, 56, 80),
+         line("Il le rendit relié", 0, 90, 300),                         # extra space
+         line("CHAPITRE II", 110, 104, 190),                             # centred
+         line("La suite du registre parle du relieur et", 20, 118, 300)]
+    paras = [t for t, _, _ in layout.paragraphs(L)]
+    assert paras == ["Le registre de la bibliothèque mentionne l'achat de trois volumes et "
+                     "d'un atlas, de cartes marines.",
+                     "Le relieur reçut l'atlas au printemps et le rendit à l'été.",
+                     "Il le rendit relié", "CHAPITRE II",
+                     "La suite du registre parle du relieur et"]
+    # without geometry: Tesseract's paragraphs, joined where one plainly goes on
+    assert layout.text_paragraphs("Le relieur reçut\nl'atlas de\n\nParis, au printemps.\n\n"
+                                  "Il le rendit.") == ["Le relieur reçut l'atlas de Paris, au "
+                                                       "printemps.", "Il le rendit."]
+    assert layout.continues("pour le", "Parlement") and not layout.continues("fin.", "Il")
+
+
+def test_note_calls():
+    assert layout.note_mark("1 Voir l'inventaire.") == ("1", "Voir l'inventaire.")
+    assert layout.note_mark("(a) Voir.") == ("a", "Voir.") and layout.note_mark("* Voir.")
+    assert layout.note_mark("Le relieur") is None
+    for body in ("l'atlas1 au", "l'atlas¹ au", "l'atlas (1) au", "l'atlas! au"):
+        texts = ["Rien ici.", body]
+        assert layout.link_call(texts, "1", 7) and texts[1] == f"l'atlas{layout.call(7)} au", body
+    texts = ["en 1712 et 1"]
+    assert not layout.link_call(texts, "1", 1)               # not after a word
+    assert layout.split_calls(f"a{layout.call(3)} b") == ["a", 3, " b"]
+
+
+def book_with_notes(path):
+    css = ("body{font-family:serif;font-size:11pt} p{text-indent:1.5em;margin:0;"
+           "text-align:justify} .n{font-size:8.5pt;text-indent:0} h1{text-align:center}")
+    P = ("Le registre de la bibliothèque mentionne l'achat de trois volumes reliés, d'un atlas "
+         "et de plusieurs cartes marines au cours de l'année mil sept cent douze.")
+    pages = [f"<h1>Chapitre premier</h1><p>{P} Le relieur reçut l'atlas<sup>1</sup> au "
+             f"printemps, et il le rendit avec une reliure neuve.</p><p>{P} Le bibliothécaire "
+             "dressa la liste complète des cartes réparées pour le</p>"
+             "<p class='n'>&nbsp;</p><p class='n'>1 Voir l'inventaire de 1712, folio douze.</p>",
+             "<p style='text-indent:0'>Parlement de Paris, qui en ordonna la restauration.</p>"
+             f"<p>{P} Le prix de chaque carte<sup>2</sup> est noté.</p>"
+             "<p class='n'>&nbsp;</p><p class='n'>2 Le prix est donné en livres tournois.</p>"]
+    doc = pymupdf.open()
+    for h in pages:
+        doc.new_page(width=420, height=595).insert_htmlbox(pymupdf.Rect(45, 50, 375, 560), h,
+                                                           css=css)
+    doc.save(path)
+    return path
+
+
+def check_notes(md):
+    assert "l'atlas[^1] au printemps" in md and "carte[^2] est noté" in md
+    assert "réparées pour le Parlement de Paris" in md               # over the page break
+    assert md.count("Le registre de la bibliothèque") == 3            # 3 paragraphs, not cut
+    assert "[^1]: Voir l'inventaire de 1712, folio douze." in md
+    assert "[^2]: Le prix est donné en livres tournois." in md
+
+
+def test_notes_native_pdf(tmp_path):
+    with Library(tmp_path / "lib") as lib:
+        doc = lib.import_file(book_with_notes(tmp_path / "notes.pdf")).doc_id
+        r = fulltext.convert(lib, doc, "md")
+        check_notes((fulltext.output_dir(lib, doc) / r["file"]).read_text("utf-8"))
+        r = fulltext.convert(lib, doc, "epub")
+        with zipfile.ZipFile(fulltext.output_dir(lib, doc) / r["file"]) as z:
+            body = z.read("OEBPS/c1.xhtml").decode()
+        assert 'epub:type="noteref" href="#n1"' in body and 'epub:type="footnote" id="n1"' in body
+        assert 'xmlns:epub="http://www.idpf.org/2007/ops"' in body
+
+
+@needs_tesseract
+def test_notes_scanned_pdf(tmp_path):
+    src = book_with_notes(tmp_path / "net.pdf")
+    scan = pymupdf.open()
+    with pymupdf.open(src) as net:
+        for p in net:
+            q = scan.new_page(width=420, height=595)
+            q.insert_image(q.rect, stream=p.get_pixmap(dpi=200).tobytes("png"))
+    scan.save(tmp_path / "scan.pdf")
+    with Library(tmp_path / "lib", ocr_langs="fra") as lib:
+        doc = lib.import_file(tmp_path / "scan.pdf").doc_id
+        r = fulltext.convert(lib, doc, "md")
+        check_notes((fulltext.output_dir(lib, doc) / r["file"]).read_text("utf-8"))
+
+
+def test_note_formats(tmp_path):
+    blocks = [("h1", "Chapitre"), ("p", f"Le relieur{layout.call(1)} rend l'atlas."),
+              ("note", (1, "Voir l'inventaire.")), ("h1", "Suite"), ("p", "Fin.")]
+    for fmt in ("html", "docx", "rtf", "md", "txt", "pdf"):
+        out = tmp_path / f"b.{fmt}"
+        bookformats.write(blocks, fmt, "Livre", "fr", out)
+        assert out.stat().st_size > 50
+    html = (tmp_path / "b.html").read_text("utf-8")
+    assert 'href="#n1" id="r1"><sup>1</sup>' in html and '<p class="note" id="n1">' in html
+    assert html.index('id="n1"') < html.index("Suite")               # at the end of its chapter
+    assert "\\super 1" in (tmp_path / "b.rtf").read_text("ascii")
+    assert "relieur[1] rend" in (tmp_path / "b.txt").read_text("utf-8")
+    assert "[^1]: Voir" in (tmp_path / "b.md").read_text("utf-8")
+    assert layout.CALL_OPEN not in (tmp_path / "b.md").read_text("utf-8")
+
+
+def test_call_read_as_a_letter():
+    known = layout.words(["Le relieur reçut l'atlasi", "l'atlas des cartes, et lui aussi"])
+    texts = ["Il vint avec lui hier.", "Le relieur reçut l'atlasi au printemps."]
+    assert layout.link_call(texts, "1", 4, known)
+    assert texts == ["Il vint avec lui hier.", f"Le relieur reçut l'atlas{layout.call(4)} au printemps."]

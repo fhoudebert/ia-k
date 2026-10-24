@@ -31,6 +31,8 @@ const state = {
   collection: null,            // id of the collection shown in the library, or null
   folders: [],                 // followed folders
   seenJobs: new Set(),         // finished jobs already taken into account
+  doubts: {},                  // unit id -> {doubtful, ratio, doubt} of the open document
+  unitDoubts: null,            // the doubtful words of the page shown
   started: false,              // first jobs poll done
   imageUrl: null,
 };
@@ -68,7 +70,13 @@ function toast(message, error = false) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => { box.hidden = true; }, error ? 8000 : 4000);
 }
-const fail = (e) => toast(t("error.generic", { msg: e.message || e }), true);
+/** Error text for the reader: known engine messages in the interface language. */
+function errorText(msg) {
+  msg = String(msg || "");
+  if (/database is locked/.test(msg)) return t("error.locked");
+  return msg;
+}
+const fail = (e) => toast(t("error.generic", { msg: errorText(e.message || e) }), true);
 
 // ------------------------------------------------------------------ text rendering
 
@@ -140,7 +148,8 @@ function show(view) {
   if (view === "search") $("#search-input").focus();
   if (view === "ask") $("#ask-input").focus();
   if (view === "settings") loadSettings().catch(fail);
-  if (view === "translate") enterTranslate().catch(fail);
+  if (view === "translate") return enterTranslate().catch(fail);
+  return Promise.resolve();
 }
 
 // ------------------------------------------------------------------ jobs
@@ -159,7 +168,7 @@ async function pollJobs() {
   }
   let libraryChanged = false;
   for (const job of state.jobs) {
-    const finished = job.status === "done" || job.status === "error";
+    const finished = ["done", "error", "cancelled"].includes(job.status);
     if (finished && state.waiters.has(job.id)) {
       state.waiters.get(job.id)(job);
       state.waiters.delete(job.id);
@@ -177,7 +186,12 @@ async function pollJobs() {
   pollJobs.timer = setTimeout(pollJobs, active || state.waiters.size ? 1000 : 6000);
 }
 
+// jobs that stop when asked while running (the others only while queued)
+const CANCELLABLE = new Set(["read", "fulltext", "scan"]);
+
 function renderJobs() {
+  renderActivity();
+  renderFulltextProgress();
   const ul = $("#jobs-list");
   ul.replaceChildren();
   const recent = state.jobs.slice(0, 8);
@@ -191,8 +205,8 @@ function renderJobs() {
       li.append(el("progress", { max: p.total, value: p.done || 0 }), `${p.done || 0}/${p.total}`);
     }
     if (p.file && j.status === "running") li.append(el("span", { class: "muted" }, p.file.split(/[\\/]/).pop()));
-    if (j.error) li.append(el("span", { class: "status-error" }, j.error));
-    if ((j.status === "queued" || (j.status === "running" && j.kind === "read")) && !j.cancel) {
+    if (j.error) li.append(el("span", { class: "status-error" }, errorText(j.error)));
+    if ((j.status === "queued" || (j.status === "running" && CANCELLABLE.has(j.kind))) && !j.cancel) {
       li.append(el("button", { class: "link", onclick: () =>
         post(`/api/jobs/${j.id}/cancel`).then(pollJobs, fail) }, t("jobs.cancel")));
     }
@@ -208,6 +222,20 @@ function renderJobs() {
     }
     ul.append(li);
   }
+}
+
+/** The jobs still to do, in the top bar: seen from every tab. */
+function renderActivity() {
+  const active = state.jobs.filter((j) => j.status === "queued" || j.status === "running");
+  const b = $("#activity");
+  b.hidden = !active.length;
+  if (!active.length) return;
+  const run = active.find((j) => j.status === "running") || active[0];
+  const p = run.progress || {};
+  let text = t(`jobs.kind.${run.kind}`);
+  if (run.status === "running" && p.total > 1) text += ` ${p.done || 0}/${p.total}`;
+  if (active.length > 1) text += ` ${t("jobs.more", { n: active.length - 1 })}`;
+  b.textContent = text;
 }
 
 // ------------------------------------------------------------------ library
@@ -275,12 +303,12 @@ function renderCollections() {
   $("#coll-chips").replaceChildren(chip(null, t("coll.all"), state.documents.length),
     ...state.collections.map((c) => chip(c.id, c.name, c.n_docs)));
   $("#coll-tools").hidden = !state.collection;
+  // where the ticked documents go: another collection than the one shown
   const target = $("#coll-target");
   const keep = target.value;
-  target.replaceChildren(...state.collections.map((c) =>
-    el("option", { value: String(c.id) }, c.name)));
-  if (state.collections.some((c) => String(c.id) === keep)) target.value = keep;
-  else if (state.collection) target.value = String(state.collection);
+  const others = state.collections.filter((c) => c.id !== state.collection);
+  target.replaceChildren(...others.map((c) => el("option", { value: String(c.id) }, c.name)));
+  if (others.some((c) => String(c.id) === keep)) target.value = keep;
   updateSelection();
 }
 
@@ -293,12 +321,14 @@ function updateSelection() {
   const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
   $("#coll-selection").hidden = !ids.length;
   $("#coll-selected").textContent = t("coll.selected", { n: ids.length });
-  const hasColls = state.collections.length > 0;
-  $("#coll-target").hidden = $("#coll-add").hidden = !hasColls;
   const cur = currentCollection();
+  const hasTargets = state.collections.some((c) => c.id !== state.collection);
+  $("#coll-target").hidden = $("#coll-add").hidden = !hasTargets;
+  $("#coll-move").hidden = !(cur && hasTargets);
+  $("#coll-move").textContent = t("coll.move");
   $("#coll-remove").hidden = !cur;
   if (cur) $("#coll-remove").textContent = t("coll.remove", { name: cur.name });
-  if (!hasColls) $("#coll-selected").textContent += ` — ${t("coll.none_yet")}`;
+  if (!state.collections.length) $("#coll-selected").textContent += ` — ${t("coll.none_yet")}`;
 }
 
 async function changeMembers(collectionId, add, remove) {
@@ -307,6 +337,34 @@ async function changeMembers(collectionId, add, remove) {
   toast(add.length ? t("coll.added", { n: r.added, name }) : t("coll.removed", { n: r.removed, name }));
   state.selected.clear();
   await loadLibrary();
+}
+
+async function moveMembers(fromId, toId, ids) {
+  const r = await post(`/api/collections/${fromId}/move`, { to: toId, doc_ids: ids });
+  const name = (state.collections.find((c) => c.id === toId) || {}).name || "";
+  toast(t("coll.moved", { n: r.moved, name }));
+  state.selected.clear();
+  await loadLibrary();
+}
+
+/** The collections of the open document, as chips to switch on and off. */
+function renderDocCollections() {
+  const box = $("#doc-colls-box");
+  box.hidden = !state.doc || !state.collections.length;
+  if (box.hidden) return;
+  const d = state.documents.find((x) => x.id === state.doc.id);
+  const mine = new Set((d && d.collections) || []);
+  $("#doc-colls").replaceChildren(...state.collections.map((c) => el("button", {
+    class: `coll-chip${mine.has(c.id) ? " active" : ""}`, type: "button",
+    title: t(mine.has(c.id) ? "viewer.coll_out" : "viewer.coll_in", { name: c.name }),
+    onclick: () => setDocCollections(state.doc.id, mine.has(c.id)
+      ? [...mine].filter((x) => x !== c.id) : [...mine, c.id]).catch(fail) }, c.name)));
+}
+
+async function setDocCollections(docId, ids) {
+  await request("PUT", `/api/documents/${docId}/collections`, { collections: ids });
+  await loadLibrary();
+  renderDocCollections();
 }
 
 async function createCollection(ev) {
@@ -637,13 +695,16 @@ async function openDoc(docId, unitId = null, passageId = null) {
     state.units = units;
     $("#tab-viewer").hidden = false;
     $("#viewer-title").textContent = doc.name;
+    state.doubts = {};
     renderUnitList();
+    loadDocDoubts(docId).catch(() => {});
     const hasPages = doc.kind === "pdf" || doc.kind === "image";
     $("#analyse-box").hidden = !hasPages;
     $("#viewer-reread").hidden = !hasPages;
     $("#reread-panel").hidden = true;
     $("#viewer-fulltext").hidden = !(hasPages || doc.kind === "epub");
     $("#fulltext-panel").hidden = true;
+    renderDocCollections();
     show("viewer");
     await selectUnit(unitId || (units[0] && units[0].id), passageId);
     await loadAnalyses();
@@ -654,6 +715,7 @@ function renderUnitList() {
   const current = state.unit ? state.unit.id : null;
   $("#unit-list").replaceChildren(...state.units.map((u) => el("li", {
     class: [u.source === "ocr" ? "ocr" : "", u.reader ? "vl" : "",
+            state.doubts[u.id] && state.doubts[u.id].doubt ? "doubt" : "",
             u.id === current ? "active" : ""].filter(Boolean).join(" "),
     dataset: { id: u.id }, title: u.label, onclick: () => selectUnit(u.id) }, u.label)));
 }
@@ -664,6 +726,7 @@ async function refreshUnits() {
   const keep = state.unit ? state.unit.id : null;
   state.units = await get(`/api/documents/${state.doc.id}/units`);
   renderUnitList();
+  loadDocDoubts(state.doc.id).catch(() => {});
   if (keep) await selectUnit(keep);
 }
 
@@ -698,6 +761,81 @@ async function selectUnit(unitId, passageId = null) {
       if (state.unit && state.unit.id === unitId) img.src = state.imageUrl;
     } catch (e) { fail(e); }
     if (passageId) markPassage(passageId, unitId).catch(() => {});
+  }
+  loadDoubts(u).catch(() => {});
+}
+
+// ------------------------------------------------------------------ doubtful words
+
+/** Which pages of the open document have many doubtful words (unit list). */
+async function loadDocDoubts(docId) {
+  const rows = await get(`/api/documents/${docId}/doubts`);
+  if (!state.doc || state.doc.id !== docId) return;
+  state.doubts = Object.fromEntries(rows.map((r) => [r.unit_id, r]));
+  renderUnitList();
+}
+
+/** The doubtful words of the page shown: chips that select the word in the
+ * text and show it on the page image. */
+async function loadDoubts(u) {
+  const box = $("#doubts-box");
+  box.hidden = true;
+  state.unitDoubts = null;
+  if (u.source !== "ocr" || u.edited) return;
+  const d = await get(`/api/units/${u.id}/doubts`);
+  if (!state.unit || state.unit.id !== u.id) return;
+  state.unitDoubts = d;
+  if (!d.doubtful) return;
+  box.hidden = false;
+  $("#doubts-title").textContent = t("doubt.title", { n: d.doubtful,
+    pct: Math.round(d.ratio * 100) });
+  $("#doubts-list").replaceChildren(...d.suspects.map((s) => el("button", {
+    type: "button", class: `doubt-word ${s.reasons.join(" ")}`,
+    title: [...s.reasons.map((r) => t(`doubt.why.${r}`)),
+            s.conf === null || s.conf === undefined ? null : t("doubt.conf", { conf: Math.round(s.conf) })]
+      .filter(Boolean).join(" · "),
+    onclick: () => showDoubt(s) }, s.word)));
+  renderDoubtMarks();
+}
+
+function doubtMark(s, d, cls = "") {
+  const [x0, y0, x1, y1] = s.box;
+  return el("div", { class: `doubt-mark ${cls}`,
+    style: `left:${(x0 / d.width) * 100}%;top:${(y0 / d.height) * 100}%;` +
+           `width:${((x1 - x0) / d.width) * 100}%;height:${((y1 - y0) / d.height) * 100}%` });
+}
+
+/** Every doubtful word framed on the page image, when asked. */
+function renderDoubtMarks() {
+  const d = state.unitDoubts;
+  const layer = $("#page-marks");
+  layer.querySelectorAll(".doubt-mark").forEach((m) => m.remove());
+  if (!d || !d.width || !$("#doubts-marks").checked) return;
+  layer.append(...d.suspects.filter((s) => s.box).map((s) => doubtMark(s, d)));
+}
+
+/** One doubtful word: selected in the text (found again near its place if
+ * the text was edited since), and shown on the image. */
+function showDoubt(s) {
+  const ta = $("#unit-text");
+  let i = ta.value.substr(s.start, s.word.length) === s.word ? s.start
+    : ta.value.indexOf(s.word, Math.max(0, s.start - 80));
+  if (i < 0) i = ta.value.indexOf(s.word);
+  if (i >= 0) {
+    ta.focus();
+    ta.setSelectionRange(i, i + s.word.length);
+    // bring the selection into view: put the caret line near the top
+    const line = ta.value.slice(0, i).split("\n").length - 1;
+    const lh = parseFloat(getComputedStyle(ta).lineHeight) || 18;
+    ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 3);
+  }
+  const d = state.unitDoubts;
+  const layer = $("#page-marks");
+  layer.querySelectorAll(".doubt-mark.current").forEach((m) => m.remove());
+  if (d && d.width && s.box) {
+    const m = doubtMark(s, d, "current");
+    layer.append(m);
+    m.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 }
 
@@ -744,8 +882,9 @@ async function loadAnalyses() {
       dateStyle: "short", timeStyle: "short" });
     const what = a.task === "summary" ? t("analysis.summary")
       : (t(`viewer.task.${a.task}`) + (a.question ? ` : ${a.question}` : ""));
-    const reading = a.task === "transcribe" || a.task === "correct";
-    const meta = [what, unit ? unit.label : null, a.model || null, when];
+    const reading = ["transcribe", "correct", "fix", "focus"].includes(a.task);
+    const model = a.model ? a.model.split(/[\\/]/).pop().replace(/\.gguf$/i, "") : null;
+    const meta = [what, unit ? unit.label : null, model, when];
     if (reading && a.score !== null && a.score !== undefined) {
       meta.push(t("reading.score", { pct: Math.round(a.score * 100) }));
     }
@@ -753,6 +892,8 @@ async function loadAnalyses() {
       el("div", { class: "meta" }, meta.filter(Boolean).join(" · "), " · ",
          analysisExportButtons(a.id)));
     if (reading) {
+      // a correction of doubtful words: the words first, the page after
+      if (a.sources && a.sources.changes) item.append(wordChanges(a.sources));
       item.append(el("div", { class: "text" }, a.text));
       if (a.sources && a.sources.truncated) item.append(el("p", { class: "badge warn" }, t("reading.truncated")));
       if (unit) item.append(readingActions(a, unit, item));
@@ -761,6 +902,19 @@ async function loadAnalyses() {
     }
     box.append(item);
   }
+}
+
+/** The words a correction of doubtful words changed, and those it refused. */
+function wordChanges(src) {
+  const box = el("div", { class: "word-changes" },
+    el("div", { class: "meta" }, t("reading.changes", { kept: src.kept || 0, refused: src.refused || 0,
+                                                       n: src.doubtful || 0 })));
+  for (const c of src.changes) {
+    box.append(el("span", { class: c.kept ? "change kept" : "change refused",
+                             title: t(`reading.why.${c.why}`) },
+      el("del", {}, c.word), " → ", c.kept ? el("ins", {}, c.new) : c.new));
+  }
+  return box;
 }
 
 /** Buttons of a page reading: use it as the page text, show the differences. */
@@ -831,6 +985,7 @@ async function openFulltext() {
   const epub = state.doc.kind === "epub";
   f.format.hidden = epub;
   f.method.hidden = !epub;
+  $("#fulltext-notes").hidden = epub;
   $("#fulltext-note").textContent = t(epub ? "ft.note_epub" : "ft.note_pdf");
   $("#fulltext-files").replaceChildren();          // not the previous document's
   f.hidden = false;
@@ -865,25 +1020,61 @@ async function saveFulltext(docId, x) {
   toast(t("export.saved", { path: r.path }));
 }
 
+/** The full-text job of a document still to finish, if any. */
+function fulltextJob(docId) {
+  return state.jobs.find((j) => j.kind === "fulltext" && j.doc_id === docId &&
+                         (j.status === "queued" || j.status === "running"));
+}
+
+/** Progress of the document's full-text job in its panel and on its button
+ * (again when coming back to the document while it runs). */
+function renderFulltextProgress() {
+  const box = $("#fulltext-progress");
+  const j = state.doc ? fulltextJob(state.doc.id) : null;
+  $("#fulltext-panel button.primary").disabled = !!j;
+  $("#viewer-fulltext").classList.toggle("busy", !!j);
+  box.hidden = !j;
+  if (!j) return;
+  const p = j.progress || {};
+  const bar = box.querySelector("progress");
+  let text;
+  if (j.cancel) text = t("ft.cancelling");
+  else if (j.status === "queued") text = t("ft.queued");
+  else if (p.total && p.done >= p.total) text = t("ft.writing");
+  else if (p.total) text = t("ft.page", { done: (p.done || 0) + 1, total: p.total });
+  else text = t("ft.running");
+  if (p.total && j.status === "running" && p.done < p.total) {
+    bar.max = p.total;
+    bar.value = p.done || 0;
+  } else {
+    bar.removeAttribute("value");                 // moving bar: no measure yet
+  }
+  $("#fulltext-progress-text").textContent = text;
+  $("#fulltext-cancel").hidden = j.cancel;
+  $("#fulltext-cancel").onclick = () => post(`/api/jobs/${j.id}/cancel`).then(pollJobs, fail);
+}
+
 async function makeFulltext(ev) {
   ev.preventDefault();
-  if (!state.doc) return;
+  if (!state.doc || fulltextJob(state.doc.id)) return;
   const f = $("#fulltext-panel");
   const docId = state.doc.id;
-  const button = f.querySelector("button.primary");
-  button.disabled = true;
+  const name = state.doc.name;
   try {
     const { job } = await post(`/api/documents/${docId}/fulltext`, {
-      format: f.format.value, method: f.method.value, illustrations: f.illustrations.checked });
-    toast(t("ft.running"));
-    const done = await waitJob(job);
-    if (done.status === "error") { fail(done.error); return; }
-    const r = done.result;
-    toast(t("ft.done", { file: r.file, before: sizeLabel(r.size_before), after: sizeLabel(r.size_after),
-                         n: r.illustrations }));
+      format: f.format.value, method: f.method.value, illustrations: f.illustrations.checked,
+      notes: f.notes.checked });
+    const done = waitJob(job);                    // starts the polling, shows the progress
+    const r = await done;
+    if (r.status === "cancelled") { toast(t("ft.cancelled")); return; }
+    if (r.status === "error") { fail(r.error); return; }
+    const x = r.result;
+    toast(t("ft.done", { file: x.file, before: sizeLabel(x.size_before), after: sizeLabel(x.size_after),
+                         n: x.illustrations })
+          + (x.notes ? `, ${t("ft.notes_done", { n: x.notes })}` : "")
+          + (state.doc && state.doc.id === docId ? "" : ` (${name})`));
     if (state.doc && state.doc.id === docId) await loadFulltextFiles();
   } catch (e) { fail(e); }
-  finally { button.disabled = false; }
 }
 
 async function startReread(ev) {
@@ -918,7 +1109,7 @@ async function runLook() {
   $("#analyses").prepend(pending);
   try {
     // reading the page again: a proposal for its text
-    const { job } = task === "correct" || task === "transcribe"
+    const { job } = ["correct", "transcribe", "fix", "focus"].includes(task)
       ? await post("/api/read", { unit_id: u.id, method: task })
       : await post("/api/look", { unit_id: u.id, task, question, lang: getLang() });
     const done = await waitJob(job);
@@ -1149,11 +1340,12 @@ function renderTranslateDocs() {
   tr.docId = sel.value ? Number(sel.value) : null;
 }
 
-function setMode(mode) {
+function setMode(mode, load = true) {
   document.querySelector(`input[name="tr-mode"][value="${mode}"]`).checked = true;
   $("#tr-text-mode").hidden = mode !== "text";
   $("#tr-doc-mode").hidden = mode !== "doc";
   $("#tr-book-mode").hidden = mode !== "book";
+  if (!load) return;
   if (mode === "doc") loadTranslations().catch(fail);
   if (mode === "book") { renderBookDocs(); loadBooks().catch(fail); }
 }
@@ -1161,8 +1353,8 @@ function setMode(mode) {
 function trLanguages() {
   const src = $("#tr-src").value;
   const tgt = $("#tr-tgt").value;
-  store("iak.tr.src", src);
-  store("iak.tr.tgt", tgt);
+  if (src) store("iak.tr.src", src);              // empty before the languages load
+  if (tgt) store("iak.tr.tgt", tgt);
   return { src, tgt };
 }
 
@@ -1206,6 +1398,7 @@ async function translateText() {
 function trError(msg) {
   if (/could not be detected/.test(msg)) return t("tr.detect_failed");
   if (/no translation or chat server/.test(msg)) return t("tr.no_server");
+  if (/is already in .*: choose another target language/.test(msg)) return t("tr.same_lang_short");
   return msg;
 }
 
@@ -1215,6 +1408,7 @@ async function loadTranslations() {
   tr.docId = $("#tr-doc").value ? Number($("#tr-doc").value) : null;
   if (!tr.docId) { list.replaceChildren(); info.textContent = t("tr.choose_doc_hint"); return; }
   const { tgt } = trLanguages();
+  if (!tgt) return;                               // the languages are not loaded yet
   const data = await get(`/api/documents/${tr.docId}/translations?tgt=${encodeURIComponent(tgt)}`);
   // the document or the language changed meanwhile: a newer call shows it
   if (Number($("#tr-doc").value) !== tr.docId || $("#tr-tgt").value !== tgt) return;
@@ -1226,6 +1420,7 @@ async function loadTranslations() {
     t("tr.doc_state", { done, total: data.units.length, tgt: langName(tgt) }),
     stale ? t("tr.doc_stale", { n: stale }) : null,
     data.src ? t("tr.doc_lang", { lang: langName(data.src) }) : null,
+    data.src && data.src === tgt ? t("tr.same_lang", { lang: langName(tgt) }) : null,
     data.languages.filter((l) => l !== tgt).length
       ? t("tr.doc_other", { langs: data.languages.filter((l) => l !== tgt).map(langName).join(", ") }) : null,
   ].filter(Boolean).join(" · ");
@@ -1304,14 +1499,26 @@ async function exportTranslation() {
 async function translateFromViewer() {
   if (!state.doc || !state.unit) return;
   const unitId = state.unit.id;
-  tr.docId = state.doc.id;
-  show("translate");
-  setMode("doc");
-  $("#tr-doc").value = String(tr.docId);
-  await loadTranslations();
-  const row = tr.rows.find((u) => u.unit_id === unitId);
+  const docId = state.doc.id;
+  tr.docId = docId;
+  setMode("doc", false);
+  // the tab fills its lists first (the languages on the first visit), keeping
+  // this document, then loads its translations
+  await show("translate");
+  if ($("#tr-doc").value !== String(docId)) {
+    $("#tr-doc").value = String(docId);
+    await loadTranslations();
+  }
+  if (tr.docId !== docId) return;
   const li = document.querySelector(`#tr-units li[data-unit="${unitId}"]`);
   if (li) li.scrollIntoView({ block: "start" });
+  const { tgt } = trLanguages();
+  if (tr.detected && tr.detected === tgt) {      // French into French: choose the language
+    $("#tr-tgt").focus();
+    toast(t("tr.same_lang", { lang: langName(tgt) }), true);
+    return;
+  }
+  const row = tr.rows.find((u) => u.unit_id === unitId);
   if (row && (row.text === null || row.stale)) {
     await translateUnit(unitId, false);
     const again = document.querySelector(`#tr-units li[data-unit="${unitId}"]`);
@@ -1641,7 +1848,8 @@ async function boot() {
   } catch (e) {
     $("#boot-message").textContent = t("app.error");
     $("#boot-message").className = "error";
-    $("#boot-detail").textContent = e.message + (e.log ? `\n${t("app.log", { path: e.log })}` : "");
+    const msg = /^library in use/.test(e.message) ? t("app.in_use") : e.message;
+    $("#boot-detail").textContent = msg + (e.log ? `\n${t("app.log", { path: e.log })}` : "");
     $("#boot-retry").hidden = !TAURI;
     return;
   }
@@ -1689,6 +1897,12 @@ function wire() {
       changeMembers(Number($("#coll-target").value), ids, []).catch(fail);
     }
   });
+  $("#coll-move").addEventListener("click", () => {
+    const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
+    if (ids.length && state.collection && $("#coll-target").value) {
+      moveMembers(state.collection, Number($("#coll-target").value), ids).catch(fail);
+    }
+  });
   $("#coll-remove").addEventListener("click", () => {
     const ids = [...state.selected].filter((id) => state.documents.some((d) => d.id === id));
     if (ids.length && state.collection) changeMembers(state.collection, [], ids).catch(fail);
@@ -1718,6 +1932,11 @@ function wire() {
   $("#reread-close").addEventListener("click", () => { $("#reread-panel").hidden = true; });
   $("#reread-panel").addEventListener("submit", startReread);
   $("#viewer-fulltext").addEventListener("click", () => openFulltext().catch(fail));
+  $("#doubts-marks").addEventListener("change", renderDoubtMarks);
+  $("#activity").addEventListener("click", () => {
+    show("library");
+    $("#jobs-list").scrollIntoView({ block: "nearest" });
+  });
   $("#fulltext-close").addEventListener("click", () => { $("#fulltext-panel").hidden = true; });
   $("#fulltext-panel").addEventListener("submit", makeFulltext);
   $("#reread-panel").pages.addEventListener("change", () => {
