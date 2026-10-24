@@ -155,11 +155,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--name", help="collection name (default: the folder's name)")
     p = sub.add_parser("fulltext")
     p.add_argument("target", help="library document id (PDF, image, EPUB) or an EPUB file")
-    p.add_argument("--format", default="epub", choices=("epub", "pdf", "html", "docx", "rtf", "md"),
+    p.add_argument("--format", default="epub", choices=("epub", "pdf", "html", "docx", "rtf", "md",
+                                                          "gutenberg"),
                    help="for a PDF or an image (an EPUB stays EPUB); default epub")
     p.add_argument("--no-illustrations", action="store_true", help="text only")
     p.add_argument("--no-notes", action="store_true",
                    help="leave the notes at the foot of the pages as paragraphs")
+    p.add_argument("--typography", choices=("auto", "yes", "no"), default="auto",
+                   help="French typography (auto: when the book is in French)")
+    p.add_argument("--old-print", action="store_true",
+                   help="an old print: correct the long s read f (eft -> est)")
+    p.add_argument("--keep-cut-words", action="store_true",
+                   help="leave the words OCR cut or glued as they are")
+    p.add_argument("--modern", action="store_true",
+                   help="modern spelling of a book of the 17th-18th centuries (estoit -> était)")
     p.add_argument("--vision", action="store_true",
                    help="EPUB: read its pictures of text with the vision model, not Tesseract")
     p.add_argument("--method", choices=("ocr", "focus", "fix", "vision"), default="ocr",
@@ -356,6 +365,9 @@ def main(argv: list[str] | None = None) -> int:
             elif method == "fix":
                 fix = servers.Client(args.server or host.chat, host.api_key, timeout=600)
 
+            finish = fulltext.Finish({"auto": None, "yes": True, "no": False}[args.typography],
+                                     args.old_print, not args.keep_cut_words, args.modern)
+
             def progress(i, n):
                 print(f"\r  {i}/{n}", end="", file=sys.stderr, flush=True)
             try:
@@ -363,7 +375,7 @@ def main(argv: list[str] | None = None) -> int:
                     r = fulltext.convert(lib, int(args.target), args.format,
                                          not args.no_illustrations, method, vision, progress,
                                          notes=not args.no_notes, fix_client=fix,
-                                         focus_client=focus)
+                                         focus_client=focus, finish=finish)
                     out = fulltext.output_dir(lib, int(args.target)) / r["file"]
                 else:
                     src = Path(args.target)
@@ -371,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
                     r = fulltext.epub_document(src, out, args.ocr_langs, args.tesseract,
                                                not args.no_illustrations, vision, progress,
                                                fix_client=fix, focus_client=focus,
-                                               notes=not args.no_notes)
+                                               notes=not args.no_notes, finish=finish)
             except (fulltext.FullTextError, KeyError, ocr.OcrError, BookError) as exc:
                 _out(f"\n{exc}")
                 return 1

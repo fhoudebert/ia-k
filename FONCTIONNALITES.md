@@ -96,6 +96,21 @@ ne part sur Internet.
   mal lues sont rétablies (« quon », « Lanxiété » → « qu'on »,
   « L'anxiété »), les notes reliées à leurs appels, et chaque correction,
   gardée ou refusée, est listée dans un fichier `.corrections.tsv`.
+- **Finition du livre entier** (reprise de Prescel) : **typographie
+  française** (espaces insécables avant `; : ! ?`, dans les guillemets,
+  points de suspension, tirets de dialogue ; pour les livres en français),
+  **mots coupés recollés** (« mar eschal » → « mareschal » quand le livre
+  écrit le mot entier ailleurs) et **mots collés séparés**, et pour un
+  **imprimé ancien** le **s long** lu « f » (« eft », « auffi » → « est »,
+  « aussi »), jamais là où la forme en f est aussi un mot (« fait »,
+  « font »). Pour un livre des XVIIᵉ-XVIIIᵉ siècles, l'**orthographe
+  moderne** (« estoit », « luy », « bontez », « charmans » → « était »,
+  « lui », « bontés », « charmants ») : les formes sûres sont changées,
+  celles qui sont aussi des mots modernes (« teste ») seulement listées.
+  Chaque changement est listé dans le `.corrections.tsv`.
+- **Export Project Gutenberg** : un zip au format demandé par Project
+  Gutenberg (texte sur 72 colonnes et page HTML, notes en fin de chapitre,
+  images), pour un livre du domaine public, relu.
 
 ## Relecture des scans difficiles
 

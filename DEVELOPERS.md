@@ -96,6 +96,19 @@ per system. With `--tesseract` it adds the Tesseract of this system and the
 shared language data, and lists its languages with it. Builds are made on
 each system.
 
+## From Prescel
+
+Several passes come from Prescel (https://github.com/fhoudebert/prescel, MIT
+licence, by the same author), rewritten for IA-K's paragraphs and note
+calls: the elisions (`epub_ocr_prose`) in `iak/correction.py`; French
+typography, the long s and the cut or glued words (`typo_fr.py`,
+`epub_longs.py`, `epub_recolle.py`) in `iak/textfix.py`; the Project
+Gutenberg zip (`epub_gutenberg.py`) in `iak/bookformats.py`; the modern
+spelling of the 17th and 18th centuries (`epub_modernise.py`) in
+`iak/modernise.py`, with Prescel's word lists copied unchanged in
+`iak/dictionaries/` (vocabulary, -oi- verbs, plurals in -ez and -ans). Each
+file names its source.
+
 ## French lexicon
 
 `scripts/fetch_words.py` writes `build/words/fr.txt`: the French word list

@@ -161,6 +161,19 @@ no server. In every case the elisions OCR misses are put right (`quon`,
 `Lanxiété` → `qu'on`, `L'anxiété`), the notes are linked to their calls, and
 the corrections made and refused are listed in a `.corrections.tsv` file next
 to the book. The result can be saved, or added to the library.
+For both, the whole book is then finished (from Prescel's scripts): *French
+typography* (no-break spaces before `; : ! ?`, inside `« »`, `…`, dialogue
+dashes; for books in French), *join the cut words, split the glued ones*
+(`mar eschal` → `mareschal` when the book writes the whole word elsewhere),
+and, for an *old print*, the long s read `f` (`eft`, `auffi` → `est`,
+`aussi`), never where the f form is a word too (`fait`, `font`). *Modern
+spelling* is for French books of the 17th and 18th centuries (`estoit`,
+`luy`, `bontez`, `charmans` → `était`, `lui`, `bontés`, `charmants`): the sure
+forms change, those that are modern words too (`teste`) are only listed.
+Each change goes to the `.corrections.tsv` list. *Project Gutenberg* makes the zip that
+Project Gutenberg asks for (text in 72 columns and one HTML page, notes at
+the end of each chapter, images); the book must be in the public domain and
+proofread.
 
 **Reading pages again.** When Tesseract reads a scan badly (old print,
 columns, tables, handwriting), the vision model can do better. In *Analyse

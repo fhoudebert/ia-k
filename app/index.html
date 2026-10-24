@@ -336,6 +336,7 @@
           <option value="docx">Word (DOCX)</option>
           <option value="rtf">RTF</option>
           <option value="md">Markdown</option>
+          <option value="gutenberg" data-i18n="ft.fmt_gutenberg"></option>
         </select>
         <select name="method">
           <option value="ocr" data-i18n="ft.method_ocr"></option>
@@ -347,6 +348,14 @@
           <span data-i18n="ft.illustrations"></span></label>
         <label class="check" id="fulltext-notes"><input type="checkbox" name="notes" checked>
           <span data-i18n="ft.notes"></span></label>
+        <label class="check"><input type="checkbox" name="typography" checked>
+          <span data-i18n="ft.typography"></span></label>
+        <label class="check"><input type="checkbox" name="cut_words" checked>
+          <span data-i18n="ft.cut_words"></span></label>
+        <label class="check"><input type="checkbox" name="old_print">
+          <span data-i18n="ft.old_print"></span></label>
+        <label class="check"><input type="checkbox" name="modern">
+          <span data-i18n="ft.modern"></span></label>
         <button class="primary" data-i18n="ft.make"></button>
         <button type="button" class="link close" id="fulltext-close">×</button>
         <div class="ft-progress" id="fulltext-progress" hidden>

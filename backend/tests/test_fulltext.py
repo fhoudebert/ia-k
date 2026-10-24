@@ -402,3 +402,40 @@ def test_epub_focus_elisions_and_notes(tmp_path, monkeypatch):
     assert "Voir le docteur Logre" in p0.split('id="iak-n1"')[1]
     log = fulltext.corrections_path(out).read_text("utf-8")
     assert "Lanxiété\tL'anxiété\tyes" in log and "Pinfini\tl'infini\tyes" in log
+
+
+def test_gutenberg(tmp_path):
+    long = "Le relieur reçut l'atlas au printemps, et il le rendit avec une reliure neuve " * 3
+    blocks = [("h1", "Chapitre premier"), ("p", f"Le relieur{layout.call(1)} rend l'atlas."),
+              ("img", bookformats.Picture(picture_png(), "image/png", 300, 200)),
+              ("p", long.strip()), ("note", (1, "Voir l'inventaire.")),
+              ("h1", "Chapitre II"), ("p", "Fin.")]
+    text = bookformats.gutenberg_text(blocks, "Livre", "fr")
+    lines = text.split("\r\n")
+    assert all(len(ln) <= 72 for ln in lines) and "\n" not in text.replace("\r\n", "")
+    assert "Le relieur[1] rend l'atlas." in lines and "[Illustration]" in lines
+    assert "[1] Voir l'inventaire." in lines
+    assert text.index("[1] Voir") < text.index("Chapitre II")        # end of its chapter
+    i = lines.index("Chapitre II".center(72).rstrip())
+    assert lines[i - 4:i] == [""] * 4 and lines[i + 1:i + 3] == ["", ""]
+    assert "NOTE DE TRANSCRIPTION" in lines
+    page = bookformats.gutenberg_html(blocks, "Livre", "fr", lambda p: "images/i1.png")
+    assert all(len(ln) <= 120 for ln in page.split("\n"))
+    assert 'href="#Footnote_1" class="fnanchor">[1]</a>' in page
+    assert 'id="Footnote_1"' in page and 'href="#FNanchor_1"' in page
+    assert page.index('id="Footnote_1"') < page.index("Chapitre II")
+    assert "<script" not in page and 'src="images/i1.png"' in page
+    out = tmp_path / "livre.gutenberg.zip"
+    bookformats.write(blocks, "gutenberg", "Livre", "fr", out)
+    with zipfile.ZipFile(out) as z:
+        assert sorted(z.namelist()) == ["livre/images/i1.png", "livre/livre.html", "livre/livre.txt"]
+
+
+def test_gutenberg_convert(tmp_path):
+    with Library(tmp_path / "lib") as lib:
+        doc = lib.import_file(book_with_notes(tmp_path / "notes.pdf")).doc_id
+        r = fulltext.convert(lib, doc, "gutenberg")
+        assert r["file"] == "notes.gutenberg.zip"
+        with zipfile.ZipFile(fulltext.output_dir(lib, doc) / r["file"]) as z:
+            text = z.read("notes/notes.txt").decode("utf-8")
+        assert "l'atlas[1] au" in text and "[2] Le prix est donné" in text

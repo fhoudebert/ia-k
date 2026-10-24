@@ -474,12 +474,48 @@ def corrections_path(out: Path) -> Path:
 
 
 def _write_log(out: Path, log: list[tuple[str, dict]]) -> None:
-    """Every change proposed to Tesseract's words, kept or refused, to review."""
-    lines = ["picture\tword\tcorrection\tkept\twhy"]
+    """Every change proposed, kept or refused, to review: the doubtful words
+    of a picture, and the book-wide passes (where: "book")."""
+    lines = ["where\tword\tcorrection\tkept\twhy\ttimes"]
     for path, c in log:
+        why = f"{c['kind']}: {c['why']}" if c.get("kind") else c["why"]
         lines.append("\t".join([path, c["word"], c["new"], "yes" if c["kept"] else "no",
-                                c["why"]]))
+                                why, str(c.get("n", 1))]))
     corrections_path(out).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+@dataclass
+class Finish:
+    """Book-wide finishing of a full-text version (iak.textfix): French
+    typography (None: when the book is in French), the long s of old prints,
+    the words OCR cut or glued, and the modern spelling of the 17th and 18th
+    centuries (iak.modernise)."""
+    typography: bool | None = None
+    old_print: bool = False
+    cut_words: bool = True
+    modern: bool = False
+
+    def run(self, texts: list[str], lang: str) -> tuple[list[str], list[dict]]:
+        from . import textfix
+        typo = self.typography if self.typography is not None else lang.startswith("fr")
+        if not (typo or self.old_print or self.cut_words or self.modern) or not texts:
+            return texts, []
+        return textfix.finish(texts, typo, self.old_print, self.cut_words, _lexicon(),
+                              self.modern)
+
+
+TEXT_KINDS = ("p", "h1", "h2", "li", "quote")
+
+
+def finish_blocks(blocks: list[tuple], lang: str, finish: Finish) -> tuple[list[tuple], list]:
+    """The text blocks and notes of a book through Finish."""
+    where = [i for i, (k, _) in enumerate(blocks) if k in TEXT_KINDS or k == "note"]
+    texts = [blocks[i][1][1] if blocks[i][0] == "note" else blocks[i][1] for i in where]
+    texts, log = finish.run(texts, lang)
+    out = list(blocks)
+    for i, t in zip(where, texts):
+        out[i] = ("note", (out[i][1][0], t)) if out[i][0] == "note" else (out[i][0], t)
+    return out, [("book", c) for c in log]
 
 
 def _is_cover(item, cover_ids) -> bool:
@@ -491,7 +527,7 @@ def _is_cover(item, cover_ids) -> bool:
 def epub_document(src: Path, out: Path, langs: str = ocr.DEFAULT_LANGS,
                   tesseract: str | None = None, illustrations: bool = True, vision=None,
                   progress=None, cancelled=None, fix_client=None, focus_client=None,
-                  notes: bool = True) -> dict:
+                  notes: bool = True, finish: Finish | None = None) -> dict:
     """Write out: the EPUB src with its pictures of text replaced by text.
 
     vision(png) -> text: the vision model reads each whole picture instead
@@ -630,6 +666,21 @@ def epub_document(src: Path, out: Path, langs: str = ocr.DEFAULT_LANGS,
     counts["notes"] = n_notes
     doc_notes: dict[str, list] = {}
 
+    # the book-wide finishing: typography, long s, cut and glued words
+    lang_tag = opf_soup.find(lambda t: local(t.name) == "language")
+    lang = lang_tag.get_text().strip().lower() if lang_tag else ""
+    slots = [(r, it) for p in targets for r in [readings.get(p)] if r and r.is_text
+             for it in r.paras]
+    note_slots = [(p, k) for p in page_notes for k in range(len(page_notes[p]))]
+    texts = [it.text for _, it in slots] + [page_notes[p][k][1] for p, k in note_slots]
+    texts, more = (finish or Finish()).run(texts, lang)
+    for (_, it), t in zip(slots, texts):
+        it.text = t
+    for (p, k), t in zip(note_slots, texts[len(slots):]):
+        page_notes[p][k] = (page_notes[p][k][0], t)
+    log += [("book", c) for c in more]
+    counts["finished"] = sum(c["kept"] for c in more if c.get("kind") != "typography")
+
     # 2. replace each picture of text where it is
     new_files: dict[str, bookformats.Picture] = {}
     n_new = 0
@@ -745,6 +796,7 @@ def epub_document(src: Path, out: Path, langs: str = ocr.DEFAULT_LANGS,
         for file, pic in new_files.items():
             zout.writestr(file, pic.data, compress_type=zipfile.ZIP_STORED)
     tmp.replace(out)
+    corrections_path(out).unlink(missing_ok=True)
     if log:
         _write_log(out, log)
     counts["size_before"] = src.stat().st_size
@@ -754,7 +806,7 @@ def epub_document(src: Path, out: Path, langs: str = ocr.DEFAULT_LANGS,
 
 # ---------------------------------------------------------------- library
 
-FORMATS = ("epub", "pdf", "html", "docx", "rtf", "md")
+FORMATS = ("epub", "pdf", "html", "docx", "rtf", "md", "gutenberg")
 
 
 def output_dir(lib, doc_id: int) -> Path:
@@ -774,7 +826,8 @@ def outputs(lib, doc_id: int) -> list[dict]:
 
 def convert(lib, doc_id: int, fmt: str = "epub", illustrations: bool = True,
             method: str = "ocr", vision=None, progress=None, cancelled=None,
-            notes: bool = True, fix_client=None, focus_client=None) -> dict:
+            notes: bool = True, fix_client=None, focus_client=None,
+            finish: Finish | None = None) -> dict:
     """Make the full-text version of a library document; returns its file
     name and counts. EPUB documents stay EPUB; method "vision" reads their
     pictures with vision(png) -> text."""
@@ -793,7 +846,7 @@ def convert(lib, doc_id: int, fmt: str = "epub", illustrations: bool = True,
         counts = epub_document(src, out, lib.opts.langs, lib.opts.tesseract, illustrations,
                                vision if method == "vision" else None, progress, cancelled,
                                fix_client if method == "fix" else None,
-                               focus_client if method == "focus" else None, notes)
+                               focus_client if method == "focus" else None, notes, finish)
         return {"file": out.name, "format": "epub", **counts}
     if doc["kind"] not in ("pdf", "image"):
         raise FullTextError(f"{doc['name']} is already text ({doc['kind']})")
@@ -805,8 +858,14 @@ def convert(lib, doc_id: int, fmt: str = "epub", illustrations: bool = True,
         raise FullTextError("no text in this document: read it with OCR (re-extract) first")
     lang = (json.loads(doc["meta"] or "{}").get("language") or "").split("-")[0] or \
         _guess_lang(blocks)
-    out = folder / f"{stem}.texte.{fmt}"
+    # Project Gutenberg: a zip of the text and the HTML
+    out = folder / (f"{stem}.gutenberg.zip" if fmt == "gutenberg" else f"{stem}.texte.{fmt}")
+    blocks, log = finish_blocks(blocks, lang, finish or Finish())
     bookformats.write(blocks, fmt, title, lang, out)
+    corrections_path(out).unlink(missing_ok=True)
+    if log:
+        _write_log(out, log)
+        counts["finished"] = sum(c["kept"] for _, c in log if c.get("kind") != "typography")
     return {"file": out.name, "format": fmt, **counts,
             "size_before": lib.original_path(doc_id).stat().st_size,
             "size_after": out.stat().st_size}

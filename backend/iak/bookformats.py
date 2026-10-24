@@ -439,6 +439,200 @@ def write_text(blocks, title: str, lang: str, out: Path, markdown: bool) -> None
     out.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
 
 
+# ---------------------------------------------------------------- Project Gutenberg
+# after Prescel's epub_gutenberg.py (MIT licence, by the same author)
+
+PG_CSS = """
+body { margin-left: 10%; margin-right: 10%; }
+h1, h2 { text-align: center; clear: both; font-weight: normal; }
+h1 { font-size: 2em; margin: 1em 0 0.5em; }
+h2 { font-size: 1.5em; margin-top: 3em; margin-bottom: 1em; page-break-before: always; }
+p { margin: 0.75em 0; text-indent: 1.5em; text-align: justify; }
+blockquote p { text-indent: 0; }
+hr.chap { width: 60%; margin: 3em auto 1em; clear: both; }
+.fnanchor { vertical-align: super; font-size: 0.75em; text-decoration: none; }
+.footnotes { border-top: 1px solid #999; margin: 2em 10% 1em; font-size: 0.9em; }
+.footnote p { text-indent: 0; margin: 0.5em 0 0.5em 4em; }
+.footnote .label { margin-left: -4em; display: inline-block; width: 3.5em; padding-right: 0.5em;
+                   text-align: right; }
+.figcenter { margin: 1.5em auto; text-align: center; }
+.figcenter img { max-width: 100%; height: auto; }
+.transnote { background-color: #eee; border: 1px dashed #999; margin: 3em 10%; padding: 0.5em 1em; }
+.transnote p { text-indent: 0; }
+"""
+PG_NOTE = {
+    "fr": ["Texte établi par reconnaissance de caractères (IA-K) puis relu.",
+           "Les notes, numérotées par page dans l'imprimé, sont numérotées de 1 à {n} "
+           "et reportées à la fin de chaque chapitre."],
+    "en": ["Text prepared by character recognition (IA-K), then proofread.",
+           "The notes, numbered by page in the printed book, are numbered from 1 to {n} "
+           "and placed at the end of each chapter."],
+}
+
+
+def _pg_wrap(text: str, width: int, indent: str = "") -> list[str]:
+    import textwrap
+    return textwrap.wrap(text, width=width, initial_indent=indent, subsequent_indent=indent,
+                         break_long_words=False, break_on_hyphens=False) or [""]
+
+
+def _pg_hanging(text: str, width: int, indent: str = "    ") -> list[str]:
+    import textwrap
+    first = textwrap.wrap(text, width=width, break_long_words=False, break_on_hyphens=False)
+    if not first:
+        return [""]
+    rest = text[len(first[0]):].strip()
+    return [first[0]] + (textwrap.wrap(rest, width=width, initial_indent=indent,
+                                       subsequent_indent=indent, break_long_words=False,
+                                       break_on_hyphens=False) if rest else [])
+
+
+def gutenberg_text(blocks, title: str, lang: str, width: int = 72) -> str:
+    """The plain text Project Gutenberg asks for: lines of 72 characters at
+    most, a blank line between paragraphs, four before a chapter and two
+    after, notes [1] at the end of their chapter, CRLF."""
+    out: list[str] = []
+
+    def blank(n):
+        while out and out[-1] == "":
+            out.pop()
+        out.extend([""] * n)
+    for line in _pg_wrap(title, width - 4):
+        out.append(line.strip().center(width).rstrip())
+    n_notes = 0
+    for kind, value in arranged(blocks):
+        if kind == "img":
+            blank(1)
+            out += ["[Illustration]", ""]
+            continue
+        if kind == "note":
+            n_notes += 1
+            out += _pg_hanging(f"[{value[0]}] " + strip_calls(value[1]), width) + [""]
+            continue
+        text = strip_calls(value)
+        if kind in ("h1", "h2"):
+            blank(4 if kind == "h1" else 2)
+            out += [ln.strip().center(width).rstrip() for ln in _pg_wrap(text, width - 4)]
+            blank(2 if kind == "h1" else 1)
+        elif kind == "li":
+            out += _pg_hanging("  * " + text, width, "    ") + [""]
+        elif kind in ("quote", "code"):
+            out += _pg_wrap(text, width - 4, "    ") + [""]
+        else:
+            out += _pg_wrap(text, width) + [""]
+    if n_notes:
+        blank(4)
+        out += ["NOTE DE TRANSCRIPTION" if lang.startswith("fr") else "TRANSCRIBER'S NOTE", ""]
+        for para in PG_NOTE["fr" if lang.startswith("fr") else "en"]:
+            out += _pg_wrap(para.format(n=n_notes), width) + [""]
+    while out and out[-1] == "":
+        out.pop()
+    return "\r\n".join(out) + "\r\n"
+
+
+def _pg_inline(text: str) -> str:
+    out = []
+    for piece in split_calls(text):
+        if isinstance(piece, int):
+            out.append(f'<a id="FNanchor_{piece}" href="#Footnote_{piece}" '
+                       f'class="fnanchor">[{piece}]</a>')
+        else:
+            out.append(_esc(piece))
+    return "".join(out)
+
+
+def gutenberg_html(blocks, title: str, lang: str, src) -> str:
+    """One HTML5 page, CSS inside, notes linked both ways, no script."""
+    out = ["<!DOCTYPE html>", f'<html lang="{lang}">', "<head>", '<meta charset="utf-8">',
+           f"<title>{_esc(title)}</title>", f"<style>{PG_CSS}</style>", "</head>", "<body>",
+           f"<h1>{_esc(title)}</h1>"]
+    notes, n_notes = [], 0
+
+    def flush():
+        if notes:
+            out.append('<div class="footnotes">')
+            out.extend(notes)
+            out.append("</div>")
+            notes.clear()
+    for kind, value in arranged(blocks):
+        if kind == "note":
+            n, text = value
+            n_notes += 1
+            notes.append(f'<div class="footnote"><p id="Footnote_{n}"><a href="#FNanchor_{n}" '
+                         f'class="label">[{n}]</a> {_pg_inline(text)}</p></div>')
+            continue
+        if kind in ("h1", "h2"):
+            flush()                              # the notes of the chapter before
+            out.append('<hr class="chap">')
+            out.append(f"<h2>{_pg_inline(value)}</h2>")
+        elif kind == "img":
+            out.append(f'<div class="figcenter"><img src="{html.escape(src(value))}" '
+                       f'alt=""></div>')
+        elif kind == "li":
+            out.append(f"<ul><li>{_pg_inline(value)}</li></ul>")
+        elif kind in ("quote", "code"):
+            out.append(f"<blockquote><p>{_pg_inline(value)}</p></blockquote>")
+        else:
+            out.append(f"<p>{_pg_inline(value)}</p>")
+    flush()
+    if n_notes:
+        fr = lang.startswith("fr")
+        out.append('<div class="transnote">')
+        out.append(f"<p><b>{'Note de transcription' if fr else 'Transcriber’s note'}</b></p>")
+        out += [f"<p>{_esc(p.format(n=n_notes))}</p>" for p in PG_NOTE["fr" if fr else "en"]]
+        out.append("</div>")
+    out += ["</body>", "</html>", ""]
+    return _pg_wrap_html("\n".join(out).replace("</ul>\n<ul>", "\n"))
+
+
+def _pg_wrap_html(page: str, width: int = 100) -> str:
+    """Lines of at most width characters (PG: no more than 120), cut on a
+    space of the text or between two attributes, never inside a value."""
+    out = []
+    for line in page.split("\n"):
+        if len(line) <= width:
+            out.append(line)
+            continue
+        start, cut, tag, quote = 0, None, False, None
+        for i, c in enumerate(line):
+            if quote:
+                if c == quote:
+                    quote = None
+            elif tag:
+                if c in "\"'":
+                    quote = c
+                elif c == ">":
+                    tag = False
+                elif c == " ":
+                    cut = i
+            elif c == "<":
+                tag = True
+            elif c == " ":
+                cut = i
+            if i - start >= width and cut is not None and cut > start:
+                out.append(line[start:cut].rstrip())
+                start = cut + 1
+                cut = None
+        out.append(line[start:])
+    return "\n".join(out)
+
+
+def write_gutenberg(blocks, title: str, lang: str, out: Path) -> None:
+    """A zip for Project Gutenberg: <name>.txt, <name>.html and images/.
+    PG adds its own header and licence; the book must be in the public domain
+    in the United States, and checked at https://copy.pglaf.org before."""
+    stem = out.name.split(".")[0]
+    names = {id(p): f"images/i{n}.{p.ext}" for n, p in enumerate(pictures(blocks), 1)}
+    tmp = out.with_name(out.name + ".part")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(f"{stem}/{stem}.txt", gutenberg_text(blocks, title, lang).encode("utf-8"))
+        z.writestr(f"{stem}/{stem}.html",
+                   gutenberg_html(blocks, title, lang, lambda p: names[id(p)]).encode("utf-8"))
+        for p in pictures(blocks):
+            z.writestr(f"{stem}/{names[id(p)]}", p.data, compress_type=zipfile.ZIP_STORED)
+    tmp.replace(out)
+
+
 def write(blocks, fmt: str, title: str, lang: str, out: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     if fmt == "pdf":
@@ -453,5 +647,7 @@ def write(blocks, fmt: str, title: str, lang: str, out: Path) -> None:
         write_rtf(blocks, title, lang, out)
     elif fmt in ("md", "txt"):
         write_text(blocks, title, lang, out, markdown=fmt == "md")
+    elif fmt == "gutenberg":
+        write_gutenberg(blocks, title, lang, out)
     else:
         raise ValueError(f"unknown format {fmt}")

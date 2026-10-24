@@ -366,7 +366,10 @@ def job_fulltext(app: App, lib: Library, job: Job):
         return fulltext.convert(lib, p["doc_id"], p.get("format", "epub"),
                                 p.get("illustrations", True), method, vision,
                                 _progress(job, "fulltext"), lambda: job.cancel,
-                                p.get("notes", True), fix, focus)
+                                p.get("notes", True), fix, focus,
+                                fulltext.Finish(p.get("typography"), bool(p.get("old_print")),
+                                                p.get("cut_words", True) is not False,
+                                                bool(p.get("modern"))))
     except (fulltext.FullTextError, ocr.OcrError) as exc:
         if job.cancel:
             return {"cancelled": True}
@@ -898,8 +901,9 @@ class Handler(BaseHTTPRequestHandler):
 
     @route("POST", r"/api/documents/(\d+)/fulltext")
     def fulltext_make(self, doc_id, query):
-        """{"format": "epub", "illustrations": true, "notes": true,
-        "method": "ocr"|"focus"|"fix"|"vision"}: a job."""
+        """{"format": "epub", "illustrations": true, "notes": true, "typography":
+        null (French books) | true | false, "old_print": false, "cut_words": true,
+        "modern": false (17th-18th century spelling modernised), "method": "ocr"|"focus"|"fix"|"vision"}: a job."""
         body = self._body()
         fmt = body.get("format", "epub")
         if fmt not in fulltext.FORMATS:
@@ -916,7 +920,12 @@ class Handler(BaseHTTPRequestHandler):
         job = self.app.submit("fulltext", {"doc_id": int(doc_id), "format": fmt,
                                            "illustrations": body.get("illustrations", True)
                                            is not False, "method": method,
-                                           "notes": body.get("notes", True) is not False})
+                                           "notes": body.get("notes", True) is not False,
+                                           "typography": body.get("typography"),
+                                           "old_print": bool(body.get("old_print")),
+                                           "cut_words": body.get("cut_words", True)
+                                           is not False,
+                                           "modern": bool(body.get("modern"))})
         self._json(202, {"job": job.id})
 
     def _fulltext_file(self, lib, doc_id, name) -> Path:
