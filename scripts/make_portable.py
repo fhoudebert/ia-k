@@ -31,7 +31,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-COMMON = ["README.md", "FONCTIONNALITES.md", "SERVERS.md", "BACKEND.md", "DEVELOPERS.md", "LICENSE",
+COMMON = ["README.md", "FEATURES.md", "FONCTIONNALITES.md",
+          "SERVERS.md", "BACKEND.md", "DEVELOPERS.md", "LICENSE",
           "config/servers.example.toml", "scripts/smoke_test.py", "assets/icon.png",
           "assets/ia-k.png"]
 BY_OS = {

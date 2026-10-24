@@ -6,7 +6,7 @@ questions en citant ses sources, et traduit textes et livres entiers. Tout se
 passe sur votre ordinateur, avec des modèles de langue locaux : aucun document
 ne part sur Internet.
 
-[Guide complet (en anglais) : README.md](README.md)
+Installation : [README.md](README.md) ; en anglais : [FEATURES.md](FEATURES.md).
 
 ## Où et comment il fonctionne
 
