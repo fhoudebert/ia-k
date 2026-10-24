@@ -352,15 +352,21 @@ def job_compare(app: App, lib: Library, job: Job):
 
 def job_fulltext(app: App, lib: Library, job: Job):
     p = job.params
-    vision = None
-    if p.get("method") == "vision":
+    vision = fix = focus = None
+    method = p.get("method", "ocr")
+    if method in ("vision", "focus"):
         client = analyze.vision_client(app.host, app.host.api_key)
-        vision = lambda png: transcription.transcribe_png(client, png)  # noqa: E731
+        if method == "vision":
+            vision = lambda png: transcription.transcribe_png(client, png)  # noqa: E731
+        else:
+            focus = client
+    elif method == "fix":
+        fix = app.chat()
     try:
         return fulltext.convert(lib, p["doc_id"], p.get("format", "epub"),
-                                p.get("illustrations", True), p.get("method", "ocr"), vision,
+                                p.get("illustrations", True), method, vision,
                                 _progress(job, "fulltext"), lambda: job.cancel,
-                                p.get("notes", True))
+                                p.get("notes", True), fix, focus)
     except (fulltext.FullTextError, ocr.OcrError) as exc:
         if job.cancel:
             return {"cancelled": True}
@@ -893,14 +899,14 @@ class Handler(BaseHTTPRequestHandler):
     @route("POST", r"/api/documents/(\d+)/fulltext")
     def fulltext_make(self, doc_id, query):
         """{"format": "epub", "illustrations": true, "notes": true,
-        "method": "ocr"|"vision"}: a job."""
+        "method": "ocr"|"focus"|"fix"|"vision"}: a job."""
         body = self._body()
         fmt = body.get("format", "epub")
         if fmt not in fulltext.FORMATS:
             raise ApiError(400, f"format is one of {', '.join(fulltext.FORMATS)}")
         method = body.get("method", "ocr")
-        if method not in ("ocr", "vision"):
-            raise ApiError(400, "method is ocr or vision")
+        if method not in ("ocr", "vision", "fix", "focus"):
+            raise ApiError(400, "method is ocr, focus, fix or vision")
         with self.app.library() as lib:
             d = lib.document(int(doc_id))
             if d is None:

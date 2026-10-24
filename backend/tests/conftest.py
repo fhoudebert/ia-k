@@ -23,6 +23,12 @@ HAS_TESSERACT = _has_tesseract()
 
 
 @pytest.fixture(autouse=True)
+def _no_lexicon(monkeypatch, tmp_path_factory):
+    """The tests do not depend on a lexicon fetched on this computer."""
+    monkeypatch.setattr("iak.doubt.LEXICON_DIR", tmp_path_factory.mktemp("nolexicon"))
+
+
+@pytest.fixture(autouse=True)
 def _no_watcher(monkeypatch):
     """No background folder watcher in the tests (they call watch_once)."""
     monkeypatch.setenv("IAK_WATCH_SECONDS", "0")

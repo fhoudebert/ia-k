@@ -162,6 +162,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="leave the notes at the foot of the pages as paragraphs")
     p.add_argument("--vision", action="store_true",
                    help="EPUB: read its pictures of text with the vision model, not Tesseract")
+    p.add_argument("--method", choices=("ocr", "focus", "fix", "vision"), default="ocr",
+                   help="EPUB: ocr (Tesseract), focus (Tesseract, its doubtful lines read "
+                        "again by the vision model), fix (Tesseract, its doubtful words "
+                        "corrected by the text model), vision (the vision model alone)")
     p.add_argument("-o", "--out", type=Path, help="copy the result here")
     p = sub.add_parser("export")
     p.add_argument("analysis", type=int, help="analysis id (see analyses)")
@@ -341,25 +345,33 @@ def main(argv: list[str] | None = None) -> int:
 
             from . import fulltext, ocr, transcription
             from .book import BookError
-            vision = None
-            if args.vision:
+            vision = fix = focus = None
+            method = "vision" if args.vision else args.method
+            if method in ("vision", "focus"):
                 client = analyze.vision_client(host, host.api_key, args.vision_server, args.server)
-                vision = lambda png: transcription.transcribe_png(client, png)  # noqa: E731
+                if method == "vision":
+                    vision = lambda png: transcription.transcribe_png(client, png)  # noqa: E731
+                else:
+                    focus = client
+            elif method == "fix":
+                fix = servers.Client(args.server or host.chat, host.api_key, timeout=600)
 
             def progress(i, n):
                 print(f"\r  {i}/{n}", end="", file=sys.stderr, flush=True)
             try:
                 if args.target.isdigit():
                     r = fulltext.convert(lib, int(args.target), args.format,
-                                         not args.no_illustrations,
-                                         "vision" if args.vision else "ocr", vision, progress,
-                                         notes=not args.no_notes)
+                                         not args.no_illustrations, method, vision, progress,
+                                         notes=not args.no_notes, fix_client=fix,
+                                         focus_client=focus)
                     out = fulltext.output_dir(lib, int(args.target)) / r["file"]
                 else:
                     src = Path(args.target)
                     out = args.out or src.with_name(src.stem + ".texte.epub")
                     r = fulltext.epub_document(src, out, args.ocr_langs, args.tesseract,
-                                               not args.no_illustrations, vision, progress)
+                                               not args.no_illustrations, vision, progress,
+                                               fix_client=fix, focus_client=focus,
+                                               notes=not args.no_notes)
             except (fulltext.FullTextError, KeyError, ocr.OcrError, BookError) as exc:
                 _out(f"\n{exc}")
                 return 1
@@ -367,10 +379,12 @@ def main(argv: list[str] | None = None) -> int:
             if args.out and out != args.out:
                 shutil.copyfile(out, args.out)
                 out = args.out
-            parts = [f"{k}: {v}" for k, v in r.items() if k not in ("file", "errors")]
+            parts = [f"{k}: {v}" for k, v in r.items() if k not in ("file", "error")]
             _out(f"written: {out}\n  " + ", ".join(parts))
-            for e in r.get("errors", [])[:10]:
-                _out(f"  ! {e}")
+            if r.get("error"):
+                _out(f"  ! first error: {r['error']}")
+            if fulltext.corrections_path(out).exists():
+                _out(f"  corrections: {fulltext.corrections_path(out)}")
             return 0
 
         if args.cmd == "folder":

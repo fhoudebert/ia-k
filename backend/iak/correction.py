@@ -64,26 +64,58 @@ def distance(a: str, b: str) -> int:
 
 def judge(old: str, new: str, vocab: set[str], loose: bool = False) -> str | None:
     """None when new is the OCR's word, else why it is kept ("known",
-    "close") or refused ("too different", "odd", "unknown parts", "empty").
-    loose: the vision model has seen the letters, more may change."""
+    "close") or refused ("too different", "odd", "unknown parts", "empty",
+    "real word", "name", "unknown").
+    - a known word (the book's, a word list's, the lexicon's) may be up to
+      half the letters away from the OCR's: a known word further away is
+      another word the model chose, not a misreading;
+    - an unknown word only a quarter (one letter in four);
+    - a word the OCR read that is itself known (read with a low confidence)
+      is only replaced by a known word one letter away, or the same with an
+      elision (évoque -> n'évoque): a real word is not traded for another
+      on a guess.
+    loose (the vision model, which saw the letters): a known word may be a
+    little further."""
     if new == old:
         return None
     if not new.strip():
         return "empty"
+    lex = doubt.lexicon()
+
     def known(w):
-        return doubt._norm(w) in vocab
-    limit = max(2, len(old) // 2) if loose else max(1, len(old) // 4)
+        w = doubt._norm(w)
+        if "'" in w.strip("'"):                  # l'école, jusqu'à, aujourd'hui
+            *heads, w = w.split("'")
+            if not all(h in doubt.ELIDES for h in heads):
+                return False
+            if heads == ["aujourd"]:
+                return w == "hui"
+        if "-" in w.strip("-"):                                     # être-temps
+            return all(p in vocab or p in lex for p in w.split("-") if p)
+        return w in vocab or w in lex
+    d = distance(old.lower(), new.lower().replace(" ", ""))
+    far = max(2, (len(old) + 1) // 2) + (1 if loose else 0)
+    close = max(1, len(old) // 4)
     if " " in new:                               # a word split in two
-        parts = new.split()
-        if not all(known(p) or len(p) <= 2 for p in parts):
+        if not all(known(p) or len(p) <= 2 for p in new.split()):
             return "unknown parts"
-        return "known" if distance(old.lower(), "".join(parts).lower()) <= limit \
-            else "too different"
-    if doubt.odd_chars(new):
+        return "known" if d <= far else "too different"
+    if doubt.odd_chars(new[2:] if new[:2].lower() in ("l'", "l’") else new):
         return "odd"
+    if known(old) and old.replace("-", "").isalpha():
+        elided = re.sub(r"^\w{1,2}['’]", "", new) == old
+        return "known" if known(new) and (d <= 1 or elided) else "real word"
+    if old[:1].isupper() and not new[:2].lower() in ("l'", "l’"):
+        # a capitalised word is often a name: only into a word of the book itself
+        in_book = doubt._norm(new) in vocab
+        return ("known" if d <= far else "too different") if in_book else "name"
     if known(new):
-        return "known"
-    return "close" if distance(old.lower(), new.lower()) <= limit else "too different"
+        return "known" if d <= far else "too different"
+    if d > close:
+        return "too different"
+    # an unknown word into another unknown word: only one the book writes
+    # (Latin, names) when the book's words are given
+    return "close" if not vocab or doubt._norm(new) in vocab else "unknown"
 
 
 KEPT = ("known", "close")
@@ -98,7 +130,8 @@ def apply_changes(text: str, suspects: list[dict], proposals: dict[int, str],
         s = suspects[i]
         new = new.strip()
         old_first = next((c for c in s["word"] if c.isalpha()), "")
-        if old_first.isupper() and new[:1].islower():
+        if old_first.isupper() and new[:1].islower() and not (
+                new[:2] == "l'" and old_first in "TFVPI"):      # Pinfini: the P is an l'
             new = new[:1].upper() + new[1:]          # a capital stays (a sentence, a name)
         why = judge(s["word"], new, vocab, loose)
         if why is None:
@@ -124,13 +157,18 @@ class Candidates:
     """Known words close to a doubtful one: the same letters but for the
     accents, else the nearest of about the same length (difflib)."""
 
-    def __init__(self, vocab: set[str]):
+    def __init__(self, vocab: set[str], lexicon=frozenset()):
         self.plain: dict[str, list[str]] = {}
         self.by_len: dict[int, list[str]] = {}
         for w in vocab:
             if w.isalpha():
                 self.plain.setdefault(_plain(w), []).append(w)
                 self.by_len.setdefault(len(w), []).append(w)
+        # the lexicon for the accents only: its 336,000 forms are too many
+        # for difflib on every doubtful word
+        for w in lexicon:
+            if w.isalpha() and w not in vocab:
+                self.plain.setdefault(_plain(w), []).append(w)
 
     def __call__(self, word: str, n: int = 3) -> list[str]:
         w = doubt._norm(word)
@@ -148,8 +186,9 @@ _candidates: dict = {}
 
 
 def candidates_for(vocab: set[str]) -> Candidates:
-    if _candidates.get("vocab") is not vocab:
-        _candidates.update(vocab=vocab, cand=Candidates(vocab))
+    lex = doubt.lexicon()
+    if _candidates.get("vocab") is not vocab or _candidates.get("lex") is not lex:
+        _candidates.update(vocab=vocab, lex=lex, cand=Candidates(vocab, lex))
     return _candidates["cand"]
 
 
@@ -184,14 +223,8 @@ def parse_answer(raw: str, numbers: range) -> dict[int, str]:
     return out
 
 
-def fix_words(lib, client, unit_id: int) -> tuple[str, list[dict], dict]:
-    """(new text, changes, info) for a page, with the text model."""
-    found = doubt.unit(lib, unit_id)
-    suspects = found["suspects"]
-    if not suspects:
-        raise AnalysisError(NOTHING_DOUBTFUL)
-    text = lib.con.execute("SELECT text FROM units WHERE id=?", (unit_id,)).fetchone()["text"]
-    vocab = doubt.vocabulary(lib.con, str(lib.folder))
+def fix_proposals(client, text: str, suspects: list[dict], vocab: set[str]) -> tuple[dict, bool]:
+    """({index in suspects: word}, cut short) from the text model."""
     near = candidates_for(vocab)
     proposals: dict[int, str] = {}
     truncated = False
@@ -210,9 +243,81 @@ def fix_words(lib, client, unit_id: int) -> tuple[str, list[dict], dict]:
         truncated |= info.get("finish_reason") == "length"
         for k, w in parse_answer(raw, range(1, len(batch) + 1)).items():
             proposals[b0 + k - 1] = w
+    return proposals, truncated
+
+
+def fix_words(lib, client, unit_id: int) -> tuple[str, list[dict], dict]:
+    """(new text, changes, info) for a page, with the text model."""
+    found = doubt.unit(lib, unit_id)
+    suspects = found["suspects"]
+    if not suspects:
+        raise AnalysisError(NOTHING_DOUBTFUL)
+    text = lib.con.execute("SELECT text FROM units WHERE id=?", (unit_id,)).fetchone()["text"]
+    vocab = doubt.vocabulary(lib.con, str(lib.folder))
+    proposals = elisions(suspects, vocab)
+    more, truncated = fix_proposals(client, text, suspects, vocab)
+    proposals = {**more, **proposals}
     new, changes = apply_changes(text, suspects, proposals, vocab)
     return new, changes, {"doubtful": found["doubtful"], "answered": len(proposals),
                           "truncated": truncated}
+
+
+# ---------------------------------------------------------------- elisions
+
+ELIDED = re.compile(r"^([LlTFVPIJ])([aeiouyhàâäéèêëîïôöûüœæAEIOUYHÀÂÉÈÊÎÔÛŒ][^\W\d_]+)$")
+APOSTROPHE = re.compile(r"^(qu|[sScCdDjJlLmMnN])([aeiouyhàâäéèêëîïôöûüœæ][^\W\d_]+)$", re.I)
+
+
+def attested(texts) -> set[str]:
+    """The elisions written right in a book (l'homme, d'ailleurs, j'ai),
+    lowercase, to confirm a correction."""
+    out: set[str] = set()
+    for t in texts:
+        out.update(m.lower().replace("’", "'") for m in re.findall(r"\b\w{1,7}['’]\w+", t))
+    return out
+
+
+def elisions(suspects: list[dict], vocab: set[str],
+             seen: set[str] | None = None) -> dict[int, str]:
+    """Elisions OCR got wrong (after Prescel's epub_ocr_prose), when the word
+    as read is unknown and its rest is known:
+    - the apostrophe left out: « quon » -> « qu'on », « saccomplit » ->
+      « s'accomplit », « Jai » -> « J'ai »;
+    - the l' read as a letter: « Lanxiété » -> « L'anxiété », « Pinfini »,
+      « Tautre », « Vhistoire » -> « l'infini »...
+    seen: the elisions written right in the book (attested): a capitalised
+    word (Pallas, Latour are names) or a d', m', t' (dires, mêlé) is only
+    corrected into one of them. Without it, the lexicon decides alone."""
+    out = {}
+    lex = doubt.lexicon()
+
+    def known(w):
+        return doubt._norm(w) in vocab or doubt._norm(w) in lex
+
+    def ok(word, new, strict):
+        return not (strict and seen is not None and new.lower() not in seen)
+    for i, s in enumerate(suspects):
+        w = s["word"]
+        if known(w):
+            continue
+        cap = w[:1].isupper()
+        m = APOSTROPHE.match(w) if not cap or w[:1] in "CQSNLJ" else None
+        if m:
+            pre, rest = m.groups()
+            short = pre.lower() in ("qu", "j")              # qu'il, j'ai
+            if pre.lower() == "c" and rest[:1].lower() not in "eéèê":
+                continue                                    # c'est, c'était; not c'alise
+            if known(rest) and len(rest) >= (2 if short else 3):
+                new = f"{pre}'{rest}"
+                if ok(w, new, cap or pre.lower() in ("d", "m", "t")):
+                    out[i] = new
+                continue
+        m = ELIDED.match(w)
+        if m and known(m.group(2)) and len(m.group(2)) >= 3:
+            new = ("L'" if m.group(1) == "L" else "l'") + m.group(2)
+            if ok(w, new, cap):
+                out[i] = new
+    return out
 
 
 # ---------------------------------------------------------------- targeted vision
@@ -272,34 +377,29 @@ def _crop_png(lib, unit_id: int, rect_px, unit_size) -> bytes:
         return page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=clip).tobytes("png")
 
 
-def focus_words(lib, client, unit_id: int, progress=None) -> tuple[str, list[dict], dict]:
-    """(new text, changes, info) for a page, reading its doubtful lines again
-    with the vision model."""
-    found = doubt.unit(lib, unit_id)
-    suspects = [s for s in found["suspects"] if s.get("box")]
-    if not suspects:
-        raise AnalysisError(NOTHING_DOUBTFUL if not found["suspects"] else NO_PLACE)
-    text = lib.con.execute("SELECT text FROM units WHERE id=?", (unit_id,)).fetchone()["text"]
-    u = lib.con.execute("SELECT boxes, width, height FROM units WHERE id=?",
-                        (unit_id,)).fetchone()
-    size = (u["width"] or 1, u["height"] or 1)
-    boxes_at = doubt._aligned_conf(text, json.loads(u["boxes"]) if u["boxes"] else [])
-    vocab = doubt.vocabulary(lib.con, str(lib.folder))
+def focus_proposals(client, text: str, suspects: list[dict], boxes: list, crop,
+                    progress=None) -> tuple[dict, int]:
+    """({index in suspects: word}, lines read): each line holding doubtful
+    words cut out by crop(rect in the OCR's pixels) -> PNG, read by the
+    vision model, aligned with its OCR."""
+    boxes_at = doubt._aligned_conf(text, boxes or [])
     lines: dict[tuple[int, int], list[tuple[int, dict]]] = {}
     for i, s in enumerate(suspects):
-        lines.setdefault(_line_of(text, s["start"]), []).append((i, s))
+        if s.get("box"):
+            lines.setdefault(_line_of(text, s["start"]), []).append((i, s))
     proposals: dict[int, str] = {}
     read = 0
-    for n, ((a, b), items) in enumerate(sorted(lines.items())[:MAX_LINES], 1):
+    todo = sorted(lines.items())[:MAX_LINES]
+    for n, ((a, b), items) in enumerate(todo, 1):
         if progress:
-            progress(n, min(len(lines), MAX_LINES))
+            progress(n, len(todo))
         rects = [box for start, (_, box) in boxes_at.items() if a <= start < b and box]
         if not rects:
             continue
         x0, y0 = min(r[0] for r in rects), min(r[1] for r in rects)
         x1, y1 = max(r[2] for r in rects), max(r[3] for r in rects)
         h = y1 - y0
-        png = _crop_png(lib, unit_id, (x0 - h, y0 - 0.35 * h, x1 + h, y1 + 0.35 * h), size)
+        png = crop((x0 - h, y0 - 0.35 * h, x1 + h, y1 + 0.35 * h))
         content = [{"type": "text", "text": FOCUS_PROMPT},
                    {"type": "image_url", "image_url": {
                        "url": "data:image/png;base64," + base64.b64encode(png).decode("ascii")}}]
@@ -312,6 +412,41 @@ def focus_words(lib, client, unit_id: int, progress=None) -> tuple[str, list[dic
         read += 1
         local = [(i, {**s, "start": s["start"] - a}) for i, s in items]
         proposals.update(proposals_from_line(line, reading, local))
+    return proposals, read
+
+
+def picture_cropper(png: bytes):
+    """crop(rect in the picture's pixels) -> PNG of that part, enlarged so
+    that a text line is about LINE_PX high."""
+    import pymupdf
+    width = pymupdf.Pixmap(png).width
+    doc = pymupdf.open(stream=png, filetype="png")
+    page = doc[0]
+    k = page.rect.width / max(width, 1)          # pixels -> the page's points
+
+    def crop(rect_px):
+        r = pymupdf.Rect(*(v * k for v in rect_px)) & page.rect
+        zoom = min(8.0, max(1.0, LINE_PX / max(r.height, 1) * 0.8))
+        return page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), clip=r).tobytes("png")
+    return crop
+
+
+def focus_words(lib, client, unit_id: int, progress=None) -> tuple[str, list[dict], dict]:
+    """(new text, changes, info) for a page, reading its doubtful lines again
+    with the vision model."""
+    found = doubt.unit(lib, unit_id)
+    suspects = [s for s in found["suspects"] if s.get("box")]
+    if not suspects:
+        raise AnalysisError(NOTHING_DOUBTFUL if not found["suspects"] else NO_PLACE)
+    text = lib.con.execute("SELECT text FROM units WHERE id=?", (unit_id,)).fetchone()["text"]
+    u = lib.con.execute("SELECT boxes, width, height FROM units WHERE id=?",
+                        (unit_id,)).fetchone()
+    size = (u["width"] or 1, u["height"] or 1)
+    vocab = doubt.vocabulary(lib.con, str(lib.folder))
+    proposals, read = focus_proposals(
+        client, text, suspects, json.loads(u["boxes"]) if u["boxes"] else [],
+        lambda rect: _crop_png(lib, unit_id, rect, size), progress)
+    proposals.update(elisions(suspects, vocab))
     new, changes = apply_changes(text, suspects, proposals, vocab, loose=True)
     return new, changes, {"doubtful": found["doubtful"], "lines": read,
                           "answered": len(proposals), "truncated": False}

@@ -152,8 +152,15 @@ engravings, maps) are cut out of the pages and kept in place. As EPUB, or PDF on
 RTF or Markdown, much lighter than the scan (how much depends on the
 illustrations kept).
 For an EPUB made of pictures of scanned pages, each picture of text is read
-(by Tesseract, or the vision model) and replaced by its text; illustrations
-and the cover stay. The result can be saved, or added to the library.
+and replaced by its text; illustrations and the cover stay. *Tesseract,
+then targeted vision on the doubtful words* is the best compromise: Tesseract
+reads every page, and the vision model (`serveurs-vl.bat`) reads again only
+the lines that hold doubtful words; *Tesseract, then the text model* uses the
+chat server instead (`serveurs-baseConnaissance.bat`); Tesseract alone needs
+no server. In every case the elisions OCR misses are put right (`quon`,
+`Lanxiété` → `qu'on`, `L'anxiété`), the notes are linked to their calls, and
+the corrections made and refused are listed in a `.corrections.tsv` file next
+to the book. The result can be saved, or added to the library.
 
 **Reading pages again.** When Tesseract reads a scan badly (old print,
 columns, tables, handwriting), the vision model can do better. In *Analyse

@@ -159,7 +159,9 @@ def test_judging_the_proposals():
     assert correction.judge("at1as", "atlas", vocab) == "known"
     assert correction.judge("francais", "français", set()) == "close"     # one letter
     assert correction.judge("arréle", "arrêtèle", vocab) == "too different"
-    assert correction.judge("arréle", "arrêtera", vocab) == "known"
+    assert correction.judge("arréle", "arrêtera", vocab) == "too different"   # another word
+    assert correction.judge("arréle", "arrête", vocab | {"arrête"}) == "known"
+    assert correction.judge("Dossiers", "formulaire", {"formulaire"}) == "too different"
     assert correction.judge("motjoint", "mot joint", vocab) == "known"
     assert correction.judge("atlas", "atlas", vocab) is None
     assert correction.judge("rnot", "m0t", vocab) == "odd"
@@ -224,3 +226,21 @@ def test_focus_reads_the_doubtful_lines(tmp_path, native_pdf):
                 transcription.read_page(lib, chat.client(), unit, "focus")
     finally:
         chat.close()
+
+
+def test_elisions(tmp_path, monkeypatch):
+    lex = tmp_path / "words"
+    lex.mkdir()
+    (lex / "fr.txt").write_text("\n".join(["accomplit", "on", "anxiété", "infini", "allas", "atour",
+                                           "ires", "aire", "alise", "est", "ai", "autre"]),
+                                encoding="utf-8")
+    monkeypatch.setattr(doubt, "LEXICON_DIR", lex)
+    words = ["saccomplit", "quon", "Lanxiété", "Pinfini", "Pallas", "Latour", "dires",
+             "calise", "cest", "Jai", "Tautre"]
+    sus = [{"word": w, "start": 0} for w in words]
+    seen = correction.attested(["L'anxiété, l'infini et j'ai vu", "l'autre"])
+    got = {words[i]: w for i, w in correction.elisions(sus, set(), seen).items()}
+    assert got == {"saccomplit": "s'accomplit", "quon": "qu'on", "Lanxiété": "L'anxiété",
+                   "Pinfini": "l'infini", "cest": "c'est", "Jai": "J'ai", "Tautre": "l'autre"}
+    # without what the book writes, the lexicon decides alone
+    assert "Pallas" in {words[i] for i in correction.elisions(sus, set())}

@@ -96,6 +96,16 @@ per system. With `--tesseract` it adds the Tesseract of this system and the
 shared language data, and lists its languages with it. Builds are made on
 each system.
 
+## French lexicon
+
+`scripts/fetch_words.py` writes `build/words/fr.txt`: the French word list
+Prescel uses, "an-array-of-french-words" (about 336,000 forms, MIT licence),
+at a fixed commit, checked against its SHA-256 (4.5 MB). `iak.doubt` reads
+every `build/words/*.txt` (the doubtful OCR words, the candidates and the
+checks of their corrections, the elisions); `make_portable.py` copies the
+folder to the key and CI fetches it. Without it, only the library's own
+vocabulary and `config/words/` count. The tests do not use it.
+
 ## Portable Tesseract
 
 `scripts/build_tesseract.py` builds Tesseract 5.5.3 from its sources (git

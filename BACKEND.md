@@ -224,9 +224,27 @@ temporary file.
   mean confidence of 55, covering a tenth of it (or 40 words covering less:
   a page with a large picture). Its paragraphs (headings from the boxes'
   heights, running heads and page numbers removed) and the illustrations cut
-  out of it replace the picture's wrapper (`<p>`, `<div>`, `<svg>`); with the
-  vision model, the text is its reading. Pictures no longer used leave the
-  book and its manifest; the new ones join it.
+  out of it replace the picture's wrapper (`<p>`, `<div>`, `<svg>`). Pictures
+  no longer used leave the book and its manifest; the new ones join it.
+- **EPUB methods.** `ocr`: Tesseract. `focus`: Tesseract, then the vision
+  model reads again, cut out of the picture, each line that holds doubtful
+  words (`iak/correction.py`; the book's vocabulary is its own Tesseract
+  words read with a confidence of 90 or more seen twice, with the lexicon).
+  `fix`: Tesseract, then the text model on the doubtful words in their
+  context. `vision`: the vision model reads each whole picture instead of
+  Tesseract (slow; no word boxes, so paragraphs from Tesseract's breaks).
+  With every Tesseract method, the elisions OCR got wrong are put right
+  (after Prescel's `epub_ocr_prose`): an apostrophe left out (`quon`,
+  `saccomplit`, `Jai`) or an l' read as a letter (`Lanxiété`, `Pinfini`),
+  when the word as read is unknown and its rest is in the lexicon; a
+  capitalised word (Pallas, Latour are names) and a d', m' only when the
+  book writes that elision right somewhere else; c' only before e. Every
+  change, kept or refused, goes to `<name>.corrections.tsv` next to the
+  result. Notes at the foot of the pictures are linked to their calls (a
+  superscript 1 read `'` after a word or a closing quote counts) and listed
+  at the end of their document. A picture that cannot be read keeps its
+  place; if none can (the vision server does not answer), the job fails
+  with the first error instead of giving the book back unchanged.
 - **Results.** In `<library>/fulltext/<document>/`, deleted with the
   document.
 

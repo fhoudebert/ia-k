@@ -88,9 +88,14 @@ ne part sur Internet.
   **illustrations** (photos, gravures, cartes) sont découpées et gardées à
   leur place. En EPUB, PDF A5, HTML, Word, RTF ou Markdown, bien plus léger
   que le scan (selon les illustrations gardées).
-- Pour un **EPUB fait de pages scannées**, chaque image de texte est lue
-  (Tesseract ou modèle de vision) et remplacée par son texte ; illustrations
-  et couverture restent.
+- Pour un **EPUB fait de pages scannées**, chaque image de texte est lue et
+  remplacée par son texte ; illustrations et couverture restent. Au choix :
+  Tesseract seul (sans serveur), Tesseract puis **vision ciblée** sur les
+  mots douteux (`serveurs-vl`), Tesseract puis modèle de texte
+  (`serveurs-baseConnaissance`), ou le modèle de vision seul. Les élisions
+  mal lues sont rétablies (« quon », « Lanxiété » → « qu'on »,
+  « L'anxiété »), les notes reliées à leurs appels, et chaque correction,
+  gardée ou refusée, est listée dans un fichier `.corrections.tsv`.
 
 ## Relecture des scans difficiles
 
