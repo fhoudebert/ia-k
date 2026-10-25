@@ -4,8 +4,11 @@ A word is doubtful when:
 - "conf": Tesseract read it with a confidence below CONF_LOW, and it is not
   a known word (a known word counts only below CONF_VERY_LOW: noisy scans
   give low confidences to words read right);
-- "unknown": it is not in the library's own vocabulary (see below) nor in a
-  word list of config/words/; words with a capital are left alone (names);
+- "unknown": it is not in the library's own vocabulary (see below), nor in
+  a word list of config/words/, nor in the lexicon on the key
+  (build/words/, scripts/fetch_words.py); words with a capital are left alone (names);
+- "elision": an elision OCR got wrong, the apostrophe lost or the l' read as
+  a letter (quon, Lanxiété), with the lexicon only;
 - "chars": its letters look like an OCR slip: letters and digits mixed
   ("l1vre", "1es"), a capital inside a lowercase word ("aTlas"), odd signs inside
   the word (| ¦ ¢ © ® ° § ~ ^ _), one letter four times in a row.
@@ -36,6 +39,8 @@ MAX_LIST = 300         # doubtful words returned for one page
 
 ROOT = Path(__file__).resolve().parents[2]
 WORDS_DIR = ROOT / "config" / "words"
+# lexicons shipped on the key (scripts/fetch_words.py): build/words/<lang>.txt
+LEXICON_DIR = ROOT / "build" / "words"
 
 TOKEN = re.compile(r"[^\s'’]+")        # l'atlas, qu’il: elisions apart
 EDGE = "\"'’‘«»“”()[]{}<>.,;:!?…—–-*"
@@ -59,7 +64,12 @@ def words_of(text: str):
 
 
 def _norm(w: str) -> str:
-    return w.lower().replace("’", "'")
+    return w.lower().replace("’", "'").replace("œ", "oe").replace("æ", "ae")
+
+
+# the first part of an elision (l'atlas, qu'il, aujourd'hui): a word before an apostrophe
+ELIDES = {"l", "d", "j", "m", "n", "s", "t", "c", "qu", "lorsqu", "puisqu", "jusqu", "quoiqu",
+          "presqu", "quelqu", "entr", "aujourd"}
 
 
 def odd_chars(w: str) -> bool:
@@ -100,6 +110,26 @@ def _list_words() -> set[str]:
     return out
 
 
+_lexicon: dict = {}
+
+
+def lexicon() -> frozenset[str]:
+    """The words of the lexicons on the key (French: about 336,000 forms),
+    loaded once; empty without them."""
+    files = tuple(sorted((p.name, p.stat().st_mtime) for p in LEXICON_DIR.glob("*.txt"))) \
+        if LEXICON_DIR.is_dir() else ()
+    with _lock:
+        if _lexicon.get("files") == files:
+            return _lexicon["words"]
+    words: set[str] = set()
+    for name, _ in files:
+        text = (LEXICON_DIR / name).read_text(encoding="utf-8", errors="replace")
+        words.update(_norm(w) for w in text.split())
+    with _lock:
+        _lexicon.update(files=files, words=frozenset(words))
+    return _lexicon["words"]
+
+
 def vocabulary(con, key: str = "") -> set[str]:
     """The words the library trusts (cached until the pages change)."""
     sig = (key, _signature(con))
@@ -123,6 +153,21 @@ def vocabulary(con, key: str = "") -> set[str]:
     return words
 
 
+def vocabulary_from_boxes(pages) -> set[str]:
+    """The trusted words of a book read by Tesseract (an EPUB of pictures):
+    words read with CONF_TRUSTED or more, seen twice, and config/words/."""
+    seen = Counter()
+    for boxes in pages:
+        for b in boxes or []:
+            if len(b) > 5 and b[5] is not None and b[5] >= CONF_TRUSTED:
+                _, w = _core(str(b[4]))
+                for part in TOKEN.findall(w):
+                    _, core = _core(part)
+                    if core:
+                        seen[_norm(core)] += 1
+    return {w for w, n in seen.items() if n >= 2} | _list_words()
+
+
 # ------------------------------------------------------------------ pages
 
 def _aligned_conf(text: str, boxes: list) -> dict[int, tuple[float, list]]:
@@ -143,6 +188,33 @@ def _aligned_conf(text: str, boxes: list) -> dict[int, tuple[float, list]]:
     return out
 
 
+def box_index(text: str, boxes: list) -> dict[int, int]:
+    """{start offset of a word in text: index of its box} (as _aligned_conf)."""
+    out: dict[int, int] = {}
+    cursor = 0
+    for k, b in enumerate(boxes):
+        if len(b) < 5 or not str(b[4]).strip():
+            continue
+        w = str(b[4])
+        i = text.find(w, cursor)
+        if i < 0 or i - cursor > 300:
+            continue
+        cursor = i + len(w)
+        for start, _, _ in words_of(w):
+            out[i + start] = k
+    return out
+
+
+ELISION = re.compile(r"^(?:qu|[ldjmnstcLDJMNSTCQ]|[TFVPI])([aeiouyhàâäéèêëîïôöûüœæ]\w+)$")
+
+
+def elided(w: str, lex) -> bool:
+    """An elision OCR got wrong: a word of the lexicon after a lost
+    apostrophe (quon, saccomplit) or an l' read as a letter (Lanxiété)."""
+    m = ELISION.match(w)
+    return bool(m) and len(m.group(1)) >= 2 and _norm(m.group(1)) in lex
+
+
 def page(text: str, boxes: list | None, vocab: set[str], source: str = "ocr",
          edited: bool = False) -> dict:
     """The doubtful words of a page: {"words", "doubtful", "ratio", "suspects":
@@ -153,16 +225,32 @@ def page(text: str, boxes: list | None, vocab: set[str], source: str = "ocr",
     if source == "native" or edited or not words:
         return out
     conf = _aligned_conf(text, boxes or [])
+    lex = lexicon()
+    # a word cut at the end of a line (docu-/mentée): both halves are fine
+    # when the whole is known
+    whole: set[int] = set()
+    for m in re.finditer(r"([^\W\d_]+)-[ \t]*\n[ \t]*([^\W\d_]+)", text):
+        w2 = _norm(m.group(1) + m.group(2))
+        if w2 in vocab or w2 in lex:
+            whole.update((m.start(1), m.start(2)))
     for start, end, w in words:
+        if start in whole or len(w) == 1:
+            continue
+        if text[end:end + 1] in "'’" and _norm(w) in ELIDES:
+            continue                             # l', qu', aujourd'
+        if _norm(w) == "hui" and _norm(text[max(0, start - 8):start]) == "aujourd'":
+            continue
         reasons = []
         c, box = conf.get(start, (None, None))
-        known = _norm(w) in vocab
+        known = _norm(w) in vocab or _norm(w) in lex
         if c is not None and 0 <= c < (CONF_VERY_LOW if known else CONF_LOW):
             reasons.append("conf")
         if odd_chars(w):
             reasons.append("chars")
-        elif (len(w) >= 3 and w.isalpha() and w[0].islower() and vocab
-              and not (c is not None and c >= CONF_TRUSTED) and _norm(w) not in vocab):
+        elif lex and _norm(w) not in lex and elided(w, lex):
+            reasons.append("elision")                # Lanxiété, quon: even if frequent
+        elif (len(w) >= 3 and w.isalpha() and w[0].islower() and (vocab or lex)
+              and not (c is not None and c >= CONF_TRUSTED) and not known):
             reasons.append("unknown")
         if reasons:
             out["doubtful"] += 1

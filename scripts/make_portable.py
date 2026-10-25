@@ -31,7 +31,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-COMMON = ["README.md", "FONCTIONNALITES.md", "SERVERS.md", "BACKEND.md", "DEVELOPERS.md", "LICENSE",
+COMMON = ["README.md", "FEATURES.md", "FONCTIONNALITES.md",
+          "SERVERS.md", "BACKEND.md", "DEVELOPERS.md", "LICENSE",
           "config/servers.example.toml", "scripts/smoke_test.py", "assets/icon.png",
           "assets/ia-k.png"]
 BY_OS = {
@@ -209,6 +210,11 @@ def make(exe: Path, os_name: str, out: Path, zip_it: bool = True,
                 exe.chmod(exe.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             if check:
                 check_tesseract(exe, folder / "build" / "tesseract" / "tessdata")
+    # the lexicons of the doubtful OCR words (scripts/fetch_words.py), when fetched
+    words = ROOT / "build" / "words"
+    if (words / "fr.txt").is_file():
+        shutil.copytree(words, folder / "build" / "words")
+        print("words: lexicon copied")
     if os_name in ("linux", "mac"):
         exes = [r for r in BY_OS[os_name] if r.endswith(".sh")]
         exes.append(f"{name}/Contents/MacOS/ia-k" if os_name == "mac" else name)

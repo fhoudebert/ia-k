@@ -30,7 +30,7 @@ SUPER = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
 # how Tesseract often reads a superscript 1, 2 or 3 right after a word:
 # signs (atlas! atlas?), or a letter (atlasi), taken only when the word
 # without it is in the document and with it is not (lui stays lui)
-MISREAD = {"1": "[!ı|]", "2": "[?]", "3": "[»]"}
+MISREAD = {"1": "[!ı|'’]", "2": "[?]", "3": "[»]"}
 MISREAD_LETTER = {"1": "il", "2": "z"}
 NOTE_SIZE = 0.88          # notes are in a type at most this size of the body's
 # marks of note calls inside paragraphs (private use characters: never in a text)
@@ -147,7 +147,9 @@ def paragraphs(lines: list[dict]) -> list[tuple[str, float, float]]:
         right = max(x["x1"] for x in near)
         h = max(ln["h"], prev["h"])
         new = False
-        if abs(ln["h"] - prev["h"]) > 0.15 * h:                      # another type size
+        # another type size (a line of a word or two has no reliable height)
+        few = min(len(ln["text"].split()), len(prev["text"].split())) < 3
+        if abs(ln["h"] - prev["h"]) > (0.35 if few else 0.15) * h:
             new = True
         elif ln["y0"] - prev["y1"] > G + 0.8 * H:                    # extra space
             new = True
@@ -202,7 +204,8 @@ def _call_patterns(mark: str) -> list[re.Pattern]:
                 re.compile(f"\\s?\\({d}\\)"),                         # atlas (1)
                 re.compile(f"(?<=[^\\W\\d_])\\[{d}\\]")]
         if mark in MISREAD:
-            pats.append(re.compile(f"(?<=[^\\W\\d_]){MISREAD[mark]}(?=[\\s,.;:]|$)"))
+            # after a word, or a closing quote or full stop: lumière »' ; tirée'.
+            pats.append(re.compile(f"(?<=[^\\W\\d_]|[»”.]){MISREAD[mark]}(?=[\\s,.;:]|$)"))
         return pats
     if len(mark) == 1 and mark.isalpha():
         return [re.compile(f"\\s?\\({mark}\\)")]
@@ -221,10 +224,11 @@ def words(texts) -> dict[str, int]:
     return out
 
 
-def link_call(texts: list[str], mark: str, n: int, known: dict[str, int] | None = None) -> bool:
+def link_call(texts: list[str], mark: str, n: int, known: dict[str, int] | None = None,
+              lexicon=frozenset()) -> bool:
     """Put the call mark n in place of the first call `mark` found in texts
     (changed in place). True when found. known: the words of the document,
-    for a call read as a letter (atlasi)."""
+    for a call read as a letter (atlasi); lexicon: more known words."""
     for pat in _call_patterns(mark):
         for i, t in enumerate(texts):
             m = pat.search(t)
@@ -236,7 +240,10 @@ def link_call(texts: list[str], mark: str, n: int, known: dict[str, int] | None 
         for i, t in enumerate(texts):
             for m in pat.finditer(t):
                 w, whole = m.group(1).lower(), m.group(0).lower()
-                if known.get(w, 0) >= 1 and known.get(whole, 0) <= 1:
+                # the word without the letter is known, with it is not (with
+                # a lexicon: not in it; without: not seen more than once)
+                if (known.get(w, 0) >= 1 or w in lexicon) and whole not in lexicon \
+                        and (lexicon or known.get(whole, 0) <= 1):
                     texts[i] = t[:m.end(1)] + call(n) + t[m.end():]
                     return True
     return False

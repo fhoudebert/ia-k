@@ -24,6 +24,7 @@ interface uses.
 ./iak.sh collection create "Archives" 3 7         # also: list, show, add, remove, rename, delete
 ./iak.sh fulltext 3 --format epub -o livre.epub   # a scanned document as text, illustrations kept
 ./iak.sh fulltext scans.epub [--vision]           # an EPUB of scanned pages, its pictures of text read
+./iak.sh fulltext 3 --format gutenberg --old-print # a zip for Project Gutenberg, long s put right
 ./iak.sh folder add ~/Documents/Archives          # its documents, in a collection "Archives"
 ./iak.sh folder scan 1                            # also: list, watch, unwatch, remove; --copy
 ./iak.sh ask "Où l'atlas a-t-il été envoyé ?"     # sourced answer
@@ -224,9 +225,79 @@ temporary file.
   mean confidence of 55, covering a tenth of it (or 40 words covering less:
   a page with a large picture). Its paragraphs (headings from the boxes'
   heights, running heads and page numbers removed) and the illustrations cut
-  out of it replace the picture's wrapper (`<p>`, `<div>`, `<svg>`); with the
-  vision model, the text is its reading. Pictures no longer used leave the
-  book and its manifest; the new ones join it.
+  out of it replace the picture's wrapper (`<p>`, `<div>`, `<svg>`). Pictures
+  no longer used leave the book and its manifest; the new ones join it.
+- **EPUB methods.** `ocr`: Tesseract. `focus`: Tesseract, then the vision
+  model reads again, cut out of the picture, each line that holds doubtful
+  words (`iak/correction.py`; the book's vocabulary is its own Tesseract
+  words read with a confidence of 90 or more seen twice, with the lexicon).
+  `fix`: Tesseract, then the text model on the doubtful words in their
+  context. `vision`: the vision model reads each whole picture instead of
+  Tesseract (slow; no word boxes, so paragraphs from Tesseract's breaks).
+  With every Tesseract method, the elisions OCR got wrong are put right
+  (after Prescel's `epub_ocr_prose`): an apostrophe left out (`quon`,
+  `saccomplit`, `Jai`) or an l' read as a letter (`Lanxiété`, `Pinfini`),
+  when the word as read is unknown and its rest is in the lexicon; a
+  capitalised word (Pallas, Latour are names) and a d', m' only when the
+  book writes that elision right somewhere else; c' only before e. Every
+  change, kept or refused, goes to `<name>.corrections.tsv` next to the
+  result. Notes at the foot of the pictures are linked to their calls (a
+  superscript 1 read `'` after a word or a closing quote counts) and listed
+  at the end of their document. A picture that cannot be read keeps its
+  place; if none can (the vision server does not answer), the job fails
+  with the first error instead of giving the book back unchanged.
+- **Finishing** (`iak/textfix.py`, after Prescel's `typo_fr.py`,
+  `epub_longs.py` and `epub_recolle.py`). Book-wide passes on every
+  paragraph and note, PDF or EPUB, in this order; the book is its own
+  dictionary, with the lexicon:
+  - `old_print` (off by default; CLI `--old-print`): the long s read `f`.
+    A word with an f is corrected into its s form (`eft` → `est`, `auffi` →
+    `aussi`, `faifoit` → `faisoit`) when that form is in the book twice or in
+    the lexicon, the f form is not in the lexicon, and is not a real word too
+    (`fait`/`sait`, `font`/`sont`: listed, never changed), nor more frequent
+    in the book. Capitals are kept.
+  - `cut_words` (on; CLI `--keep-cut-words` to leave them): two pieces OCR
+    cut with a space (`mar eschal`, `autre ment`) are joined when the whole
+    word is in the book at least twice (as often as the cut pair) and one
+    piece is never a word alone, or when it is in the lexicon and neither
+    piece is; an ending cut off (`ment`, `tion`…) is joined when the whole
+    word is in the book five times as often. Not when the second piece has a
+    capital, nor into a name. Glued words (`chambredu`) are split when only
+    one cut gives words of the book (seen five times, and seen side by side
+    twice), not names nor old plurals (`passans`).
+  - `typography` (CLI `--typography auto|yes|no`; auto: when the book's
+    language is French): no-break spaces before `; : ! ? »` and after `«`,
+    none before `. , ) ]`, a space after punctuation followed by a word,
+    `...` → `…`, dialogue dashes `—`. Letters never change (checked: in doubt
+    the paragraph stays as it was); note calls are boundaries the rules do
+    not see; numbers (`10:30`) are left.
+  - `modern` (off; CLI `--modern`), after the long s and the cut words:
+    the spelling of a French book of the 17th and 18th centuries
+    modernised (`iak/modernise.py`, after Prescel's `epub_modernise.py`,
+    word lists in `iak/dictionaries/`). Vocabulary (`luy` → `lui`,
+    `aussi tost` → `aussitôt`); imperfects and conditionals in -oi-
+    (`estoit` → `était`: the verb list, else -oi- → -ai- when the result is
+    in the lexicon; never `croit`, `soit`, `droit`, nor names); old plurals
+    in -ez (`bontez` → `bontés`; kept after `vous`, before a hyphen, and at
+    the head of a sentence when a verb) and in -ans, -ens (`charmans` →
+    `charmants`; never `sens`, `gens`); the past historic in -erent
+    (`allerent` → `allèrent`), accents put back from the lexicon. A form that
+    is a modern word too (`teste`, `des`) or unknown is listed, not changed.
+    The case is kept (`ESTOIT` → `ÉTAIT`).
+  Every change, and the doubtful cases left, go to the `.corrections.tsv`
+  list (`where` = `book`), with how many times.
+- **Project Gutenberg** (format `gutenberg`; after Prescel's
+  `epub_gutenberg.py`). A zip `<name>/<name>.txt`, `<name>.html` and
+  `images/`, as the Project Gutenberg submission guidelines ask: the text in
+  UTF-8 with CRLF, lines of 72 characters at most, a blank line between
+  paragraphs, four before a chapter and two after, `[Illustration]`, notes
+  `[1]` at the end of their chapter; the HTML one HTML5 page with its CSS,
+  no script, lines of 100 characters at most, notes linked both ways
+  (`FNanchor_n`/`Footnote_n`) at the end of each chapter, illustrations in
+  `images/`. A transcriber's note says the notes were renumbered. Project
+  Gutenberg adds its own header and licence. The book must be in the public
+  domain in the United States, checked at https://copy.pglaf.org, and
+  proofread before it is sent.
 - **Results.** In `<library>/fulltext/<document>/`, deleted with the
   document.
 
@@ -409,7 +480,7 @@ The interface talks to the engine through an HTTP API:
 | `GET /api/search?q=&mode=auto\|hybrid\|sem\|kw&n=&doc=&kind=&collection=` | passages with citations |
 | `POST /api/ask` `{"question", "doc_ids", "kinds", "collections", "history"}` | sourced answer |
 | `GET /api/collections`, `POST /api/collections` `{"name", "doc_ids"}` | collections with their counts; create one |
-| `GET`, `POST /api/documents/<id>/fulltext` `{"format", "illustrations", "method": "ocr"\|"vision"}` | full-text versions of a document; make one (job) |
+| `GET`, `POST /api/documents/<id>/fulltext` `{"format", "illustrations", "notes", "method": "ocr"\|"focus"\|"fix"\|"vision", "typography": null\|true\|false, "cut_words", "old_print", "modern"}` | full-text versions of a document; make one (job) |
 | `POST /api/documents/<id>/fulltext/save` `{"name", "path"}`, `/import` `{"name"}`, `DELETE …/fulltext?name=` | save a copy, add it to the library (job), delete it |
 | `GET /api/folders`, `POST /api/folders` `{"path", "copy", "recursive", "watch", "name"}` | followed folders; follow one (its first scan is a job) |
 | `PUT /api/folders/<id>` `{"watch", "copy", "recursive"}`, `POST /api/folders/<id>/scan`, `DELETE /api/folders/<id>` | settings; scan now (job); stop following |

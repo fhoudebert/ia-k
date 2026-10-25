@@ -999,7 +999,7 @@ async function loadFulltextFiles() {
   $("#fulltext-files").replaceChildren(...files.map((x) => el("li", {},
     el("strong", {}, x.name), el("span", { class: "muted" }, sizeLabel(x.size)),
     el("button", { type: "button", class: "link", onclick: () => saveFulltext(docId, x).catch(fail) }, t("book.save")),
-    el("button", { type: "button", class: "link", onclick: async () => {
+    ["tsv", "zip"].includes(x.format) ? "" : el("button", { type: "button", class: "link", onclick: async () => {
       const { job } = await post(`/api/documents/${docId}/fulltext/import`, { name: x.name });
       toast(t("book.importing"));
       const done = await waitJob(job);
@@ -1063,7 +1063,9 @@ async function makeFulltext(ev) {
   try {
     const { job } = await post(`/api/documents/${docId}/fulltext`, {
       format: f.format.value, method: f.method.value, illustrations: f.illustrations.checked,
-      notes: f.notes.checked });
+      notes: f.notes.checked, typography: f.typography.checked ? null : false,
+      cut_words: f.cut_words.checked, old_print: f.old_print.checked,
+      modern: f.modern.checked });
     const done = waitJob(job);                    // starts the polling, shows the progress
     const r = await done;
     if (r.status === "cancelled") { toast(t("ft.cancelled")); return; }
@@ -1072,6 +1074,9 @@ async function makeFulltext(ev) {
     toast(t("ft.done", { file: x.file, before: sizeLabel(x.size_before), after: sizeLabel(x.size_after),
                          n: x.illustrations })
           + (x.notes ? `, ${t("ft.notes_done", { n: x.notes })}` : "")
+          + (x.corrected || x.refused ? `, ${t("ft.corrected", { n: x.corrected || 0, refused: x.refused || 0 })}` : "")
+          + (x.finished ? `, ${t("ft.finished", { n: x.finished })}` : "")
+          + (x.errors ? ` — ${t("ft.errors", { n: x.errors, error: x.error })}` : "")
           + (state.doc && state.doc.id === docId ? "" : ` (${name})`));
     if (state.doc && state.doc.id === docId) await loadFulltextFiles();
   } catch (e) { fail(e); }

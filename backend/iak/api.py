@@ -352,15 +352,24 @@ def job_compare(app: App, lib: Library, job: Job):
 
 def job_fulltext(app: App, lib: Library, job: Job):
     p = job.params
-    vision = None
-    if p.get("method") == "vision":
+    vision = fix = focus = None
+    method = p.get("method", "ocr")
+    if method in ("vision", "focus"):
         client = analyze.vision_client(app.host, app.host.api_key)
-        vision = lambda png: transcription.transcribe_png(client, png)  # noqa: E731
+        if method == "vision":
+            vision = lambda png: transcription.transcribe_png(client, png)  # noqa: E731
+        else:
+            focus = client
+    elif method == "fix":
+        fix = app.chat()
     try:
         return fulltext.convert(lib, p["doc_id"], p.get("format", "epub"),
-                                p.get("illustrations", True), p.get("method", "ocr"), vision,
+                                p.get("illustrations", True), method, vision,
                                 _progress(job, "fulltext"), lambda: job.cancel,
-                                p.get("notes", True))
+                                p.get("notes", True), fix, focus,
+                                fulltext.Finish(p.get("typography"), bool(p.get("old_print")),
+                                                p.get("cut_words", True) is not False,
+                                                bool(p.get("modern"))))
     except (fulltext.FullTextError, ocr.OcrError) as exc:
         if job.cancel:
             return {"cancelled": True}
@@ -892,15 +901,16 @@ class Handler(BaseHTTPRequestHandler):
 
     @route("POST", r"/api/documents/(\d+)/fulltext")
     def fulltext_make(self, doc_id, query):
-        """{"format": "epub", "illustrations": true, "notes": true,
-        "method": "ocr"|"vision"}: a job."""
+        """{"format": "epub", "illustrations": true, "notes": true, "typography":
+        null (French books) | true | false, "old_print": false, "cut_words": true,
+        "modern": false (17th-18th century spelling modernised), "method": "ocr"|"focus"|"fix"|"vision"}: a job."""
         body = self._body()
         fmt = body.get("format", "epub")
         if fmt not in fulltext.FORMATS:
             raise ApiError(400, f"format is one of {', '.join(fulltext.FORMATS)}")
         method = body.get("method", "ocr")
-        if method not in ("ocr", "vision"):
-            raise ApiError(400, "method is ocr or vision")
+        if method not in ("ocr", "vision", "fix", "focus"):
+            raise ApiError(400, "method is ocr, focus, fix or vision")
         with self.app.library() as lib:
             d = lib.document(int(doc_id))
             if d is None:
@@ -910,7 +920,12 @@ class Handler(BaseHTTPRequestHandler):
         job = self.app.submit("fulltext", {"doc_id": int(doc_id), "format": fmt,
                                            "illustrations": body.get("illustrations", True)
                                            is not False, "method": method,
-                                           "notes": body.get("notes", True) is not False})
+                                           "notes": body.get("notes", True) is not False,
+                                           "typography": body.get("typography"),
+                                           "old_print": bool(body.get("old_print")),
+                                           "cut_words": body.get("cut_words", True)
+                                           is not False,
+                                           "modern": bool(body.get("modern"))})
         self._json(202, {"job": job.id})
 
     def _fulltext_file(self, lib, doc_id, name) -> Path:

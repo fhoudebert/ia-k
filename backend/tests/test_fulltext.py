@@ -9,6 +9,7 @@ from iak import api, bookformats, fulltext, servers
 from iak.library import Library
 
 from .conftest import needs_tesseract
+from .test_analyze import FakeChat
 from .test_api import TOKEN, call, wait
 
 pymupdf = pytest.importorskip("pymupdf")
@@ -326,3 +327,115 @@ def test_call_read_as_a_letter():
     texts = ["Il vint avec lui hier.", "Le relieur reçut l'atlasi au printemps."]
     assert layout.link_call(texts, "1", 4, known)
     assert texts == ["Il vint avec lui hier.", f"Le relieur reçut l'atlas{layout.call(4)} au printemps."]
+
+
+def epub_of_pictures(path, pngs):
+    """An EPUB 2 whose pages are pictures, one per document."""
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" '
+                   'xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+                   '<rootfile full-path="content.opf" '
+                   'media-type="application/oebps-package+xml"/></rootfiles></container>')
+        items = "".join(f'<item id="p{i}" href="images/p{i}.png" media-type="image/png"/>'
+                        f'<item id="c{i}" href="c{i}.html" media-type="application/xhtml+xml"/>'
+                        for i in range(len(pngs)))
+        spine = "".join(f'<itemref idref="c{i}"/>' for i in range(len(pngs)))
+        z.writestr("content.opf", '<?xml version="1.0" encoding="utf-8"?><package '
+                   'xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">'
+                   '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">'
+                   'x</dc:identifier><dc:title>L</dc:title><dc:language>fr</dc:language>'
+                   f'</metadata><manifest>{items}</manifest><spine>{spine}</spine></package>')
+        for i, png in enumerate(pngs):
+            z.writestr(f"images/p{i}.png", png)
+            z.writestr(f"c{i}.html", '<?xml version="1.0" encoding="utf-8"?><html xmlns='
+                       '"http://www.w3.org/1999/xhtml"><head><title>c</title></head><body>'
+                       f'<p class="c"><img src="images/p{i}.png"/></p></body></html>')
+    return path
+
+
+@needs_tesseract
+def test_epub_focus_elisions_and_notes(tmp_path, monkeypatch):
+    """Tesseract reads the pictures; its doubtful words go to the vision
+    model line by line; an l' read as a letter is put right (with the
+    lexicon); the notes at the foot of a page are linked to their calls."""
+    from iak import doubt
+    lex = tmp_path / "words"
+    lex.mkdir()
+    (lex / "fr.txt").write_text("anxiété\ninfini\nauteur\nlucrèce\nmythe\n", encoding="utf-8")
+    monkeypatch.setattr(doubt, "LEXICON_DIR", lex)
+    css = ("body{font-family:serif;font-size:12pt} p{margin:0 0 .4em;text-align:justify} "
+           ".n{font-size:9pt}")
+    pngs = []
+    for k, (word, note) in enumerate([("Lanxiété", "Voir le docteur Logre, Paris, 1946."),
+                                      ("Pinfini", "Le prix est donné en livres.")]):
+        filler = ("Le registre de la bibliothèque mentionne l'achat de trois volumes reliés, "
+                  "d'un atlas et de plusieurs cartes marines au cours de l'année. ") * 4 + \
+            "L'anxiété du poète touche à l'infini. "            # written right elsewhere
+        html = (f"<p>{filler}</p><p>Page {k + 1}. Le poète chante, et {word} de Lucrèce, dit "
+                "l'auteur, est un "
+                "mythe<sup>1</sup>, que le relieur reçut au printemps avec les cartes.</p>"
+                f"<p class='n'>&nbsp;</p><p class='n'>1 {note}</p>")
+        doc = pymupdf.open()
+        page = doc.new_page(width=420, height=595)
+        page.insert_htmlbox(pymupdf.Rect(40, 50, 380, 560), html, css=css)
+        pngs.append(page.get_pixmap(dpi=200).tobytes("png"))
+    src = epub_of_pictures(tmp_path / "livre.epub", pngs)
+    lines = []
+
+    def reply(req):                       # the vision model reads a line: nothing new
+        assert req["messages"][-1]["content"][1]["image_url"]["url"].startswith("data:image")
+        lines.append(req)
+        return ""
+    chat = FakeChat(reply=reply)
+    try:
+        out = tmp_path / "livre.texte.epub"
+        c = fulltext.epub_document(src, out, "fra", focus_client=chat.client())
+    finally:
+        chat.close()
+    assert c["text_pictures"] == 2 and c["notes"] == 2 and len(lines) >= 2
+    with zipfile.ZipFile(out) as z:
+        p0, p1 = z.read("c0.html").decode(), z.read("c1.html").decode()
+    assert "et L'anxiété de Lucrèce" in p0 and "et l'infini de Lucrèce" in p1
+    assert "avec les cartes.</p>" in p0                    # a one-word last line stays
+    assert 'href="#iak-n1" id="iak-r1"' in p0 and 'id="iak-n2"' in p1
+    assert "Voir le docteur Logre" in p0.split('id="iak-n1"')[1]
+    log = fulltext.corrections_path(out).read_text("utf-8")
+    assert "Lanxiété\tL'anxiété\tyes" in log and "Pinfini\tl'infini\tyes" in log
+
+
+def test_gutenberg(tmp_path):
+    long = "Le relieur reçut l'atlas au printemps, et il le rendit avec une reliure neuve " * 3
+    blocks = [("h1", "Chapitre premier"), ("p", f"Le relieur{layout.call(1)} rend l'atlas."),
+              ("img", bookformats.Picture(picture_png(), "image/png", 300, 200)),
+              ("p", long.strip()), ("note", (1, "Voir l'inventaire.")),
+              ("h1", "Chapitre II"), ("p", "Fin.")]
+    text = bookformats.gutenberg_text(blocks, "Livre", "fr")
+    lines = text.split("\r\n")
+    assert all(len(ln) <= 72 for ln in lines) and "\n" not in text.replace("\r\n", "")
+    assert "Le relieur[1] rend l'atlas." in lines and "[Illustration]" in lines
+    assert "[1] Voir l'inventaire." in lines
+    assert text.index("[1] Voir") < text.index("Chapitre II")        # end of its chapter
+    i = lines.index("Chapitre II".center(72).rstrip())
+    assert lines[i - 4:i] == [""] * 4 and lines[i + 1:i + 3] == ["", ""]
+    assert "NOTE DE TRANSCRIPTION" in lines
+    page = bookformats.gutenberg_html(blocks, "Livre", "fr", lambda p: "images/i1.png")
+    assert all(len(ln) <= 120 for ln in page.split("\n"))
+    assert 'href="#Footnote_1" class="fnanchor">[1]</a>' in page
+    assert 'id="Footnote_1"' in page and 'href="#FNanchor_1"' in page
+    assert page.index('id="Footnote_1"') < page.index("Chapitre II")
+    assert "<script" not in page and 'src="images/i1.png"' in page
+    out = tmp_path / "livre.gutenberg.zip"
+    bookformats.write(blocks, "gutenberg", "Livre", "fr", out)
+    with zipfile.ZipFile(out) as z:
+        assert sorted(z.namelist()) == ["livre/images/i1.png", "livre/livre.html", "livre/livre.txt"]
+
+
+def test_gutenberg_convert(tmp_path):
+    with Library(tmp_path / "lib") as lib:
+        doc = lib.import_file(book_with_notes(tmp_path / "notes.pdf")).doc_id
+        r = fulltext.convert(lib, doc, "gutenberg")
+        assert r["file"] == "notes.gutenberg.zip"
+        with zipfile.ZipFile(fulltext.output_dir(lib, doc) / r["file"]) as z:
+            text = z.read("notes/notes.txt").decode("utf-8")
+        assert "l'atlas[1] au" in text and "[2] Le prix est donné" in text

@@ -6,7 +6,7 @@ questions en citant ses sources, et traduit textes et livres entiers. Tout se
 passe sur votre ordinateur, avec des modèles de langue locaux : aucun document
 ne part sur Internet.
 
-[Guide complet (en anglais) : README.md](README.md)
+Installation : [README.md](README.md) ; en anglais : [FEATURES.md](FEATURES.md).
 
 ## Où et comment il fonctionne
 
@@ -88,9 +88,29 @@ ne part sur Internet.
   **illustrations** (photos, gravures, cartes) sont découpées et gardées à
   leur place. En EPUB, PDF A5, HTML, Word, RTF ou Markdown, bien plus léger
   que le scan (selon les illustrations gardées).
-- Pour un **EPUB fait de pages scannées**, chaque image de texte est lue
-  (Tesseract ou modèle de vision) et remplacée par son texte ; illustrations
-  et couverture restent.
+- Pour un **EPUB fait de pages scannées**, chaque image de texte est lue et
+  remplacée par son texte ; illustrations et couverture restent. Au choix :
+  Tesseract seul (sans serveur), Tesseract puis **vision ciblée** sur les
+  mots douteux (`serveurs-vl`), Tesseract puis modèle de texte
+  (`serveurs-baseConnaissance`), ou le modèle de vision seul. Les élisions
+  mal lues sont rétablies (« quon », « Lanxiété » → « qu'on »,
+  « L'anxiété »), les notes reliées à leurs appels, et chaque correction,
+  gardée ou refusée, est listée dans un fichier `.corrections.tsv`.
+- **Finition du livre entier** (reprise de Prescel) : **typographie
+  française** (espaces insécables avant `; : ! ?`, dans les guillemets,
+  points de suspension, tirets de dialogue ; pour les livres en français),
+  **mots coupés recollés** (« mar eschal » → « mareschal » quand le livre
+  écrit le mot entier ailleurs) et **mots collés séparés**, et pour un
+  **imprimé ancien** le **s long** lu « f » (« eft », « auffi » → « est »,
+  « aussi »), jamais là où la forme en f est aussi un mot (« fait »,
+  « font »). Pour un livre des XVIIᵉ-XVIIIᵉ siècles, l'**orthographe
+  moderne** (« estoit », « luy », « bontez », « charmans » → « était »,
+  « lui », « bontés », « charmants ») : les formes sûres sont changées,
+  celles qui sont aussi des mots modernes (« teste ») seulement listées.
+  Chaque changement est listé dans le `.corrections.tsv`.
+- **Export Project Gutenberg** : un zip au format demandé par Project
+  Gutenberg (texte sur 72 colonnes et page HTML, notes en fin de chapitre,
+  images), pour un livre du domaine public, relu.
 
 ## Relecture des scans difficiles
 
