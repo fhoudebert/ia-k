@@ -10,7 +10,12 @@ rem
 rem  Each server opens in its own minimised window (its messages stay visible
 rem  there). A server already answering on its port is not started again.
 rem  Once all answer, IA-K starts; when it closes, the servers started here are
-rem  stopped (unless --keep).
+rem  stopped (unless --keep). When IA-K is already open (started by another
+rem  serveurs-*.bat file), no second IA-K starts: the open one uses the new
+rem  servers, and they are stopped when it closes.
+rem  ONE_BIG_MODEL=1 (settings): starting a big model (gemma26, gemma12,
+rem  qwenvl, translate) first stops the other big ones started by a
+rem  serveurs-*.bat file, as one 32 GB laptop holds only one of them.
 rem
 rem  Settings: IAK_SERVER_SETTINGS, else server\local.bat, else
 rem  server\local.hx370.bat (the reference laptop).
@@ -30,6 +35,7 @@ set "VISION_PORT=8082"
 set "TRANSLATE_PORT=8083"
 rem seconds to wait for a model to load (a 15 GB model from a USB key is slow)
 set "WAIT_SECONDS=300"
+set "ONE_BIG_MODEL=0"
 if defined IAK_SERVER_SETTINGS call "%IAK_SERVER_SETTINGS%"
 
 set "KEEP=0"
@@ -47,6 +53,30 @@ if not defined PROFILES (
 )
 
 echo IA-K - settings: %IAK_SERVER_SETTINGS%
+if not "%ONE_BIG_MODEL%"=="1" goto big_done
+rem the big models asked for, then stop the other big ones
+set "BIG="
+for %%P in (%PROFILES%) do (
+    for %%B in (gemma12 gemma26 qwenvl translate) do if /i "%%P"=="%%B" set "BIG=!BIG! %%B"
+)
+if not defined BIG goto big_done
+set "STOPPED=0"
+for %%B in (gemma12 gemma26 qwenvl translate) do (
+    set "WANTED=0"
+    for %%W in (!BIG!) do if /i "%%W"=="%%B" set "WANTED=1"
+    if "!WANTED!"=="0" (
+        tasklist /V /FI "WINDOWTITLE eq IA-K server %%B*" 2>nul | find /I "IA-K server %%B" >nul
+        if !errorlevel!==0 (
+            echo   stopping %%B: one big model at a time
+            taskkill /F /T /FI "WINDOWTITLE eq IA-K server %%B*" >nul 2>nul
+            set "STOPPED=1"
+        )
+    )
+)
+rem let the graphics memory and the port go
+if "!STOPPED!"=="1" timeout /t 3 /nobreak >nul
+:big_done
+
 set "STARTED="
 for %%P in (%PROFILES%) do (
     call :port_of %%P
@@ -71,12 +101,23 @@ for %%P in (%PROFILES%) do (
 )
 
 if "%APP%"=="0" goto end
+call :app_running
+if "%RUNNING%"=="1" goto already_open
 if not exist "%ROOT%\ia-k.exe" (
     echo ia-k.exe not found in %ROOT%
     goto stop
 )
 echo Starting IA-K...
 start "" /wait "%ROOT%\ia-k.exe"
+goto stop
+
+:already_open
+rem another serveurs-*.bat started IA-K: it uses these servers as they come
+echo IA-K is already open: it uses these servers now. They stop when IA-K closes.
+:open_loop
+timeout /t 5 /nobreak >nul
+call :app_running
+if "%RUNNING%"=="1" goto open_loop
 
 :stop
 if "%KEEP%"=="1" goto end
@@ -88,6 +129,12 @@ endlocal
 exit /b 0
 
 rem ---------------------------------------------------------------------------
+:app_running
+set "RUNNING=0"
+tasklist /FI "IMAGENAME eq ia-k.exe" /NH 2>nul | find /I "ia-k.exe" >nul
+if %errorlevel%==0 set "RUNNING=1"
+exit /b 0
+
 :port_of
 set "PORT="
 if /i "%~1"=="gemma12" set "PORT=%CHAT_PORT%"

@@ -66,15 +66,24 @@ to `data/server-<profile>.log`. Both files call
 `server/start-servers.bat PROFILE...` (or `.sh`), which can start any set of
 profiles, for instance `server\start-servers.bat qwenvl embed`.
 
-On a 32 GB laptop, use one file at a time: the 26B, TranslateGemma 12B and
-Qwen3-VL-8B do not fit in graphics memory together.
+Starting a second file while IA-K is open does not start a second IA-K: the
+open one uses the new servers as soon as they answer, and they stop when it
+closes. On a 32 GB laptop the 26B, TranslateGemma 12B and Qwen3-VL-8B do not
+fit in graphics memory together: with `ONE_BIG_MODEL=1` (set in
+`local.hx370.bat`), starting one of them — `serveurs-vl` after
+`serveurs-baseConnaissance`, for instance — first stops the other big one
+started by a `serveurs-*` file (not one started by hand); EmbeddingGemma
+stays.
 
 On Windows their settings are read from `server/local.bat` when it exists,
 otherwise from **`server/local.hx370.bat`**, the reference laptop: llama.cpp
-in `D:\ia\llama-vulkan`, models in `D:\ia\models` (LM Studio layout), the 26B
-with its experts and vision on the CPU, KV cache in q8, micro-batch 512,
-context 8192, 8 threads, EmbeddingGemma on the CPU — the same choices as
-`Gemma-4-26-A4B-vulkan.bat` and `embeddinggemma-rag.bat`. For another
+in `D:\ia\llama-vulkan`, the files of every model in `D:\ia\models` (LM
+Studio layout: Gemma 4 26B and 12B, Qwen3-VL-8B, TranslateGemma,
+EmbeddingGemma), the 26B with its experts and vision on the CPU, KV cache in
+q8, micro-batch 512, context 8192, 8 threads, Qwen3-VL with its own
+micro-batch and context, EmbeddingGemma on the CPU, one big model at a time —
+the same choices as the single launchers below. `local.example.bat` and
+`local.example.sh` list every setting, commented. For another
 computer, copy it to `server/local.bat` and edit the copy (`local.bat` is
 not versioned). On Linux and macOS they come from `server/local.sh` (copy
 `local.example.sh`); models downloaded by LM Studio on a Mac are in
@@ -85,7 +94,11 @@ is found without `LLAMA_DIR`. `IAK_SERVER_SETTINGS` can name another settings fi
 
 `server/` also holds single launchers for the reference laptop (Windows,
 models in `D:\ia\models`, llama.cpp in `D:\ia\llama-vulkan`); edit the paths
-at the top of each file:
+at the top of each file. They do not read `local.bat`, which is why the
+`local.example.*` files do not name them: the profiles of `llama-server.bat`
+(used by the `serveurs-*` files) are the same servers, set by `local.bat` —
+`embed` is `embeddinggemma-rag.bat`, `gemma26` is `Gemma-4-26-A4B-vulkan.bat`,
+`qwenvl` is `qwen3-vl-8b-vulkan.bat`:
 
 | File | Starts |
 |---|---|
@@ -118,7 +131,9 @@ server\llama-server.bat translate
 | `TRANSLATE_CTX` | 8192 | context of the translation server |
 | `QWENVL_UBATCH`, `QWENVL_CTX` | 2048, 12288 | micro-batch and context of the vision server: a page image gets up to the micro-batch in tokens; the context holds the image, the OCR text to correct and the reading |
 | `THREADS` | llama.cpp's choice | CPU threads of every server |
-| `GEMMA26_MODEL`, `TRANSLATE_MODEL`, … | LM Studio layout under `MODELS_DIR` | explicit model files |
+| `ONE_BIG_MODEL` | 0 | 1 = `serveurs-*` files stop the other big model they started (26B, 12B, Qwen3-VL, TranslateGemma) before starting one |
+| `WAIT_SECONDS` | 300 | how long `serveurs-*` files wait for a model to load |
+| `GEMMA26_MODEL`, `GEMMA12_MODEL`, `QWENVL_MODEL`, `TRANSLATE_MODEL`, `EMBED_MODEL`; `*_MMPROJ` | LM Studio layout under `MODELS_DIR`; the first `mmproj*.gguf` next to the model | explicit model files |
 | `CHAT_PORT`, `EMBED_PORT`, `VISION_PORT`, `TRANSLATE_PORT` | 8080, 8081, 8082, 8083 | always bound to 127.0.0.1 |
 
 The `translate` profile runs TranslateGemma with its own template
