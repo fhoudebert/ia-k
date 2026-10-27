@@ -93,3 +93,21 @@ def test_tesseract_on_the_key(tmp_path, monkeypatch):
     assert env["TESSDATA_PREFIX"] == str(key / "tessdata") and env["OMP_THREAD_LIMIT"] == "1"
     # an installed Tesseract keeps its own languages
     assert ocr._env(str(tmp_path / "usr" / "bin" / "tesseract")) is None
+
+
+def test_words_on_the_key(tmp_path, monkeypatch):
+    mp = script("make_portable")
+    root = tmp_path / "src"
+    for rel in ["backend/iak/__init__.py", "backend/requirements.lock",
+                "backend/requirements.txt", "backend/pyproject.toml"]:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("")
+    exe = tmp_path / "ia-k"
+    exe.write_bytes(b"")
+    monkeypatch.setattr(mp, "ROOT", root)
+    with pytest.raises(SystemExit, match="fetch_words"):
+        mp.make(exe, "windows", tmp_path / "out", zip_it=False, words_required=True)
+    (root / "build" / "words").mkdir(parents=True)
+    (root / "build" / "words" / "fr.txt").write_text("atlas\n")
+    folder = mp.make(exe, "windows", tmp_path / "out", zip_it=False, words_required=True)
+    assert (folder / "build" / "words" / "fr.txt").read_text() == "atlas\n"

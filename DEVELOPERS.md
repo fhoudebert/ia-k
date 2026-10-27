@@ -116,7 +116,8 @@ Prescel uses, "an-array-of-french-words" (about 336,000 forms, MIT licence),
 at a fixed commit, checked against its SHA-256 (4.5 MB). `iak.doubt` reads
 every `build/words/*.txt` (the doubtful OCR words, the candidates and the
 checks of their corrections, the elisions); `make_portable.py` copies the
-folder to the key and CI fetches it. Without it, only the library's own
+folder to the key, and CI fetches it before (`make_portable.py --words`
+fails without it). Without it, only the library's own
 vocabulary and `config/words/` count. The tests do not use it.
 
 ## Portable Tesseract
