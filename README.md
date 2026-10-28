@@ -110,7 +110,8 @@ The library can be moved elsewhere (a disk, a bigger key) from *Settings*.
   as Markdown.
 - **Analyses**: a page described or transcribed, summaries, comparisons.
 - **Full text**: a scanned PDF or EPUB turned into a light book of real
-  text (paragraphs, notes, illustrations kept), finished book-wide (French
+  text (paragraphs, notes, illustrations kept), read again by Tesseract and
+  checked against the PDF's own OCR layer and the vision model, finished book-wide (French
   typography, cut words, long s, modern spelling), as EPUB, PDF, HTML, Word,
   RTF, Markdown or for Project Gutenberg.
 - **Difficult scans**: the vision model reads pages again, or only the

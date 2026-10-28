@@ -171,10 +171,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="modern spelling of a book of the 17th-18th centuries (estoit -> était)")
     p.add_argument("--vision", action="store_true",
                    help="EPUB: read its pictures of text with the vision model, not Tesseract")
-    p.add_argument("--method", choices=("ocr", "focus", "fix", "vision"), default="ocr",
-                   help="EPUB: ocr (Tesseract), focus (Tesseract, its doubtful lines read "
+    p.add_argument("--method", choices=("library", "ocr", "focus", "fix", "vision"),
+                   help="library (a PDF: the library's text, default), ocr (Tesseract; "
+                        "default for an EPUB), focus (Tesseract, its doubtful lines read "
                         "again by the vision model), fix (Tesseract, its doubtful words "
-                        "corrected by the text model), vision (the vision model alone)")
+                        "corrected by the text model), vision (the vision model alone). "
+                        "For a PDF, its scanned pages are read again, and the doubtful "
+                        "words checked first against the PDF's own text layer (ABBYY...)")
     p.add_argument("-o", "--out", type=Path, help="copy the result here")
     p = sub.add_parser("export")
     p.add_argument("analysis", type=int, help="analysis id (see analyses)")

@@ -97,7 +97,8 @@ def judge(old: str, new: str, vocab: set[str], loose: bool = False) -> str | Non
     far = max(2, (len(old) + 1) // 2) + (1 if loose else 0)
     close = max(1, len(old) // 4)
     if " " in new:                               # a word split in two
-        if not all(known(p) or len(p) <= 2 for p in new.split()):
+        if not all((known(p) or len(p) <= 2) and not any(c.isdigit() for c in p)
+                   for p in new.split()):                  # à 1a: a figure is no word
             return "unknown parts"
         return "known" if d <= far else "too different"
     if doubt.odd_chars(new[2:] if new[:2].lower() in ("l'", "l’") else new):
@@ -118,24 +119,38 @@ def judge(old: str, new: str, vocab: set[str], loose: bool = False) -> str | Non
     return "close" if not vocab or doubt._norm(new) in vocab else "unknown"
 
 
-KEPT = ("known", "close")
+KEPT = ("known", "close", "case")
 
 
 def apply_changes(text: str, suspects: list[dict], proposals: dict[int, str],
-                  vocab: set[str], loose: bool = False) -> tuple[str, list[dict]]:
+                  vocab: set[str], loose: bool = False,
+                  exact: set[int] = frozenset(),
+                  layer: set[int] = frozenset()) -> tuple[str, list[dict]]:
     """The text with the kept proposals {index in suspects: word}, and the
-    list of changes [{"word", "new", "start", "kept", "why"}]."""
+    list of changes [{"word", "new", "start", "kept", "why"}]. exact: the
+    proposals whose case is right (another OCR read a lowercase letter where
+    Tesseract saw a capital: Houvelles -> nouvelles); layer: the proposals
+    of another OCR (layer_proposals), a name one letter away kept."""
     changes = []
     for i, new in sorted(proposals.items()):
         s = suspects[i]
         new = new.strip()
-        old_first = next((c for c in s["word"] if c.isalpha()), "")
-        if old_first.isupper() and new[:1].islower() and not (
+        old = s["word"]
+        old_first = next((c for c in old if c.isalpha()), "")
+        if i in exact:
+            old = old[:1].lower() + old[1:]          # judged as the lowercase word
+            if old == new:                           # Manœuvrait -> manœuvrait
+                changes.append({"word": s["word"], "new": new, "start": s["start"],
+                                "kept": True, "why": "case"})
+                continue
+        elif old_first.isupper() and new[:1].islower() and not (
                 new[:2] == "l'" and old_first in "TFVPI"):      # Pinfini: the P is an l'
             new = new[:1].upper() + new[1:]          # a capital stays (a sentence, a name)
-        why = judge(s["word"], new, vocab, loose)
+        why = judge(old, new, vocab, loose)
         if why is None:
             continue
+        if why == "name" and i in layer and distance(old, new) <= 1:
+            why = "known"                            # both OCRs but for one letter
         changes.append({"word": s["word"], "new": new, "start": s["start"],
                         "kept": why in KEPT, "why": why})
     out = text
@@ -450,3 +465,203 @@ def focus_words(lib, client, unit_id: int, progress=None) -> tuple[str, list[dic
     new, changes = apply_changes(text, suspects, proposals, vocab, loose=True)
     return new, changes, {"doubtful": found["doubtful"], "lines": read,
                           "answered": len(proposals), "truncated": False}
+
+
+# ---------------------------------------------------------------- another OCR's text layer
+
+LAYER_IOU = 0.4           # a word of the layer stands for a Tesseract word above this overlap
+
+
+def _iou(a, b) -> float:
+    x0, y0 = max(a[0], b[0]), max(a[1], b[1])
+    x1, y1 = min(a[2], b[2]), min(a[3], b[3])
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    inter = (x1 - x0) * (y1 - y0)
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _known(w: str, vocab: set[str]) -> bool:
+    """A real word: of the lexicon when there is one (the book's vocabulary
+    holds Tesseract's own repeated misreadings: blanes), else of the book."""
+    w, lex = doubt._norm(w), doubt.lexicon()
+    return w in lex if lex else w in vocab
+
+
+def layer_witness(boxes: list, layer: list) -> dict[int, str]:
+    """{index of a Tesseract box: the word of the other layer at its place}:
+    layer [x0, y0, x1, y1, word] in the same pixels (an ABBYY or Acrobat
+    text layer under a scan), the word that overlaps it best."""
+    rows = sorted(layer, key=lambda w: w[1])
+    out = {}
+    for k, b in enumerate(boxes):
+        if len(b) < 5 or not str(b[4]).strip():
+            continue
+        best, score, inside = None, LAYER_IOU, []
+        for w in rows:
+            if w[1] > b[3]:
+                break
+            if w[3] < b[1]:
+                continue
+            s = _iou(b, w)
+            if s > score:
+                best, score = w, s
+            area = (w[2] - w[0]) * (w[3] - w[1])
+            if area > 0 and _inter(b, w) >= 0.6 * area:
+                inside.append(w)
+        if len(inside) >= 2:
+            # two words of the layer where Tesseract read one (Laville / La ville)
+            out[k] = " ".join(str(w[4]) for w in sorted(inside, key=lambda w: w[0]))
+        elif best is not None:
+            out[k] = str(best[4])
+    return out
+
+
+def _inter(a, b) -> float:
+    x0, y0 = max(a[0], b[0]), max(a[1], b[1])
+    x1, y1 = min(a[2], b[2]), min(a[3], b[3])
+    return (x1 - x0) * (y1 - y0) if x1 > x0 and y1 > y0 else 0.0
+
+
+def agreed_words(boxes: list, witness: dict[int, str]) -> list[str]:
+    """The words Tesseract and the other layer read the same (lowercase)."""
+    out = []
+    for k, w in witness.items():
+        a = [x for _, _, x in doubt.words_of(str(boxes[k][4]))]
+        if a == [x for _, _, x in doubt.words_of(w)]:
+            out += [doubt._norm(x) for x in a]
+    return out
+
+
+def _pieces(text: str, boxes: list) -> tuple[dict[int, int], dict[int, list[int]]]:
+    at = doubt.box_index(text, boxes)
+    pieces: dict[int, list[int]] = {}
+    for start, k in at.items():
+        pieces.setdefault(k, []).append(start)
+    return at, {k: sorted(v) for k, v in pieces.items()}
+
+
+def layer_disagreements(text: str, boxes: list, witness: dict[int, str],
+                        suspects: list[dict]) -> list[dict]:
+    """The words Tesseract read surely but the other layer otherwise, as
+    doubtful words too (reason "layer"): one of the two OCRs is wrong."""
+    at, pieces = _pieces(text, boxes)
+    have = {s["start"] for s in suspects}
+    out = []
+    for k, w in witness.items():
+        mine = list(doubt.words_of(str(boxes[k][4])))
+        theirs = [x for _, _, x in doubt.words_of(w)]
+        if len(mine) != len(theirs) or k not in pieces or len(pieces[k]) != len(mine):
+            continue
+        for start, (_, _, a), b in zip(pieces[k], mine, theirs):
+            if start in have or a == b:
+                continue
+            if doubt._norm(a) == doubt._norm(b) and not (a[:1].isupper() and b[:1].islower()):
+                continue                                 # Tesseract's lowercase stays
+            conf = boxes[k][5] if len(boxes[k]) > 5 else None
+            out.append({"start": start, "end": start + len(a), "word": a, "reasons": ["layer"],
+                        "conf": conf, "box": list(boxes[k][:4])})
+    return out
+
+
+def layer_proposals(text: str, suspects: list[dict], boxes: list, witness: dict[int, str],
+                    vocab: set[str]) -> tuple[set[int], dict[int, str], set[int]]:
+    """(doubtful words the other layer reads the same: confirmed, {index:
+    word} the other layer reads otherwise, as a known word the change rules
+    accept, the indexes of those whose capital is a misreading: the other
+    layer reads a lowercase letter, Houvelles -> nouvelles). The others stay
+    doubtful (for the vision or the text model)."""
+    at, pieces = _pieces(text, boxes)
+    confirmed, proposals, exact = set(), {}, set()
+    for i, s in enumerate(suspects):
+        k = at.get(s["start"])
+        if k is None or k not in witness:
+            continue
+        mine = [x for _, _, x in doubt.words_of(str(boxes[k][4]))]
+        theirs = [x for _, _, x in doubt.words_of(witness[k])]
+        if len(mine) == len(theirs):
+            if s["start"] not in pieces[k]:
+                continue
+            j = pieces[k].index(s["start"])
+            other = theirs[j]
+        elif len(mine) == 1 and s["word"] == mine[0] and theirs:
+            other = witness[k].strip(doubt.EDGE)       # quon / qu'on, Laville / La ville
+            if not doubt.LETTERS.search(other):
+                continue
+        else:
+            continue
+        if other == s["word"] or (doubt._norm(other) == doubt._norm(s["word"])
+                                  and not (s["word"][:1].isupper() and other[:1].islower())):
+            confirmed.add(i)
+            continue
+        old = s["word"]
+        lower = old[:1].isupper() and other[:1].islower()
+        if lower:
+            old = old[:1].lower() + old[1:]
+        if old != other and set(s["reasons"]) <= {"conf", "layer"} and _known(old, vocab):
+            continue           # a real word against another (dès / dés): the vision decides
+        if " " not in other and doubt._norm(other) in doubt._norm(old) and other != old:
+            continue           # a part of what Tesseract read (effet,tels / effet)
+        why = judge(old, other, vocab)
+        # a name both OCRs read but for one letter (Richelièu / Richelieu)
+        if why in KEPT or old == other or (why == "name" and distance(old, other) <= 1):
+            proposals[i] = other
+            if lower:
+                exact.add(i)
+    return confirmed, proposals, exact
+
+
+GARBLED = 0.6             # a Tesseract line with this share of specks is garbled
+
+
+def _speck(w: str) -> bool:
+    core = str(w).strip(doubt.EDGE)
+    letters = [c for c in core if c.isalpha()]
+    return len(letters) <= 1 or doubt.odd_chars(core)
+
+
+def layer_lines(text: str, boxes: list, layer: list,
+                conf: float = 89.0) -> tuple[str, list, list[dict]]:
+    """Lines Tesseract garbled (« E E e e e E e e », a note in a small or
+    italic type) taken from the other layer when it has words there: (text,
+    boxes, the changes). The boxes stay one per word of the text, the other
+    layer's words with a middling confidence (not trusted, not doubtful)."""
+    words = [b for b in boxes if len(b) >= 5 and str(b[4]).strip()]
+    lines = text.split("\n")
+    if sum(len(ln.split()) for ln in lines) != len(words):
+        return text, boxes, []
+    heights, i = [], 0
+    for ln in lines:
+        ws = words[i:i + len(ln.split())]
+        i += len(ws)
+        if ws:
+            heights.append(max(w[3] for w in ws) - min(w[1] for w in ws))
+    line_h = sorted(heights)[len(heights) // 2] if heights else 0
+    out_lines, out_boxes, changes, i = [], [], [], 0
+    pos = 0
+    for ln in lines:
+        n = len(ln.split())
+        ws = words[i:i + n]
+        i += n
+        tall = ws and max(w[3] for w in ws) - min(w[1] for w in ws) > 1.8 * line_h
+        if n >= 3 and not tall and sum(_speck(w[4]) for w in ws) >= GARBLED * n:
+            y0, y1 = min(w[1] for w in ws), max(w[3] for w in ws)
+            x0, x1 = min(w[0] for w in ws), max(w[2] for w in ws)
+            h = y1 - y0
+            theirs = sorted((w for w in layer
+                             if y0 - 0.3 * h <= (w[1] + w[3]) / 2 <= y1 + 0.3 * h
+                             and x0 - 2 * h <= (w[0] + w[2]) / 2 <= x1 + 2 * h),
+                            key=lambda w: w[0])
+            if len(theirs) >= 2 and sum(not _speck(w[4]) for w in theirs) >= 0.6 * len(theirs):
+                new = " ".join(str(w[4]) for w in theirs)
+                changes.append({"word": ln, "new": new, "start": pos, "kept": True,
+                                "why": "text layer, line Tesseract garbled"})
+                out_lines.append(new)
+                out_boxes += [list(w[:4]) + [str(w[4]), conf] for w in theirs]
+                pos += len(new) + 1
+                continue
+        out_lines.append(ln)
+        out_boxes += [list(b) for b in ws]
+        pos += len(ln) + 1
+    return "\n".join(out_lines), out_boxes, changes

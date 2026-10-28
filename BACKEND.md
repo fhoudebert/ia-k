@@ -25,6 +25,7 @@ interface uses.
 ./iak.sh fulltext 3 --format epub -o livre.epub   # a scanned document as text, illustrations kept
 ./iak.sh fulltext scans.epub [--vision]           # an EPUB of scanned pages, its pictures of text read
 ./iak.sh fulltext 3 --format gutenberg --old-print # a zip for Project Gutenberg, long s put right
+./iak.sh fulltext 3 --method focus              # its scans read again: Tesseract, the PDF's OCR layer, vision
 ./iak.sh folder add ~/Documents/Archives          # its documents, in a collection "Archives"
 ./iak.sh folder scan 1                            # also: list, watch, unwatch, remove; --copy
 ./iak.sh ask "Où l'atlas a-t-il été envoyé ?"     # sourced answer
@@ -246,6 +247,32 @@ temporary file.
   at the end of their document. A picture that cannot be read keeps its
   place; if none can (the vision server does not answer), the job fails
   with the first error instead of giving the book back unchanged.
+- **A scanned PDF read again** (methods `ocr`, `focus`, `fix`, `vision`;
+  `library`, the default, takes the library's text). The pages that are the
+  picture of a page (an image covering 70 % of it), but for those corrected
+  by hand, are rendered at 300 dpi and read by Tesseract, as the pictures of
+  an EPUB. Their own text layer, when they have one (another OCR: ABBYY
+  FineReader, Acrobat; IA-K takes it as native text at import), checks the
+  reading word by word, each Tesseract word facing the layer's word that
+  overlaps its box most (40 % of their union at least):
+  - a doubtful word the layer reads the same is confirmed;
+  - one it reads otherwise is replaced when the change rules accept the
+    layer's word (`avee` → `avec`, `blanes` → `blancs`; a name only one
+    letter away: `Richelièu` → `Richelieu`), and a capital where the layer
+    reads a lowercase letter is lowered (Tesseract capitalises some line
+    starts: `Manœuvrait`, `Naux`);
+  - a sure Tesseract word the layer reads otherwise becomes doubtful too
+    (`mais` / `niais`): the vision model (`focus`) or the text model (`fix`)
+    decides; with `ocr`, Tesseract's word stays and both are listed;
+  - a line Tesseract garbled into specks (`E e E e e`) is taken from the
+    layer; words the two read the same, seen twice, join the book's
+    vocabulary.
+  The rest is as for an EPUB (elisions, `.corrections.tsv`, where = `page
+  n`). For these pages, OCR paragraphs, a heading needs 1.35 times the
+  body's size and no `,;:` at its end, a change of type 25 % between two
+  lines, and paragraphs of specks are dropped; running heads that change
+  with the chapter (short, first or last on three pages or more) go, but
+  for their first time, the chapter's title.
 - **Finishing** (`iak/textfix.py`, after Prescel's `typo_fr.py`,
   `epub_longs.py` and `epub_recolle.py`). Book-wide passes on every
   paragraph and note, PDF or EPUB, in this order; the book is its own

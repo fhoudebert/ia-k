@@ -77,6 +77,11 @@ Installing: [README.md](README.md).
   pages are linked to their calls (*link the notes*); the illustrations
   (photographs, engravings, maps) are cut out and kept in place. As EPUB, PDF
   on A5 pages, HTML, Word, RTF or Markdown.
+- **A scanned PDF read again**: instead of *the library's text*, Tesseract
+  reads its scanned pages again; when the PDF carries another OCR's text
+  layer (ABBYY, Acrobat), each doubtful word is checked against it, and the
+  words the two OCRs read differently go to the vision model (*targeted
+  vision*) or the text model; pages corrected by hand keep their text.
 - **An EPUB made of pictures of scanned pages**: each picture of text is
   read and replaced by its text; illustrations and the cover stay.
   *Tesseract, then targeted vision on the doubtful words* is the best

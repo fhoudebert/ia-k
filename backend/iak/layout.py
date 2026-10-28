@@ -33,6 +33,7 @@ SUPER = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
 MISREAD = {"1": "[!ı|'’]", "2": "[?]", "3": "[»]"}
 MISREAD_LETTER = {"1": "il", "2": "z"}
 NOTE_SIZE = 0.88          # notes are in a type at most this size of the body's
+OCR_SIZE_STEP = 0.25      # a change of type between two OCR lines: their heights this far apart
 # marks of note calls inside paragraphs (private use characters: never in a text)
 CALL_OPEN, CALL_CLOSE = "", ""
 
@@ -147,9 +148,11 @@ def paragraphs(lines: list[dict]) -> list[tuple[str, float, float]]:
         right = max(x["x1"] for x in near)
         h = max(ln["h"], prev["h"])
         new = False
-        # another type size (a line of a word or two has no reliable height)
+        # another type size (a line of a word or two has no reliable height;
+        # the heights of OCR words vary with ascenders and descenders)
         few = min(len(ln["text"].split()), len(prev["text"].split())) < 3
-        if abs(ln["h"] - prev["h"]) > (0.35 if few else 0.15) * h:
+        step = 0.35 if few else (0.15 if "brk" in ln else OCR_SIZE_STEP)
+        if abs(ln["h"] - prev["h"]) > step * h:
             new = True
         elif ln["y0"] - prev["y1"] > G + 0.8 * H:                    # extra space
             new = True

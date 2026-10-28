@@ -984,7 +984,11 @@ async function openFulltext() {
   if (!f.hidden) { f.hidden = true; return; }
   const epub = state.doc.kind === "epub";
   f.format.hidden = epub;
-  f.method.hidden = !epub;
+  // a PDF: the library's text, or its scanned pages read again; an EPUB of
+  // pictures is always read again
+  f.method.hidden = state.doc.kind === "image";
+  f.method.querySelector('[value="library"]').hidden = epub;
+  if (epub && f.method.value === "library") f.method.value = "ocr";
   $("#fulltext-notes").hidden = epub;
   $("#fulltext-note").textContent = t(epub ? "ft.note_epub" : "ft.note_pdf");
   $("#fulltext-files").replaceChildren();          // not the previous document's
@@ -1062,7 +1066,7 @@ async function makeFulltext(ev) {
   const name = state.doc.name;
   try {
     const { job } = await post(`/api/documents/${docId}/fulltext`, {
-      format: f.format.value, method: f.method.value, illustrations: f.illustrations.checked,
+      format: f.format.value, method: f.method.hidden ? null : f.method.value, illustrations: f.illustrations.checked,
       notes: f.notes.checked, typography: f.typography.checked ? null : false,
       cut_words: f.cut_words.checked, old_print: f.old_print.checked,
       modern: f.modern.checked });
@@ -1074,6 +1078,7 @@ async function makeFulltext(ev) {
     toast(t("ft.done", { file: x.file, before: sizeLabel(x.size_before), after: sizeLabel(x.size_after),
                          n: x.illustrations })
           + (x.notes ? `, ${t("ft.notes_done", { n: x.notes })}` : "")
+          + (x.confirmed || x.from_layer ? `, ${t("ft.layer", { confirmed: x.confirmed || 0, n: x.from_layer || 0 })}` : "")
           + (x.corrected || x.refused ? `, ${t("ft.corrected", { n: x.corrected || 0, refused: x.refused || 0 })}` : "")
           + (x.finished ? `, ${t("ft.finished", { n: x.finished })}` : "")
           + (x.errors ? ` — ${t("ft.errors", { n: x.errors, error: x.error })}` : "")
