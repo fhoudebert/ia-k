@@ -273,6 +273,27 @@ temporary file.
   lines, and paragraphs of specks are dropped; running heads that change
   with the chapter (short, first or last on three pages or more) go, but
   for their first time, the chapter's title.
+- **Chapters** (`iak/structure.py`, after Prescel's `epub_structure.py`),
+  PDF or EPUB of pictures. The book's own table of contents (a page that
+  starts with `SOMMAIRE`, `TABLE DES MATIÈRES`, `CONTENTS`, and the pages
+  of numbers that follow it) is read before the running heads go: its
+  titles are what stands between its page numbers (growing, below four
+  times the pages: `1789` stays in its title), up to `ILLUSTRATIONS` or
+  `BIBLIOGRAPHIE`. Each title, in order, is looked for after the chapter
+  before in the runs of short paragraphs in capitals (a title spaced over
+  several lines: `LES` / `ANTILLES` / `AVANT`), allowing OCR slips and a
+  first word lost (80 % alike); the first found becomes a heading of level
+  1 in the table's words (a word the table's OCR got wrong taken from the
+  text: `Los` → `Les`), and the running heads of the chapter that are left
+  go. Two chapters at least, else nothing changes. Headings from the type
+  sizes become level 2, or paragraphs when their words are neither in the
+  lexicon nor seen three times in the book (an upside-down map). Without a
+  table: `LIVRE …`, `PARTIE …` (level 1) and `CHAPITRE …` (level 2, or 1
+  without books), two at least. EPUB, HTML and the other formats cut
+  their chapters at level 1; the EPUB's table of contents lists them (the
+  files a long chapter is cut into are not listed). For an
+  EPUB of pictures the headings go into its pages; its own table of
+  contents is left as it was.
 - **Finishing** (`iak/textfix.py`, after Prescel's `typo_fr.py`,
   `epub_longs.py` and `epub_recolle.py`). Book-wide passes on every
   paragraph and note, PDF or EPUB, in this order; the book is its own

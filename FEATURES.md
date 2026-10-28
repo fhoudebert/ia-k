@@ -100,6 +100,11 @@ Installing: [README.md](README.md).
     (`estoit`, `luy`, `bontez`, `charmans` → `était`, `lui`, `bontés`,
     `charmants`): sure forms change, those that are modern words too
     (`teste`) are only listed.
+- **Chapters**: the book's own table of contents (*Sommaire*, *Table des
+  matières*) gives the chapter titles, found in the text even when OCR
+  spread them over several lines in capitals; the running heads go. The
+  EPUB gets a table of contents to navigate. Without one, `CHAPITRE`,
+  `LIVRE` titles are used.
 - Every correction, made or refused, is listed in a `.corrections.tsv` file
   next to the book. The result can be saved, or added to the library.
 - **Project Gutenberg**: the zip Project Gutenberg asks for (text in 72

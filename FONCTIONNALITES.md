@@ -102,6 +102,11 @@ Installation : [README.md](README.md) ; en anglais : [FEATURES.md](FEATURES.md).
   mal lues sont rétablies (« quon », « Lanxiété » → « qu'on »,
   « L'anxiété »), les notes reliées à leurs appels, et chaque correction,
   gardée ou refusée, est listée dans un fichier `.corrections.tsv`.
+- **Chapitres** : la table des matières du livre (« Sommaire », « Table
+  des matières ») donne les titres des chapitres, retrouvés dans le texte
+  même quand l'OCR les a éclatés sur plusieurs lignes en capitales ; les
+  titres courants disparaissent, et l'EPUB reçoit une table des matières
+  navigable. Sans table, les titres « CHAPITRE », « LIVRE » servent.
 - **Finition du livre entier** (reprise de Prescel) : **typographie
   française** (espaces insécables avant `; : ! ?`, dans les guillemets,
   points de suspension, tirets de dialogue ; pour les livres en français),

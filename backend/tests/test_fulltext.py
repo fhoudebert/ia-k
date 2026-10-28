@@ -87,7 +87,7 @@ def test_native_pdf(tmp_path):
     with Library(tmp_path / "lib") as lib:
         doc = lib.import_file(native_pdf_with_picture(tmp_path / "registre.pdf")).doc_id
         title, blocks, counts = fulltext.library_document(lib, doc)
-        assert counts == {"pages": 2, "illustrations": 1, "ocr_pages": 0, "notes": 0}
+        assert counts == {"pages": 2, "illustrations": 1, "ocr_pages": 0, "notes": 0, "chapters": 2}
         kinds = [k for k, _ in blocks]
         assert kinds[0] == "h1" and kinds.count("img") == 1 and kinds.count("h1") == 2
         assert kinds.index("img") < kinds.index("h1", 1)                # on page 1
@@ -170,7 +170,7 @@ def test_scanned_pdf_and_epub(tmp_path):
     assert {"OEBPS/cover.png", "OEBPS/ill.png", "OEBPS/iak-ft-1.jpg"} <= names
     assert "OEBPS/p1.png" not in names and "p1.png" not in opf and "iak-ft-1.jpg" in opf
     assert '<img src="cover.png"/>' in body and "Avant" in body and "1712" in body
-    assert "<h2>Chapitre 1</h2>" in body
+    assert "<h1>Chapitre 1</h1>" in body                     # a chapter title
 
 
 def test_api(tmp_path):

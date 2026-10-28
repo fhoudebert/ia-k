@@ -152,6 +152,7 @@ class Item:
     size: float | None = None
     pic: bookformats.Picture | None = None
     ocr: bool = False          # its size from OCR word heights (rough)
+    level: str | None = None   # h1, h2 or p decided by iak.structure
 
 
 def _crop(page, rect_pt) -> bookformats.Picture:
@@ -269,12 +270,31 @@ def _page_notes(items: list[Item], body: float | None) -> tuple[list[Item], list
     return [it for i, it in enumerate(items) if i not in gone], notes
 
 
-def assemble(pages: list[list[Item]], notes: bool = True) -> list[tuple]:
+def assemble(pages: list[list[Item]], notes: bool = True, chapters: bool = True,
+             info: dict | None = None) -> list[tuple]:
     """Blocks for bookformats: headings from the font sizes, running heads and
     page numbers removed, paragraphs joined across pages (also when the next
     one starts with a capital, when the first plainly goes on: no full stop,
     a lowercase letter, a comma or a hyphen at its end), and the notes at the
-    foot of the pages linked to their calls (layout)."""
+    foot of the pages linked to their calls (layout). chapters: the
+    chapters found from the book's table of contents or the chapter titles
+    (iak.structure); info gets "chapters", their number."""
+    from . import structure
+    # the table of contents, before the running heads go (its lines repeat them)
+    toc_pages: set[int] = set()
+    for n, items in enumerate(pages):
+        texts = [it.text for it in items if it.kind == "text"]
+        if structure.is_toc_page(texts):
+            toc_pages.add(n)
+            for m in range(n + 1, min(n + 4, len(pages))):
+                more = [it.text for it in pages[m] if it.kind == "text"]
+                if more and sum(bool(re.search(r"\d{1,4}\W*$", t)) for t in more) >= 0.4 * len(more):
+                    toc_pages.add(m)
+                else:
+                    break
+    toc = [t for n in sorted(toc_pages)
+           for t in structure.toc_titles([it.text for it in pages[n] if it.kind == "text"],
+                                         4 * len(pages) + 50, _lexicon())]
     sizes = Counter()
     for items in pages:
         for it in items:
@@ -299,7 +319,9 @@ def assemble(pages: list[list[Item]], notes: bool = True) -> list[tuple]:
     running = set()
     if len(pages) >= 4:
         cnt, short = Counter(), Counter()
-        for items in pages:
+        for n, items in enumerate(pages):
+            if n in toc_pages:
+                continue
             texts = [it.text for it in items if it.kind == "text"]
             cnt.update({norm(t) for t in texts[:2] + texts[-2:] if len(t) < 120})
             # the head of a chapter's pages (LA GUADELOUPE 41): short, at the
@@ -314,9 +336,10 @@ def assemble(pages: list[list[Item]], notes: bool = True) -> list[tuple]:
     n_notes = 0
     known = layout.words(it.text for items in pages for it in items if it.kind == "text") \
         if notes else {}
-    for items in pages:
+    for n_page, items in enumerate(pages):
+        on_toc = n_page in toc_pages
         found = []
-        if notes:
+        if notes and not on_toc:
             items, found = _page_notes(items, body)
         page_notes = []
         if found:
@@ -337,9 +360,9 @@ def assemble(pages: list[list[Item]], notes: bool = True) -> list[tuple]:
             if it.ocr and _junk(t, lex):
                 continue
             title = body and it.size and it.size >= body * 1.2
-            if PAGE_NO.fullmatch(t) or (norm(t) in running and not title):
+            if PAGE_NO.fullmatch(t) or (norm(t) in running and not title and not on_toc):
                 continue
-            if norm(t) in chapter_heads and not title:
+            if norm(t) in chapter_heads and not title and not on_toc:
                 if norm(t) in first_seen:
                     continue                     # its first time is the chapter's title
                 first_seen.add(norm(t))
@@ -354,14 +377,20 @@ def assemble(pages: list[list[Item]], notes: bool = True) -> list[tuple]:
             elif body and it.size and h2 and it.size >= body * h2 and len(t) < 200:
                 kind = "h2"
             prev = next((b for b in reversed(blocks) if b[0] not in ("img", "note")), None)
-            if (kind == "p" and prev is not None and prev[0] == "p"
+            if (kind == "p" and prev is not None and prev[0] == "p" and not on_toc
                     and not _capitals(prev[1])
                     and layout.continues(layout.strip_calls(prev[1], lambda n: ""), t)):
                 prev[1] = join_lines(prev[1], t)     # continued over a page break
                 continue
             blocks.append([kind, t])
         blocks += page_notes
-    return [tuple(b) for b in blocks]
+    out = [tuple(b) for b in blocks]
+    n_chapters = 0
+    if chapters:
+        out, n_chapters = structure.structure(out, toc, _lexicon())
+    if info is not None:
+        info["chapters"] = n_chapters
+    return out
 
 
 def is_scan(page) -> bool:
@@ -577,7 +606,7 @@ def library_document(lib, doc_id: int, illustrations: bool = True, progress=None
     counts["pages"] = len(pages)
     meta = json.loads(doc["meta"] or "{}")
     title = meta.get("title") or Path(doc["name"]).stem
-    blocks = assemble(pages, notes)
+    blocks = assemble(pages, notes, info=counts)
     counts["notes"] = sum(1 for k, _ in blocks if k == "note")
     return title, blocks, counts
 
@@ -876,6 +905,38 @@ def epub_document(src: Path, out: Path, langs: str = ocr.DEFAULT_LANGS,
     counts["notes"] = n_notes
     doc_notes: dict[str, list] = {}
 
+    # the chapters: the book's table of contents, or the chapter titles
+    from . import structure
+    text_paths = [p for p in targets if readings.get(p) and readings[p].is_text]
+    toc_paths: set[str] = set()
+    for n, p in enumerate(text_paths):
+        if structure.is_toc_page([it.text for it in readings[p].paras]):
+            toc_paths.add(p)
+            for q in text_paths[n + 1:n + 4]:
+                more = [it.text for it in readings[q].paras]
+                if more and sum(bool(re.search(r"\d{1,4}\W*$", t)) for t in more) >= 0.4 * len(more):
+                    toc_paths.add(q)
+                else:
+                    break
+    toc = [t for p in text_paths if p in toc_paths
+           for t in structure.toc_titles([it.text for it in readings[p].paras],
+                                         4 * len(text_paths) + 50, _lexicon())]
+    slots_s = [(r, it) for p in text_paths for r in [readings[p]] for it in r.paras
+               if p in toc_paths or not (re.fullmatch(r"[\d\s\-–—.|]+|[ivxlcdm]{1,6}\.?", it.text, re.I)
+                                         or norm(it.text) in running)]
+    seq = [("h2" if body and it.size and it.size >= body * 1.3 and len(it.text) < 150 else "p",
+            it.text) for _, it in slots_s]
+    changes, counts["chapters"] = structure.plan(seq, toc, _lexicon())
+    gone = set()
+    for k, new in changes.items():
+        r, it = slots_s[k]
+        if new is None:
+            gone.add(id(it))
+        else:
+            it.level, it.text = new
+    for p in text_paths:
+        readings[p].paras = [it for it in readings[p].paras if id(it) not in gone]
+
     # the book-wide finishing: typography, long s, cut and glued words
     lang_tag = opf_soup.find(lambda t: local(t.name) == "language")
     lang = lang_tag.get_text().strip().lower() if lang_tag else ""
@@ -903,7 +964,8 @@ def epub_document(src: Path, out: Path, langs: str = ocr.DEFAULT_LANGS,
             continue
         soup = soups[name]
         paras = [it for it in r.paras
-                 if not (re.fullmatch(r"[\d\s\-–—.|]+|[ivxlcdm]{1,6}\.?", it.text, re.I)
+                 if it.level or path in toc_paths
+                 or not (re.fullmatch(r"[\d\s\-–—.|]+|[ivxlcdm]{1,6}\.?", it.text, re.I)
                          or norm(it.text) in running)]
         nodes = []
         total = sum(len(it.text) for it in paras) or 1
@@ -913,12 +975,12 @@ def epub_document(src: Path, out: Path, langs: str = ocr.DEFAULT_LANGS,
             while pics and pics[0][0] <= cum / total:
                 nodes.append(("img", pics.pop(0)[1]))
             heading = body and it.size and it.size >= body * 1.3 and len(it.text) < 150
-            nodes.append(("h2" if heading else "p", it.text))
+            nodes.append((it.level or ("h2" if heading else "p"), it.text))
             cum += len(it.text)
         nodes += [("img", p) for _, p in pics]
         new = []
         for kind, value in nodes:
-            if kind in ("p", "h2"):
+            if kind in ("p", "h1", "h2"):
                 p = soup.new_tag(kind)
                 _fill(soup, p, value)
                 new.append(p)
