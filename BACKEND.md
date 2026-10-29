@@ -25,6 +25,7 @@ interface uses.
 ./iak.sh fulltext 3 --format epub -o livre.epub   # a scanned document as text, illustrations kept
 ./iak.sh fulltext scans.epub [--vision]           # an EPUB of scanned pages, its pictures of text read
 ./iak.sh fulltext 3 --format gutenberg --old-print # a zip for Project Gutenberg, long s put right
+./iak.sh fulltext 3 --method focus              # its scans read again: Tesseract, the PDF's OCR layer, vision
 ./iak.sh folder add ~/Documents/Archives          # its documents, in a collection "Archives"
 ./iak.sh folder scan 1                            # also: list, watch, unwatch, remove; --copy
 ./iak.sh ask "Où l'atlas a-t-il été envoyé ?"     # sourced answer
@@ -246,6 +247,53 @@ temporary file.
   at the end of their document. A picture that cannot be read keeps its
   place; if none can (the vision server does not answer), the job fails
   with the first error instead of giving the book back unchanged.
+- **A scanned PDF read again** (methods `ocr`, `focus`, `fix`, `vision`;
+  `library`, the default, takes the library's text). The pages that are the
+  picture of a page (an image covering 70 % of it), but for those corrected
+  by hand, are rendered at 300 dpi and read by Tesseract, as the pictures of
+  an EPUB. Their own text layer, when they have one (another OCR: ABBYY
+  FineReader, Acrobat; IA-K takes it as native text at import), checks the
+  reading word by word, each Tesseract word facing the layer's word that
+  overlaps its box most (40 % of their union at least):
+  - a doubtful word the layer reads the same is confirmed;
+  - one it reads otherwise is replaced when the change rules accept the
+    layer's word (`avee` → `avec`, `blanes` → `blancs`; a name only one
+    letter away: `Richelièu` → `Richelieu`), and a capital where the layer
+    reads a lowercase letter is lowered (Tesseract capitalises some line
+    starts: `Manœuvrait`, `Naux`);
+  - a sure Tesseract word the layer reads otherwise becomes doubtful too
+    (`mais` / `niais`): the vision model (`focus`) or the text model (`fix`)
+    decides; with `ocr`, Tesseract's word stays and both are listed;
+  - a line Tesseract garbled into specks (`E e E e e`) is taken from the
+    layer; words the two read the same, seen twice, join the book's
+    vocabulary.
+  The rest is as for an EPUB (elisions, `.corrections.tsv`, where = `page
+  n`). For these pages, OCR paragraphs, a heading needs 1.35 times the
+  body's size and no `,;:` at its end, a change of type 25 % between two
+  lines, and paragraphs of specks are dropped; running heads that change
+  with the chapter (short, first or last on three pages or more) go, but
+  for their first time, the chapter's title.
+- **Chapters** (`iak/structure.py`, after Prescel's `epub_structure.py`),
+  PDF or EPUB of pictures. The book's own table of contents (a page that
+  starts with `SOMMAIRE`, `TABLE DES MATIÈRES`, `CONTENTS`, and the pages
+  of numbers that follow it) is read before the running heads go: its
+  titles are what stands between its page numbers (growing, below four
+  times the pages: `1789` stays in its title), up to `ILLUSTRATIONS` or
+  `BIBLIOGRAPHIE`. Each title, in order, is looked for after the chapter
+  before in the runs of short paragraphs in capitals (a title spaced over
+  several lines: `LES` / `ANTILLES` / `AVANT`), allowing OCR slips and a
+  first word lost (80 % alike); the first found becomes a heading of level
+  1 in the table's words (a word the table's OCR got wrong taken from the
+  text: `Los` → `Les`), and the running heads of the chapter that are left
+  go. Two chapters at least, else nothing changes. Headings from the type
+  sizes become level 2, or paragraphs when their words are neither in the
+  lexicon nor seen three times in the book (an upside-down map). Without a
+  table: `LIVRE …`, `PARTIE …` (level 1) and `CHAPITRE …` (level 2, or 1
+  without books), two at least. EPUB, HTML and the other formats cut
+  their chapters at level 1; the EPUB's table of contents lists them (the
+  files a long chapter is cut into are not listed). For an
+  EPUB of pictures the headings go into its pages; its own table of
+  contents is left as it was.
 - **Finishing** (`iak/textfix.py`, after Prescel's `typo_fr.py`,
   `epub_longs.py` and `epub_recolle.py`). Book-wide passes on every
   paragraph and note, PDF or EPUB, in this order; the book is its own

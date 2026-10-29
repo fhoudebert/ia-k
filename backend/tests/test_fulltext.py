@@ -87,7 +87,7 @@ def test_native_pdf(tmp_path):
     with Library(tmp_path / "lib") as lib:
         doc = lib.import_file(native_pdf_with_picture(tmp_path / "registre.pdf")).doc_id
         title, blocks, counts = fulltext.library_document(lib, doc)
-        assert counts == {"pages": 2, "illustrations": 1, "ocr_pages": 0, "notes": 0}
+        assert counts == {"pages": 2, "illustrations": 1, "ocr_pages": 0, "notes": 0, "chapters": 2}
         kinds = [k for k, _ in blocks]
         assert kinds[0] == "h1" and kinds.count("img") == 1 and kinds.count("h1") == 2
         assert kinds.index("img") < kinds.index("h1", 1)                # on page 1
@@ -170,7 +170,7 @@ def test_scanned_pdf_and_epub(tmp_path):
     assert {"OEBPS/cover.png", "OEBPS/ill.png", "OEBPS/iak-ft-1.jpg"} <= names
     assert "OEBPS/p1.png" not in names and "p1.png" not in opf and "iak-ft-1.jpg" in opf
     assert '<img src="cover.png"/>' in body and "Avant" in body and "1712" in body
-    assert "<h2>Chapitre 1</h2>" in body
+    assert "<h1>Chapitre 1</h1>" in body                     # a chapter title
 
 
 def test_api(tmp_path):
@@ -439,3 +439,103 @@ def test_gutenberg_convert(tmp_path):
         with zipfile.ZipFile(fulltext.output_dir(lib, doc) / r["file"]) as z:
             text = z.read("notes/notes.txt").decode("utf-8")
         assert "l'atlas[1] au" in text and "[2] Le prix est donné" in text
+
+
+# ---------------------------------------------------------------- a PDF's own text layer
+
+def box(x0, word, conf=95.0, y0=100, h=30):
+    return [x0, y0, x0 + 20 * len(word), y0 + h, word, conf]
+
+
+def test_text_layer_checks_the_doubtful_words():
+    from iak import correction, doubt
+    text = "Les Houvelles avee le roi."
+    boxes = [box(0, "Les"), box(100, "Houvelles", 40), box(320, "avee", 40), box(420, "le"),
+             box(480, "roi.", 20)]
+    layer = [b[:5] for b in boxes]
+    layer[1] = box(100, "nouvelles")[:5]
+    layer[2] = box(320, "avec")[:5]
+    witness = correction.layer_witness(boxes, layer)
+    assert witness == {0: "Les", 1: "nouvelles", 2: "avec", 3: "le", 4: "roi."}
+    vocab = {"les", "nouvelles", "avec", "le", "roi"}
+    suspects = doubt.page(text, boxes, vocab)["suspects"]
+    assert [s["word"] for s in suspects] == ["Houvelles", "avee", "roi"]
+    confirmed, proposals, exact = correction.layer_proposals(text, suspects, boxes, witness, vocab)
+    assert confirmed == {2} and proposals == {0: "nouvelles", 1: "avec"} and exact == {0}
+    new, changes = correction.apply_changes(text, suspects, proposals, vocab, exact=exact,
+                                            layer=set(proposals))
+    assert new == "Les nouvelles avec le roi."
+    # two words of the layer where Tesseract read one; a real word left to the vision model
+    text = "Laville dès lors"
+    boxes = [box(0, "Laville", 50), box(200, "dès", 40), box(300, "lors")]
+    layer = [box(0, "La")[:5], box(50, "ville")[:5], box(200, "dés")[:5], box(300, "lors")[:5]]
+    layer[1][2] = 140
+    witness = correction.layer_witness(boxes, layer)
+    assert witness[0] == "La ville" and witness[1] == "dés"
+    vocab = {"la", "ville", "dès", "dés", "lors"}
+    suspects = doubt.page(text, boxes, vocab)["suspects"]
+    assert [s["word"] for s in suspects] == ["Laville"]
+    suspects += correction.layer_disagreements(text, boxes, witness, suspects)
+    confirmed, proposals, exact = correction.layer_proposals(text, suspects, boxes, witness, vocab)
+    assert proposals == {0: "La ville"}                     # dès / dés: not decided here
+    assert correction.apply_changes(text, suspects, proposals, vocab)[0] == "La ville dès lors"
+
+
+def test_text_layer_disagreements_and_garbled_lines():
+    from iak import correction
+    text = "Il est Manœuvrait mais\nE e E e\nfin"
+    boxes = [box(0, "Il"), box(60, "est"), box(140, "Manœuvrait"), box(400, "mais"),
+             box(0, "E", y0=140), box(30, "e", y0=140), box(60, "E", y0=140),
+             box(90, "e", y0=140), box(0, "fin", y0=180)]
+    layer = [b[:5] for b in boxes[:4]]
+    layer[2] = box(140, "manœuvrait")[:5]
+    layer[3] = box(400, "niais")[:5]
+    layer += [box(0, "Voir", y0=140)[:5], box(40, "l'inventaire.", y0=140)[:5],
+              box(0, "fin", y0=180)[:5]]
+    t2, b2, garbled = correction.layer_lines(text, boxes, layer)
+    assert t2 == "Il est Manœuvrait mais\nVoir l'inventaire.\nfin" and len(garbled) == 1
+    assert [b[4] for b in b2] == ["Il", "est", "Manœuvrait", "mais", "Voir", "l'inventaire.", "fin"]
+    witness = correction.layer_witness(b2, layer)
+    extra = correction.layer_disagreements(t2, b2, witness, [])
+    assert [(s["word"], s["reasons"]) for s in extra] == [("Manœuvrait", ["layer"]),
+                                                          ("mais", ["layer"])]
+    confirmed, proposals, exact = correction.layer_proposals(t2, extra, b2, witness,
+                                                             {"mais", "niais"})
+    assert proposals == {0: "manœuvrait"} and exact == {0}        # niais / mais: left to VL
+    new, changes = correction.apply_changes(t2, extra, proposals, set(), exact=exact)
+    assert new.startswith("Il est manœuvrait mais") and changes[0]["why"] == "case"
+
+
+@needs_tesseract
+def test_scan_with_a_text_layer(tmp_path):
+    """A scanned PDF with another OCR's invisible text: read again by
+    Tesseract, checked against that layer."""
+    src = book_with_notes(tmp_path / "net.pdf")
+    scan = pymupdf.open()
+    with pymupdf.open(src) as net:
+        for p in net:
+            q = scan.new_page(width=420, height=595)
+            q.insert_image(q.rect, stream=p.get_pixmap(dpi=200).tobytes("png"))
+            for x0, y0, x1, y1, w, *_ in p.get_text("words"):       # the "ABBYY" layer
+                w = {"relieur": "reliure"}.get(w, w)                  # which misreads a word
+                q.insert_text((x0, y1 - 2), w, fontsize=max(4, (y1 - y0) * 0.8),
+                              render_mode=3)
+    scan.save(tmp_path / "scan.pdf")
+    with Library(tmp_path / "lib", ocr_langs="fra") as lib:
+        doc = lib.import_file(tmp_path / "scan.pdf").doc_id
+        assert {u["source"] for u in lib.units(doc)} == {"native"}  # the layer, taken as text
+        r = fulltext.convert(lib, doc, "md", method="ocr")
+        assert r["read_pages"] == 2 and r["layer_pages"] == 2
+        check_notes((fulltext.output_dir(lib, doc) / r["file"]).read_text("utf-8"))
+        log = fulltext.corrections_path(fulltext.output_dir(lib, doc) / r["file"])
+        assert "relieur\treliure\tno\ttext layer reads otherwise" in log.read_text("utf-8")
+        # with the vision model, the lines where the two OCRs differ are read again
+        lines = []
+        chat = FakeChat(reply=lambda req: lines.append(req) or "")
+        try:
+            r = fulltext.convert(lib, doc, "md", method="focus", focus_client=chat.client())
+        finally:
+            chat.close()
+        assert lines and "l'atlas[^1]" in (fulltext.output_dir(lib, doc) / r["file"]).read_text()
+        r = fulltext.convert(lib, doc, "md")                         # the library's text
+        assert "read_pages" not in r

@@ -88,6 +88,12 @@ Installation : [README.md](README.md) ; en anglais : [FEATURES.md](FEATURES.md).
   **illustrations** (photos, gravures, cartes) sont découpées et gardées à
   leur place. En EPUB, PDF A5, HTML, Word, RTF ou Markdown, bien plus léger
   que le scan (selon les illustrations gardées).
+- Un **PDF scanné peut être relu** au lieu de reprendre le texte de la
+  bibliothèque : Tesseract relit ses pages ; si le PDF porte déjà la couche
+  de texte d'un autre OCR (ABBYY, Acrobat…), chaque mot douteux y est
+  vérifié, et les mots que les deux OCR lisent différemment vont à la
+  vision ciblée (`serveurs-vl`) ou au modèle de texte ; les pages corrigées
+  à la main gardent leur texte.
 - Pour un **EPUB fait de pages scannées**, chaque image de texte est lue et
   remplacée par son texte ; illustrations et couverture restent. Au choix :
   Tesseract seul (sans serveur), Tesseract puis **vision ciblée** sur les
@@ -96,6 +102,11 @@ Installation : [README.md](README.md) ; en anglais : [FEATURES.md](FEATURES.md).
   mal lues sont rétablies (« quon », « Lanxiété » → « qu'on »,
   « L'anxiété »), les notes reliées à leurs appels, et chaque correction,
   gardée ou refusée, est listée dans un fichier `.corrections.tsv`.
+- **Chapitres** : la table des matières du livre (« Sommaire », « Table
+  des matières ») donne les titres des chapitres, retrouvés dans le texte
+  même quand l'OCR les a éclatés sur plusieurs lignes en capitales ; les
+  titres courants disparaissent, et l'EPUB reçoit une table des matières
+  navigable. Sans table, les titres « CHAPITRE », « LIVRE » servent.
 - **Finition du livre entier** (reprise de Prescel) : **typographie
   française** (espaces insécables avant `; : ! ?`, dans les guillemets,
   points de suspension, tirets de dialogue ; pour les livres en français),

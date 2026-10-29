@@ -14,7 +14,9 @@ once unzipped; its bytecode caches, test suites and Tk are left out, and the
 copy is checked by importing the engine with it. With --tesseract, the
 Tesseract built by scripts/build_tesseract.py (build/tesseract/<os>, every
 mac-* on macOS) and the shared language data (build/tesseract/tessdata) go
-in too, checked by listing its languages. The models and the library are
+in too, checked by listing its languages. With --words, the French lexicon
+of scripts/fetch_words.py (build/words) is required; without it, it goes in
+only when it was fetched. The models and the library are
 never included. The interface (app/) is inside the application, it is not
 copied.
 """
@@ -168,7 +170,7 @@ def check_python(folder: Path, py_dir: Path) -> None:
 
 def make(exe: Path, os_name: str, out: Path, zip_it: bool = True,
          python: Path | None = None, check: bool = True,
-         tesseract: Path | None = None) -> Path:
+         tesseract: Path | None = None, words_required: bool = False) -> Path:
     if not (exe.is_dir() if os_name == "mac" else exe.is_file()):
         raise SystemExit(f"application not found: {exe}")
     folder = out / f"ia-k-{os_name}"
@@ -215,6 +217,8 @@ def make(exe: Path, os_name: str, out: Path, zip_it: bool = True,
     if (words / "fr.txt").is_file():
         shutil.copytree(words, folder / "build" / "words")
         print("words: lexicon copied")
+    elif words_required:
+        raise SystemExit(f"no lexicon in {words}: run scripts/fetch_words.py")
     if os_name in ("linux", "mac"):
         exes = [r for r in BY_OS[os_name] if r.endswith(".sh")]
         exes.append(f"{name}/Contents/MacOS/ia-k" if os_name == "mac" else name)
@@ -252,11 +256,13 @@ def main() -> int:
     ap.add_argument("--tesseract", nargs="?", type=Path, const=ROOT / "build" / "tesseract",
                     metavar="DIR", help="include the Tesseract built by "
                     "scripts/build_tesseract.py and its languages (from build/tesseract, or DIR)")
+    ap.add_argument("--words", action="store_true",
+                    help="require the French lexicon of scripts/fetch_words.py (build/words)")
     ap.add_argument("--no-check", action="store_true",
                     help="do not run the included Python and Tesseract (another processor)")
     args = ap.parse_args()
     result = make(args.exe, args.os_name, args.out, not args.no_zip, args.python,
-                  not args.no_check, args.tesseract)
+                  not args.no_check, args.tesseract, args.words)
     size = result.stat().st_size if result.is_file() else sum(
         p.stat().st_size for p in result.rglob("*") if p.is_file())
     print(f"{result} ({size / 1e6:.1f} MB)")

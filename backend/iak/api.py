@@ -353,7 +353,7 @@ def job_compare(app: App, lib: Library, job: Job):
 def job_fulltext(app: App, lib: Library, job: Job):
     p = job.params
     vision = fix = focus = None
-    method = p.get("method", "ocr")
+    method = p.get("method")
     if method in ("vision", "focus"):
         client = analyze.vision_client(app.host, app.host.api_key)
         if method == "vision":
@@ -903,14 +903,16 @@ class Handler(BaseHTTPRequestHandler):
     def fulltext_make(self, doc_id, query):
         """{"format": "epub", "illustrations": true, "notes": true, "typography":
         null (French books) | true | false, "old_print": false, "cut_words": true,
-        "modern": false (17th-18th century spelling modernised), "method": "ocr"|"focus"|"fix"|"vision"}: a job."""
+        "modern": false (17th-18th century spelling modernised), "method": "library" (a PDF: the library's text, default) | "ocr"|"focus"|"fix"|"vision"
+        (an EPUB: default ocr; a PDF: its scanned pages read again, checked against its
+        own text layer)}: a job."""
         body = self._body()
         fmt = body.get("format", "epub")
         if fmt not in fulltext.FORMATS:
             raise ApiError(400, f"format is one of {', '.join(fulltext.FORMATS)}")
-        method = body.get("method", "ocr")
-        if method not in ("ocr", "vision", "fix", "focus"):
-            raise ApiError(400, "method is ocr, focus, fix or vision")
+        method = body.get("method")
+        if method not in (None, "library", "ocr", "vision", "fix", "focus"):
+            raise ApiError(400, "method is library, ocr, focus, fix or vision")
         with self.app.library() as lib:
             d = lib.document(int(doc_id))
             if d is None:

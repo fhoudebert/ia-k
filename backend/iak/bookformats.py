@@ -230,16 +230,20 @@ def write_epub(blocks, title: str, lang: str, out: Path) -> None:
 </spine>
 </package>
 """
-    items = "\n".join(f'<li><a href="c{i}.xhtml">{_esc(t)}</a></li>'
-                      for i, t in enumerate(titles, 1))
+    # the table of contents: the files that start a chapter (a long chapter
+    # is cut in several files: the ones that go on are not listed)
+    cut = "h1" if any(b[0] == "h1" for b in blocks) else "h2"
+    listed = [(i, t) for i, (t, ch) in enumerate(zip(titles, chapters), 1)
+              if i == 1 or next((k for k, _ in ch if k not in ("img", "note")), None) == cut]
+    items = "\n".join(f'<li><a href="c{i}.xhtml">{_esc(t)}</a></li>' for i, t in listed)
     nav = (f'<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n'
            f'<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" '
            f'xml:lang="{lang}" lang="{lang}">\n<head><title>{_esc(title)}</title></head>\n'
            f'<body><nav epub:type="toc" id="toc"><h1>{_esc(title)}</h1><ol>\n{items}\n</ol></nav>'
            f"</body>\n</html>\n")
-    points = "\n".join(f'<navPoint id="p{i}" playOrder="{i}"><navLabel><text>{_esc(t)}</text>'
+    points = "\n".join(f'<navPoint id="p{i}" playOrder="{n}"><navLabel><text>{_esc(t)}</text>'
                        f'</navLabel><content src="c{i}.xhtml"/></navPoint>'
-                       for i, t in enumerate(titles, 1))
+                       for n, (i, t) in enumerate(listed, 1))
     ncx = (f'<?xml version="1.0" encoding="utf-8"?>\n<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" '
            f'version="2005-1"><head><meta name="dtb:uid" content="{book_id}"/></head>'
            f"<docTitle><text>{_esc(title)}</text></docTitle><navMap>\n{points}\n</navMap></ncx>\n")

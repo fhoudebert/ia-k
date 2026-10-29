@@ -103,7 +103,8 @@ licence, by the same author), rewritten for IA-K's paragraphs and note
 calls: the elisions (`epub_ocr_prose`) in `iak/correction.py`; French
 typography, the long s and the cut or glued words (`typo_fr.py`,
 `epub_longs.py`, `epub_recolle.py`) in `iak/textfix.py`; the Project
-Gutenberg zip (`epub_gutenberg.py`) in `iak/bookformats.py`; the modern
+Gutenberg zip (`epub_gutenberg.py`) in `iak/bookformats.py`; the chapters
+from the table of contents (`epub_structure.py`) in `iak/structure.py`; the modern
 spelling of the 17th and 18th centuries (`epub_modernise.py`) in
 `iak/modernise.py`, with Prescel's word lists copied unchanged in
 `iak/dictionaries/` (vocabulary, -oi- verbs, plurals in -ez and -ans). Each
@@ -116,7 +117,8 @@ Prescel uses, "an-array-of-french-words" (about 336,000 forms, MIT licence),
 at a fixed commit, checked against its SHA-256 (4.5 MB). `iak.doubt` reads
 every `build/words/*.txt` (the doubtful OCR words, the candidates and the
 checks of their corrections, the elisions); `make_portable.py` copies the
-folder to the key and CI fetches it. Without it, only the library's own
+folder to the key, and CI fetches it before (`make_portable.py --words`
+fails without it). Without it, only the library's own
 vocabulary and `config/words/` count. The tests do not use it.
 
 ## Portable Tesseract

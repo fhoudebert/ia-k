@@ -42,9 +42,11 @@ def main() -> int:
         raise SystemExit("checksum mismatch, list refused")
     words = sorted({w.strip().lower() for w in json.loads(data.decode("utf-8")) if w.strip()})
     part = target.with_suffix(".part")
-    part.write_text("\n".join(words) + "\n", encoding="utf-8")
+    # bytes, so that Windows writes the same file as the other systems (the
+    # keys of the three systems share it)
+    part.write_bytes(("\n".join(words) + "\n").encode("utf-8"))
     part.replace(target)
-    (OUT / "fr.LICENSE").write_text(LICENCE, encoding="utf-8")
+    (OUT / "fr.LICENSE").write_bytes(LICENCE.encode("utf-8"))
     print(f"{target}: {len(words)} words")
     return 0
 

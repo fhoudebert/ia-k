@@ -151,6 +151,8 @@ class Item:
     text: str = ""
     size: float | None = None
     pic: bookformats.Picture | None = None
+    ocr: bool = False          # its size from OCR word heights (rough)
+    level: str | None = None   # h1, h2 or p decided by iak.structure
 
 
 def _crop(page, rect_pt) -> bookformats.Picture:
@@ -207,7 +209,8 @@ def _native_items(page, illustrations: bool) -> list[Item]:
 def _ocr_items(page, text: str, boxes, illustrations: bool) -> list[Item]:
     """The library's text of a page (OCR, corrected...) as paragraphs, and its
     illustrations placed where they are on the page."""
-    paras = [Item("text", t, size) for t, size in layout.ocr_paragraphs(text, boxes or [])]
+    paras = [Item("text", t, size, ocr=True)
+             for t, size in layout.ocr_paragraphs(text, boxes or [])]
     if not illustrations:
         return paras
     rects = text_rects(boxes or [])
@@ -267,12 +270,31 @@ def _page_notes(items: list[Item], body: float | None) -> tuple[list[Item], list
     return [it for i, it in enumerate(items) if i not in gone], notes
 
 
-def assemble(pages: list[list[Item]], notes: bool = True) -> list[tuple]:
+def assemble(pages: list[list[Item]], notes: bool = True, chapters: bool = True,
+             info: dict | None = None) -> list[tuple]:
     """Blocks for bookformats: headings from the font sizes, running heads and
     page numbers removed, paragraphs joined across pages (also when the next
     one starts with a capital, when the first plainly goes on: no full stop,
     a lowercase letter, a comma or a hyphen at its end), and the notes at the
-    foot of the pages linked to their calls (layout)."""
+    foot of the pages linked to their calls (layout). chapters: the
+    chapters found from the book's table of contents or the chapter titles
+    (iak.structure); info gets "chapters", their number."""
+    from . import structure
+    # the table of contents, before the running heads go (its lines repeat them)
+    toc_pages: set[int] = set()
+    for n, items in enumerate(pages):
+        texts = [it.text for it in items if it.kind == "text"]
+        if structure.is_toc_page(texts):
+            toc_pages.add(n)
+            for m in range(n + 1, min(n + 4, len(pages))):
+                more = [it.text for it in pages[m] if it.kind == "text"]
+                if more and sum(bool(re.search(r"\d{1,4}\W*$", t)) for t in more) >= 0.4 * len(more):
+                    toc_pages.add(m)
+                else:
+                    break
+    toc = [t for n in sorted(toc_pages)
+           for t in structure.toc_titles([it.text for it in pages[n] if it.kind == "text"],
+                                         4 * len(pages) + 50, _lexicon())]
     sizes = Counter()
     for items in pages:
         for it in items:
@@ -281,21 +303,43 @@ def assemble(pages: list[list[Item]], notes: bool = True) -> list[tuple]:
     body = sizes.most_common(1)[0][0] if sizes else None
 
     def norm(t):
-        return re.sub(r"\d+", "#", t.lower()).strip()
+        # a page number, or an OCR speck beside it, is not part of the head:
+        # « LES ANTILLES AVANT 1789 sv » is « les antilles avant # »
+        words = re.sub(r"\d+", "#", t.lower()).split()
+
+        def speck(w):
+            c = w.strip("#.,-–—|*")
+            return "#" in w or not c or (len(c) <= 2 and c not in lex)
+        if len(words) > 1 and speck(words[0]):
+            words.pop(0)
+        if len(words) > 1 and speck(words[-1]):
+            words.pop()
+        return " ".join(words)
+    lex = _lexicon()
     running = set()
     if len(pages) >= 4:
-        cnt = Counter()
-        for items in pages:
+        cnt, short = Counter(), Counter()
+        for n, items in enumerate(pages):
+            if n in toc_pages:
+                continue
             texts = [it.text for it in items if it.kind == "text"]
             cnt.update({norm(t) for t in texts[:2] + texts[-2:] if len(t) < 120})
+            # the head of a chapter's pages (LA GUADELOUPE 41): short, at the
+            # very top or foot, on a few pages only
+            short.update({norm(t) for t in texts[:1] + texts[-1:] if len(t) < 60})
         running = {k for k, v in cnt.items() if v >= max(3, 0.3 * len(pages))}
+        chapter_heads = {k for k, v in short.items() if v >= 3 and k} - running
+    else:
+        chapter_heads = set()
+    first_seen: set[str] = set()
     blocks: list[list] = []
     n_notes = 0
     known = layout.words(it.text for items in pages for it in items if it.kind == "text") \
         if notes else {}
-    for items in pages:
+    for n_page, items in enumerate(pages):
+        on_toc = n_page in toc_pages
         found = []
-        if notes:
+        if notes and not on_toc:
             items, found = _page_notes(items, body)
         page_notes = []
         if found:
@@ -313,26 +357,211 @@ def assemble(pages: list[list[Item]], notes: bool = True) -> list[tuple]:
                 blocks.append(["img", it.pic])
                 continue
             t = it.text
-            if PAGE_NO.fullmatch(t) or norm(t) in running:
+            if it.ocr and _junk(t, lex):
                 continue
+            title = body and it.size and it.size >= body * 1.2
+            if PAGE_NO.fullmatch(t) or (norm(t) in running and not title and not on_toc):
+                continue
+            if norm(t) in chapter_heads and not title and not on_toc:
+                if norm(t) in first_seen:
+                    continue                     # its first time is the chapter's title
+                first_seen.add(norm(t))
             kind = "p"
-            if body and it.size and it.size >= body * 1.6 and len(t) < 150:
+            # OCR sizes are rough: a heading there is clearly bigger, and
+            # does not read as the end of a sentence cut off (« times ; »)
+            h2 = 1.35 if it.ocr else 1.2
+            if it.ocr and (t[:1].islower() or re.search(r"[,;:]$", t)):
+                h2 = None
+            if body and it.size and it.size >= body * 1.6 and len(t) < 150 and h2:
                 kind = "h1"
-            elif body and it.size and it.size >= body * 1.2 and len(t) < 200:
+            elif body and it.size and h2 and it.size >= body * h2 and len(t) < 200:
                 kind = "h2"
             prev = next((b for b in reversed(blocks) if b[0] not in ("img", "note")), None)
-            if (kind == "p" and prev is not None and prev[0] == "p"
+            if (kind == "p" and prev is not None and prev[0] == "p" and not on_toc
+                    and not _capitals(prev[1])
                     and layout.continues(layout.strip_calls(prev[1], lambda n: ""), t)):
                 prev[1] = join_lines(prev[1], t)     # continued over a page break
                 continue
             blocks.append([kind, t])
         blocks += page_notes
-    return [tuple(b) for b in blocks]
+    out = [tuple(b) for b in blocks]
+    n_chapters = 0
+    if chapters:
+        out, n_chapters = structure.structure(out, toc, _lexicon())
+    if info is not None:
+        info["chapters"] = n_chapters
+    return out
+
+
+def is_scan(page) -> bool:
+    """A page that is the picture of a page (its text, if any, an OCR layer)."""
+    import pymupdf
+    area = page.rect.width * page.rect.height
+    return any((pymupdf.Rect(i["bbox"]) & page.rect).get_area() >= SCAN_COVER * area
+               for i in page.get_image_info())
+
+
+@dataclass
+class PageReader:
+    """How the scanned pages of a PDF are read for its full-text version
+    (instead of the library's text): Tesseract again, its doubtful words
+    checked against the PDF's own text layer (another OCR: ABBYY,
+    Acrobat...), those still doubtful read again by the vision model
+    (focus_client) or the text model (fix_client); or the vision model reads
+    whole pages (vision(png) -> text)."""
+    langs: str = ocr.DEFAULT_LANGS
+    tesseract: str | None = None
+    vision: object = None
+    focus_client: object = None
+    fix_client: object = None
+    dpi: int = 300
+
+
+def _reading_items(r: "Reading") -> list[Item]:
+    """The paragraphs of a page read again, its illustrations where they are."""
+    out, pics = [], list(r.pics)
+    total = sum(len(it.text) for it in r.paras) or 1
+    cum = 0
+    for it in r.paras:
+        while pics and pics[0][0] <= cum / total:
+            out.append(Item("img", pic=pics.pop(0)[1]))
+        out.append(it)
+        cum += len(it.text)
+    return out + [Item("img", pic=p) for _, p in pics]
+
+
+def _read_pages(pdf, numbers: list[int], reader: PageReader, illustrations: bool,
+                progress, cancelled, log: list, counts: dict) -> dict[int, "Reading"]:
+    """{page number: Reading} of the scanned pages read again, their doubtful
+    words corrected (the changes, kept and refused, added to log)."""
+    from . import correction, doubt
+    readings, layers, pngs, errors = {}, {}, {}, []
+    two = reader.focus_client is not None or reader.fix_client is not None
+    total = len(numbers) * (2 if two else 1)
+    for n, i in enumerate(numbers):
+        if cancelled and cancelled():
+            raise FullTextError("cancelled")
+        if progress:
+            progress(n, total)
+        page = pdf[i - 1]
+        pix = page.get_pixmap(dpi=reader.dpi)
+        png = pix.tobytes("png")
+        try:
+            r = read_picture(png, reader.langs, reader.tesseract, illustrations, reader.vision)
+        except Exception as exc:  # noqa: BLE001 - the page keeps the library's text
+            errors.append(f"page {i}: {exc}")
+            continue
+        if not r.is_text:
+            continue
+        readings[i] = r
+        k = reader.dpi / 72
+        layers[i] = [[w[0] * k, w[1] * k, w[2] * k, w[3] * k, w[4]]
+                     for w in page.get_text("words")]
+        if reader.focus_client is not None:
+            pngs[i] = png
+    if errors and not readings:
+        raise FullTextError(f"no page could be read: {errors[0]}")
+    boxed = {i: r for i, r in readings.items() if r.boxes}
+    counts.update({"read_pages": len(readings), "layer_pages": sum(1 for i in boxed if layers[i]),
+                   "confirmed": 0, "from_layer": 0, "corrected": 0, "refused": 0})
+    counts["layer_lines"] = 0
+    for i, r in boxed.items():
+        if layers[i]:
+            r.text, r.boxes, garbled = correction.layer_lines(r.text, r.boxes, layers[i])
+            if garbled:
+                r.paras = [Item("text", t, size, ocr=True)
+                           for t, size in layout.ocr_paragraphs(r.text, r.boxes)]
+                counts["layer_lines"] += len(garbled)
+                log += [(f"page {i}", c) for c in garbled]
+    if boxed:
+        witness = {i: correction.layer_witness(r.boxes, layers[i]) for i, r in boxed.items()}
+        vocab = doubt.vocabulary_from_boxes(r.boxes for r in boxed.values())
+        agreed = Counter(w for i, r in boxed.items()
+                         for w in correction.agreed_words(r.boxes, witness[i]))
+        vocab |= {w for w, c in agreed.items() if c >= 2}
+        seen = correction.attested(r.text for r in boxed.values())
+        for n, (i, r) in enumerate(sorted(boxed.items()), len(numbers)):
+            if cancelled and cancelled():
+                raise FullTextError("cancelled")
+            if progress and two:
+                progress(n, total)
+            suspects = doubt.page(r.text, r.boxes, vocab)["suspects"]
+            suspects += correction.layer_disagreements(r.text, r.boxes, witness[i], suspects)
+            if not suspects:
+                continue
+            at_box = doubt.box_index(r.text, r.boxes)
+            confirmed, from_layer, exact = correction.layer_proposals(
+                r.text, suspects, r.boxes, witness[i], vocab)
+            counts["confirmed"] += len(confirmed)
+            rest = [j for j in range(len(suspects)) if j not in confirmed and j not in from_layer]
+            proposals = dict(from_layer)
+            left = [suspects[j] for j in rest]
+            try:
+                if left and reader.focus_client is not None:
+                    crop = correction.picture_cropper(pngs[i])
+                    got, _ = correction.focus_proposals(reader.focus_client, r.text, left,
+                                                        r.boxes, crop)
+                    proposals.update({rest[j]: w for j, w in got.items()})
+                elif left and reader.fix_client is not None:
+                    got, _ = correction.fix_proposals(reader.fix_client, r.text, left, vocab)
+                    proposals.update({rest[j]: w for j, w in got.items()})
+            except Exception as exc:  # noqa: BLE001 - those words stay as Tesseract read them
+                errors.append(f"page {i}: {exc}")
+            elided = correction.elisions(left, vocab, seen)
+            proposals.update({rest[j]: w for j, w in elided.items() if rest[j] not in proposals})
+            # the two OCRs disagree and nothing settled it: Tesseract's word stays, listed
+            unsettled = [(f"page {i}", {"word": suspects[j]["word"],
+                                        "new": witness[i].get(at_box.get(suspects[j]["start"]), ""),
+                                        "kept": False, "why": "text layer reads otherwise"})
+                         for j in rest if j not in proposals and "layer" in suspects[j]["reasons"]]
+            new, changes = correction.apply_changes(r.text, suspects, proposals, vocab,
+                                                    loose=reader.focus_client is not None,
+                                                    exact=exact, layer=set(from_layer))
+            layer_at = {suspects[j]["start"] for j in from_layer}
+            for c in changes:
+                if c["start"] in layer_at:
+                    c["why"] = f"text layer, {c['why']}"
+                    counts["from_layer"] += c["kept"]
+            if new != r.text:
+                _rename_boxes(r, changes)
+                r.text = new
+                r.paras = [Item("text", t, size, ocr=True)
+                           for t, size in layout.ocr_paragraphs(r.text, r.boxes)]
+            log += [(f"page {i}", c) for c in changes] + unsettled
+        counts["corrected"] = sum(c["kept"] for _, c in log)
+        counts["refused"] = sum(not c["kept"] for _, c in log)
+    if errors:
+        counts["errors"] = len(errors)
+        counts["error"] = errors[0]
+    return readings
+
+
+def _junk(t: str, lex) -> bool:
+    """An OCR paragraph made of specks or an ornament (« — … —— », « PEPE »):
+    few letters, or a short one without a single known word."""
+    letters = sum(c.isalpha() for c in t)
+    if re.fullmatch(r"[IVXLCDM]+\.?|[A-Z]\.", t.strip()):
+        return False                             # a chapter number
+    if letters < 2 or letters < 0.5 * len(t.replace(" ", "")):
+        return True
+    words = re.findall(r"[^\W\d_]+", t.lower())
+    if len(words) >= 4 and sum(len(w) <= 1 for w in words) >= 0.6 * len(words):
+        return True                              # « E E e e e E e » : a margin, a gutter
+    return len(t) <= 12 and bool(lex) and not any(w in lex and len(w) > 1 for w in words)
+
+
+def _capitals(t: str) -> bool:
+    """A line in capitals (a title, a running head): no paragraph goes on in it."""
+    letters = [c for c in t if c.isalpha()]
+    return len(letters) >= 4 and sum(c.isupper() for c in letters) >= 0.8 * len(letters)
 
 
 def library_document(lib, doc_id: int, illustrations: bool = True, progress=None,
-                     cancelled=None, notes: bool = True) -> tuple[str, list[tuple], dict]:
-    """(title, blocks, counts) of a PDF or image document of the library."""
+                     cancelled=None, notes: bool = True, reader: PageReader | None = None,
+                     log: list | None = None) -> tuple[str, list[tuple], dict]:
+    """(title, blocks, counts) of a PDF or image document of the library.
+    reader: its scanned pages read again (PageReader), not the library's
+    text; pages corrected by hand keep theirs. log: the changes made."""
     import json
 
     import pymupdf
@@ -349,13 +578,22 @@ def library_document(lib, doc_id: int, illustrations: bool = True, progress=None
                for i, u in enumerate(units)}
     pages, counts = [], {"pages": 0, "illustrations": 0, "ocr_pages": 0}
     with pymupdf.open(path) as pdf:
+        readings = {}
+        if reader is not None:
+            scans = [i for i, page in enumerate(pdf, 1)
+                     if is_scan(page) and not (by_page.get(i) and by_page[i]["edited"])]
+            readings = _read_pages(pdf, scans, reader, illustrations, progress, cancelled,
+                                   log if log is not None else [], counts)
         for i, page in enumerate(pdf, 1):
             if cancelled and cancelled():
                 raise FullTextError("cancelled")
-            if progress:                         # pages done, before this one
+            if progress and reader is None:      # pages done, before this one
                 progress(i - 1, len(pdf))
             u = by_page.get(i)
-            if u is not None and (u["source"] != "native" or u["edited"]):
+            if i in readings:
+                items = _reading_items(readings[i])
+                counts["ocr_pages"] += 1
+            elif u is not None and (u["source"] != "native" or u["edited"]):
                 boxes = json.loads(u["boxes"]) if u["boxes"] else []
                 items = _ocr_items(page, u["text"], boxes, illustrations)
                 counts["ocr_pages"] += 1
@@ -368,7 +606,7 @@ def library_document(lib, doc_id: int, illustrations: bool = True, progress=None
     counts["pages"] = len(pages)
     meta = json.loads(doc["meta"] or "{}")
     title = meta.get("title") or Path(doc["name"]).stem
-    blocks = assemble(pages, notes)
+    blocks = assemble(pages, notes, info=counts)
     counts["notes"] = sum(1 for k, _ in blocks if k == "note")
     return title, blocks, counts
 
@@ -425,7 +663,8 @@ def read_picture(data: bytes, langs: str, tesseract: str | None, illustrations: 
         r.text = vision(png) or r.text
     else:
         r.boxes = res.boxes
-    r.paras = [Item("text", t, size) for t, size in layout.ocr_paragraphs(r.text, r.boxes)]
+    r.paras = [Item("text", t, size, ocr=True)
+               for t, size in layout.ocr_paragraphs(r.text, r.boxes)]
     if illustrations:
         # the picture as a page, to look for its illustrations as on a PDF page
         with pymupdf.open(stream=png, filetype="png") as doc:
@@ -624,7 +863,7 @@ def epub_document(src: Path, out: Path, langs: str = ocr.DEFAULT_LANGS,
             if new != r.text:
                 _rename_boxes(r, changes)
                 r.text = new
-                r.paras = [Item("text", t, size)
+                r.paras = [Item("text", t, size, ocr=True)
                            for t, size in layout.ocr_paragraphs(r.text, r.boxes)]
             log += [(path, c) for c in changes]
         counts["corrected"] = sum(c["kept"] for _, c in log)
@@ -666,6 +905,38 @@ def epub_document(src: Path, out: Path, langs: str = ocr.DEFAULT_LANGS,
     counts["notes"] = n_notes
     doc_notes: dict[str, list] = {}
 
+    # the chapters: the book's table of contents, or the chapter titles
+    from . import structure
+    text_paths = [p for p in targets if readings.get(p) and readings[p].is_text]
+    toc_paths: set[str] = set()
+    for n, p in enumerate(text_paths):
+        if structure.is_toc_page([it.text for it in readings[p].paras]):
+            toc_paths.add(p)
+            for q in text_paths[n + 1:n + 4]:
+                more = [it.text for it in readings[q].paras]
+                if more and sum(bool(re.search(r"\d{1,4}\W*$", t)) for t in more) >= 0.4 * len(more):
+                    toc_paths.add(q)
+                else:
+                    break
+    toc = [t for p in text_paths if p in toc_paths
+           for t in structure.toc_titles([it.text for it in readings[p].paras],
+                                         4 * len(text_paths) + 50, _lexicon())]
+    slots_s = [(r, it) for p in text_paths for r in [readings[p]] for it in r.paras
+               if p in toc_paths or not (re.fullmatch(r"[\d\s\-–—.|]+|[ivxlcdm]{1,6}\.?", it.text, re.I)
+                                         or norm(it.text) in running)]
+    seq = [("h2" if body and it.size and it.size >= body * 1.3 and len(it.text) < 150 else "p",
+            it.text) for _, it in slots_s]
+    changes, counts["chapters"] = structure.plan(seq, toc, _lexicon())
+    gone = set()
+    for k, new in changes.items():
+        r, it = slots_s[k]
+        if new is None:
+            gone.add(id(it))
+        else:
+            it.level, it.text = new
+    for p in text_paths:
+        readings[p].paras = [it for it in readings[p].paras if id(it) not in gone]
+
     # the book-wide finishing: typography, long s, cut and glued words
     lang_tag = opf_soup.find(lambda t: local(t.name) == "language")
     lang = lang_tag.get_text().strip().lower() if lang_tag else ""
@@ -693,7 +964,8 @@ def epub_document(src: Path, out: Path, langs: str = ocr.DEFAULT_LANGS,
             continue
         soup = soups[name]
         paras = [it for it in r.paras
-                 if not (re.fullmatch(r"[\d\s\-–—.|]+|[ivxlcdm]{1,6}\.?", it.text, re.I)
+                 if it.level or path in toc_paths
+                 or not (re.fullmatch(r"[\d\s\-–—.|]+|[ivxlcdm]{1,6}\.?", it.text, re.I)
                          or norm(it.text) in running)]
         nodes = []
         total = sum(len(it.text) for it in paras) or 1
@@ -703,12 +975,12 @@ def epub_document(src: Path, out: Path, langs: str = ocr.DEFAULT_LANGS,
             while pics and pics[0][0] <= cum / total:
                 nodes.append(("img", pics.pop(0)[1]))
             heading = body and it.size and it.size >= body * 1.3 and len(it.text) < 150
-            nodes.append(("h2" if heading else "p", it.text))
+            nodes.append((it.level or ("h2" if heading else "p"), it.text))
             cum += len(it.text)
         nodes += [("img", p) for _, p in pics]
         new = []
         for kind, value in nodes:
-            if kind in ("p", "h2"):
+            if kind in ("p", "h1", "h2"):
                 p = soup.new_tag(kind)
                 _fill(soup, p, value)
                 new.append(p)
@@ -825,12 +1097,14 @@ def outputs(lib, doc_id: int) -> list[dict]:
 
 
 def convert(lib, doc_id: int, fmt: str = "epub", illustrations: bool = True,
-            method: str = "ocr", vision=None, progress=None, cancelled=None,
+            method: str | None = None, vision=None, progress=None, cancelled=None,
             notes: bool = True, fix_client=None, focus_client=None,
             finish: Finish | None = None) -> dict:
     """Make the full-text version of a library document; returns its file
     name and counts. EPUB documents stay EPUB; method "vision" reads their
-    pictures with vision(png) -> text."""
+    pictures with vision(png) -> text. For a PDF, method "library" takes the
+    library's text; "ocr", "focus", "fix", "vision" read its scanned pages
+    again (PageReader)."""
     import json
     doc = lib.document(doc_id)
     if doc is None:
@@ -839,6 +1113,7 @@ def convert(lib, doc_id: int, fmt: str = "epub", illustrations: bool = True,
     folder = output_dir(lib, doc_id)
     folder.mkdir(parents=True, exist_ok=True)
     if doc["kind"] == "epub":
+        method = "ocr" if method in (None, "library") else method
         src = lib.original_path(doc_id)
         if not src.exists():
             raise FullTextError(f"original file not found: {src}")
@@ -852,20 +1127,31 @@ def convert(lib, doc_id: int, fmt: str = "epub", illustrations: bool = True,
         raise FullTextError(f"{doc['name']} is already text ({doc['kind']})")
     if fmt not in FORMATS:
         raise FullTextError(f"format is one of {', '.join(FORMATS)}")
+    reader = None
+    if method not in (None, "library") and doc["kind"] == "pdf":
+        reader = PageReader(lib.opts.langs, lib.opts.tesseract,
+                            vision if method == "vision" else None,
+                            focus_client if method == "focus" else None,
+                            fix_client if method == "fix" else None)
+    log: list = []
     title, blocks, counts = library_document(lib, doc_id, illustrations, progress, cancelled,
-                                             notes)
+                                             notes, reader, log)
     if not any(k not in ("img", "note") for k, _ in blocks):
         raise FullTextError("no text in this document: read it with OCR (re-extract) first")
     lang = (json.loads(doc["meta"] or "{}").get("language") or "").split("-")[0] or \
         _guess_lang(blocks)
     # Project Gutenberg: a zip of the text and the HTML
     out = folder / (f"{stem}.gutenberg.zip" if fmt == "gutenberg" else f"{stem}.texte.{fmt}")
-    blocks, log = finish_blocks(blocks, lang, finish or Finish())
+    blocks, more = finish_blocks(blocks, lang, finish or Finish())
+    if progress:
+        progress(1, 1)                           # the file is written next
     bookformats.write(blocks, fmt, title, lang, out)
     corrections_path(out).unlink(missing_ok=True)
+    log += more
     if log:
         _write_log(out, log)
-        counts["finished"] = sum(c["kept"] for _, c in log if c.get("kind") != "typography")
+    if more:
+        counts["finished"] = sum(c["kept"] for _, c in more if c.get("kind") != "typography")
     return {"file": out.name, "format": fmt, **counts,
             "size_before": lib.original_path(doc_id).stat().st_size,
             "size_after": out.stat().st_size}
