@@ -45,6 +45,8 @@ rem ~8000 tokens of retrieved passages; lower it to save memory.
 set "CTX=16384"
 rem layers offloaded to the iGPU (99 = all)
 set "NGL=99"
+rem per profile, for a card too small for the whole model: GEMMA12_NGL,
+rem GEMMA26_NGL, QWENVL_NGL, TRANSLATE_NGL (empty = NGL)
 rem MoE models: keep the experts of N layers in system RAM, computed by the
 rem CPU. Empty = profile default: 99 (all) for gemma26, which does not fit
 rem in the iGPU memory otherwise; 0 = everything on the iGPU. Lower values
@@ -112,6 +114,7 @@ echo        expected: gemma12 ^| gemma26 ^| qwenvl ^| embed ^| translate
 exit /b 1
 
 :p_gemma12
+if defined GEMMA12_NGL set "NGL=%GEMMA12_NGL%"
 set "MODEL=%GEMMA12_MODEL%"
 set "MMPROJ=%GEMMA12_MMPROJ%"
 set "ALIAS=gemma-4-12b"
@@ -119,6 +122,7 @@ set "PORT=%CHAT_PORT%"
 goto chat
 
 :p_gemma26
+if defined GEMMA26_NGL set "NGL=%GEMMA26_NGL%"
 set "MODEL=%GEMMA26_MODEL%"
 set "MMPROJ=%GEMMA26_MMPROJ%"
 set "ALIAS=gemma-4-26b-a4b"
@@ -128,6 +132,8 @@ if not defined MMPROJ_CPU set "MMPROJ_CPU=1"
 goto chat
 
 :p_qwenvl
+if defined QWENVL_NGL set "NGL=%QWENVL_NGL%"
+if defined QWENVL_MMPROJ_CPU set "MMPROJ_CPU=%QWENVL_MMPROJ_CPU%"
 set "MODEL=%QWENVL_MODEL%"
 set "MMPROJ=%QWENVL_MMPROJ%"
 if defined QWENVL_UBATCH set "UBATCH=%QWENVL_UBATCH%"
@@ -186,6 +192,7 @@ exit /b %ERRORLEVEL%
 
 rem ---------------------------------------------------------------------------
 :p_translate
+if defined TRANSLATE_NGL set "NGL=%TRANSLATE_NGL%"
 set "MODEL=%TRANSLATE_MODEL%"
 if not exist "%MODEL%" goto model_missing
 set "KVOPT="

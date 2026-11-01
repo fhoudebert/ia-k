@@ -24,12 +24,16 @@ rem set "UBATCH=2048"
 rem set "MMPROJ_CPU=0"
 rem set "GEMMA26_MODEL=E:\models\gemma-4-26B-A4B-it-QAT-Q4_0.gguf"
 rem set "GEMMA26_MMPROJ=E:\models\mmproj-gemma-4-26B-A4B-it-QAT-BF16.gguf"
+rem set "GEMMA26_NGL=99"
+rem set "GEMMA12_NGL=99"
 rem set "GEMMA12_MODEL=E:\models\gemma-4-12B-it-QAT-Q4_0.gguf"
 rem set "GEMMA12_MMPROJ=E:\models\mmproj-gemma-4-12B-it-QAT-BF16.gguf"
 
 rem --- vision server (profile qwenvl, serveurs-vl.bat) ---
 rem set "VISION_PORT=8082"
 rem set "QWENVL_UBATCH=2048"
+rem set "QWENVL_NGL=99"
+rem set "QWENVL_MMPROJ_CPU=0"
 rem set "QWENVL_CTX=12288"
 rem set "QWENVL_MODEL=E:\models\Qwen3-VL-8B-Instruct-Q4_K_M.gguf"
 rem set "QWENVL_MMPROJ=E:\models\mmproj-Qwen3-VL-8B-Instruct-F16.gguf"
@@ -37,6 +41,7 @@ rem set "QWENVL_MMPROJ=E:\models\mmproj-Qwen3-VL-8B-Instruct-F16.gguf"
 rem --- translation server (profile translate, serveurs-traduction.bat) ---
 rem set "TRANSLATE_PORT=8083"
 rem set "TRANSLATE_CTX=8192"
+rem set "TRANSLATE_NGL=99"
 rem set "TRANSLATE_MODEL=E:\models\translategemma-12b-it-q4_k_m.gguf"
 
 rem --- embedding server (profile embed, every serveurs-*.bat), the same

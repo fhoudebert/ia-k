@@ -25,11 +25,13 @@ ROOT="$(cd "$HERE/.." && pwd)"
 if [ -z "${IAK_SERVER_SETTINGS:-}" ] && [ -f "$HERE/local.sh" ]; then
     export IAK_SERVER_SETTINGS="$HERE/local.sh"
 fi
-CHAT_PORT=8080 EMBED_PORT=8081 VISION_PORT=8082 TRANSLATE_PORT=8083
-WAIT_SECONDS="${WAIT_SECONDS:-300}"
-ONE_BIG_MODEL="${ONE_BIG_MODEL:-0}"
 # shellcheck source=/dev/null
 [ -n "${IAK_SERVER_SETTINGS:-}" ] && . "$IAK_SERVER_SETTINGS"
+# the defaults after the settings, which write ${VAR:-value} (as llama-server.sh)
+CHAT_PORT="${CHAT_PORT:-8080}" EMBED_PORT="${EMBED_PORT:-8081}"
+VISION_PORT="${VISION_PORT:-8082}" TRANSLATE_PORT="${TRANSLATE_PORT:-8083}"
+WAIT_SECONDS="${WAIT_SECONDS:-300}"
+ONE_BIG_MODEL="${ONE_BIG_MODEL:-0}"
 
 KEEP=0 APP=1 PROFILES=()
 for a in "$@"; do
