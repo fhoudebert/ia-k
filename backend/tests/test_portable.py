@@ -111,3 +111,30 @@ def test_words_on_the_key(tmp_path, monkeypatch):
     (root / "build" / "words" / "fr.txt").write_text("atlas\n")
     folder = mp.make(exe, "windows", tmp_path / "out", zip_it=False, words_required=True)
     assert (folder / "build" / "words" / "fr.txt").read_text() == "atlas\n"
+
+
+def test_arm_linux_on_the_key(tmp_path, monkeypatch):
+    """An ARM Linux beside the x86-64 one: its own program and folders."""
+    mp = script("make_portable")
+    root = tmp_path / "src"
+    for rel in ["backend/iak/__init__.py", "backend/requirements.lock",
+                "backend/requirements.txt", "backend/pyproject.toml"]:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("")
+    for rel in mp.BY_OS["linux-arm64"]:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("#!/bin/sh\n")
+    py = root / "build" / "python" / "linux-aarch64"
+    (py / "bin").mkdir(parents=True)
+    (py / "bin" / "python3.12").write_text("")
+    (py / ".complete").write_text("")
+    exe = tmp_path / "ia-k"
+    exe.write_bytes(b"")
+    monkeypatch.setattr(mp, "ROOT", root)
+    out = mp.make(exe, "linux-arm64", tmp_path / "out", zip_it=True,
+                  python=root / "build" / "python", check=False)
+    assert out.name == "ia-k-linux-arm64.zip"
+    with zipfile.ZipFile(out) as z:
+        names = set(z.namelist())
+    assert "ia-k-linux-arm64/ia-k-arm64" in names
+    assert "ia-k-linux-arm64/build/python/linux-aarch64/bin/python3.12" in names

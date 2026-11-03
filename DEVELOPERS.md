@@ -77,8 +77,11 @@ python scripts/make_portable.py --exe src-tauri/target/release/ia-k.exe --os win
 npx tauri build --target universal-apple-darwin --bundles app
 python scripts/make_portable.py --os mac --python \
     --exe src-tauri/target/universal-apple-darwin/release/bundle/macos/IA-K.app
-# one key for all systems, from the three zips (Linux first)
-python scripts/merge_portable.py dist/ia-k-linux.zip dist/ia-k-mac.zip dist/ia-k-windows.zip
+# an ARM Linux (built on it): ia-k-arm64, build/python and build/tesseract/linux-aarch64
+python scripts/make_portable.py --exe src-tauri/target/release/ia-k --os linux-arm64 --python
+# one key for all systems, from the zips (Linux first)
+python scripts/merge_portable.py dist/ia-k-linux.zip dist/ia-k-linux-arm64.zip \
+    dist/ia-k-mac.zip dist/ia-k-windows.zip
 python scripts/build_tesseract.py             # build/tesseract, for --tesseract
 ```
 
@@ -138,6 +141,11 @@ serves all systems. About 5 minutes per system; CI keeps `build/tesseract`
 in its cache until the script changes. `iak.ocr` finds it before an
 installed Tesseract and runs it with `TESSDATA_PREFIX` set to that folder.
 
+On an ARM Linux the program is `ia-k-arm64`, its Python and its Tesseract
+are in `build/python/linux-aarch64` and `build/tesseract/linux-aarch64`, so
+that one key holds both Linux kinds; `setup_python.sh`, `iak.sh`, the
+`serveurs-*.sh` files and the application choose by the processor.
+
 `merge_portable.py` merges the zips into `dist/ia-k.zip` (folder `ia-k/`):
 shared files once (they must match, line endings aside), executable bits
 kept, names differing only by case refused (exFAT).
@@ -145,11 +153,13 @@ kept, names differing only by case refused (exFAT).
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push, on `ubuntu-22.04` /
-`ubuntu-latest`, `windows-latest` and `macos-latest`: the engine tests
+`ubuntu-latest`, `ubuntu-22.04-arm` / `ubuntu-24.04-arm` (ARM 64-bit Linux,
+built natively), `windows-latest` and `macos-latest`: the engine tests
 (Tesseract with French data), the Rust tests, a release build and the
 portable zip with its Python and its Tesseract (`setup_python` and
 `build_tesseract.py` run first), kept 30 days as
-the run's *Artifacts* (`ia-k-windows`, `ia-k-linux`, `ia-k-mac`), and the
+the run's *Artifacts* (`ia-k-windows`, `ia-k-linux`, `ia-k-linux-arm64`,
+`ia-k-mac`), and the
 `key` job merges them into `ia-k` (`ia-k.zip`, all systems). The desktop
 builds use the latest stable Rust; the `msrv` job builds and tests the
 application with Rust 1.90, the minimum, and the locked dependencies. Check

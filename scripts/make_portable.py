@@ -4,6 +4,7 @@ application, for a key or a disk.
 
     python scripts/make_portable.py --exe src-tauri/target/release/ia-k.exe --os windows
     python scripts/make_portable.py --exe src-tauri/target/release/ia-k --os linux
+    python scripts/make_portable.py --exe src-tauri/target/release/ia-k --os linux-arm64
     python scripts/make_portable.py --exe src-tauri/target/universal-apple-darwin/release/bundle/macos/IA-K.app --os mac
 
 Result: dist/ia-k-<os>/ (and dist/ia-k-<os>.zip) holding the application,
@@ -52,7 +53,11 @@ BY_OS = {
 }
 # the same shell scripts on macOS
 BY_OS["mac"] = list(BY_OS["linux"])
-APP_NAME = {"windows": "ia-k.exe", "linux": "ia-k", "mac": "IA-K.app"}
+BY_OS["linux-arm64"] = list(BY_OS["linux"])
+# an ARM Linux beside the x86-64 one on the same key: its own program name
+# and its own folders of Python and Tesseract (build/*/linux-aarch64)
+APP_NAME = {"windows": "ia-k.exe", "linux": "ia-k", "linux-arm64": "ia-k-arm64", "mac": "IA-K.app"}
+KEY_DIR = {"linux-arm64": "linux-aarch64"}
 SKIP_DIRS = {"__pycache__", "tests", ".pytest_cache"}
 
 # Left out of the portable Python: unused by IA-K, and the bytecode caches
@@ -87,7 +92,7 @@ def python_dirs(os_name: str, base: Path) -> list[Path]:
     if os_name == "mac":
         found = sorted(p for p in base.glob("mac-*") if p.is_dir())
     else:
-        found = [base / os_name]
+        found = [base / KEY_DIR.get(os_name, os_name)]
     for p in found:
         if not (p / ".complete").is_file():
             raise SystemExit(f"no complete portable Python in {p}: run setup_python first")
@@ -138,7 +143,7 @@ def copy_python(src: Path, dst: Path) -> int:
 def tesseract_dirs(os_name: str, base: Path) -> list[Path]:
     """The portable Tesseracts built for this system."""
     exe = "tesseract.exe" if os_name == "windows" else "tesseract"
-    found = sorted(base.glob("mac-*")) if os_name == "mac" else [base / os_name]
+    found = sorted(base.glob("mac-*")) if os_name == "mac" else [base / KEY_DIR.get(os_name, os_name)]
     found = [p for p in found if (p / exe).is_file()]
     if not found:
         raise SystemExit(f"no portable Tesseract in {base}: run scripts/build_tesseract.py")
@@ -220,7 +225,7 @@ def make(exe: Path, os_name: str, out: Path, zip_it: bool = True,
         print("words: lexicon copied")
     elif words_required:
         raise SystemExit(f"no lexicon in {words}: run scripts/fetch_words.py")
-    if os_name in ("linux", "mac"):
+    if os_name != "windows":
         exes = [r for r in BY_OS[os_name] if r.endswith(".sh")]
         exes.append(f"{name}/Contents/MacOS/ia-k" if os_name == "mac" else name)
         for rel in exes:

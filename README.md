@@ -24,7 +24,7 @@ architecture).
 
 ## What you need
 
-- A Windows 10/11 or Linux computer (x86-64), or a Mac (macOS 11 or later,
+- A Windows 10/11 computer (x86-64), a Linux one (x86-64 or ARM 64-bit), or a Mac (macOS 11 or later,
   Apple silicon or Intel). The reference machine is a laptop with a Ryzen AI
   9 HX 370, its Radeon 890M and 32 GB of memory.
 - **Language model servers** on that computer (or on your network):
@@ -46,7 +46,8 @@ architecture).
 ## Installing on a key or a disk
 
 1. **Get IA-K and unzip it.** Download `ia-k.zip`, the key for all
-   systems, or only `ia-k-windows.zip`, `ia-k-linux.zip` or `ia-k-mac.zip`
+   systems, or only `ia-k-windows.zip`, `ia-k-linux.zip` (`ia-k-linux-arm64.zip`
+   for an ARM Linux) or `ia-k-mac.zip`
    (GitHub, *Actions* tab, last successful *CI* run, *Artifacts*), or build
    it ([DEVELOPERS.md](DEVELOPERS.md)). Unzip it at the root of the key, for
    instance `E:\ia-k`, `/media/me/KEY/ia-k` or `/Volumes/KEY/ia-k`. Each zip
@@ -82,15 +83,15 @@ architecture).
    those of the reference laptop, in `server/local.hx370.bat`; on another
    computer copy it to `server/local.bat` and edit the copy
    ([SERVERS.md](SERVERS.md#starting-them)); on Linux and macOS, `server/local.sh`.
-   IA-K alone is `ia-k.exe`, `./ia-k` on Linux, `IA-K.app` on macOS.
+   IA-K alone is `ia-k.exe`, `./ia-k` on Linux (`./ia-k-arm64` on ARM), `IA-K.app` on macOS.
 
 The folder then looks like this:
 
 ```
 ia-k/
-├── ia-k.exe  ia-k  IA-K.app the application (Windows, Linux, macOS)
+├── ia-k.exe  ia-k  IA-K.app the application (Windows, Linux, macOS; ia-k-arm64 on ARM Linux)
 ├── backend/                 the engine (Python), started by the application
-├── build/python/            portable Python, one folder per system (two for Macs)
+├── build/python/            portable Python, one folder per system and processor
 ├── config/servers.toml      where the model servers are, per computer
 ├── data/                    your library: database, copies of your files, backups
 ├── server/                  launchers for the model servers, their settings

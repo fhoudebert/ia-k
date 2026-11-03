@@ -4,8 +4,8 @@
     python3 scripts/build_tesseract.py            # this system
     python3 scripts/build_tesseract.py --data-only
 
-One program, build/tesseract/<os>/tesseract[.exe] (linux, windows,
-mac-aarch64 or mac-x86_64), linked statically with Leptonica, libpng and
+One program, build/tesseract/<os>/tesseract[.exe] (linux, linux-aarch64,
+windows, mac-aarch64 or mac-x86_64), linked statically with Leptonica, libpng and
 zlib: no library to install, nothing else to carry. Images are given to it
 as PNG by IA-K, so the other image formats, the network, the archives and
 OpenMP are left out. Its SIMD code (AVX2, FMA, NEON...) is chosen when it
@@ -63,7 +63,8 @@ def os_dir() -> str:
         return "windows"
     if sys.platform == "darwin":
         return "mac-aarch64" if platform.machine() == "arm64" else "mac-x86_64"
-    return "linux"
+    # an ARM Linux has its own beside the x86-64 one, on the same key
+    return "linux-aarch64" if platform.machine() in ("aarch64", "arm64") else "linux"
 
 
 def run(cmd: list, cwd: Path | None = None) -> None:

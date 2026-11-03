@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) OS=mac-aarch64 ;;
     Darwin-*) OS=mac-x86_64 ;;
+    Linux-aarch64|Linux-arm64) OS=linux-aarch64 ;;
     *) OS=linux ;;
 esac
 PY="$ROOT/build/python/$OS/bin/python3.12"
