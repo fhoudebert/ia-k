@@ -133,7 +133,9 @@ fn find_python(root: &Path) -> PathBuf {
             root.join("build").join("python").join("mac").join("bin").join("python3.12")
         }
     } else {
-        root.join("build").join("python").join("linux").join("bin").join("python3.12")
+        // an ARM Linux has its own Python beside the x86-64 one, on the same key
+        let os = if cfg!(target_arch = "aarch64") { "linux-aarch64" } else { "linux" };
+        root.join("build").join("python").join(os).join("bin").join("python3.12")
     };
     if portable.is_file() {
         return portable;

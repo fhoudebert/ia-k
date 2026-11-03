@@ -49,7 +49,8 @@ def key_os() -> str:
         return "windows"
     if sys.platform == "darwin":
         return "mac-aarch64" if platform.machine() == "arm64" else "mac-x86_64"
-    return "linux"
+    # an ARM Linux has its own beside the x86-64 one, on the same key
+    return "linux-aarch64" if platform.machine() in ("aarch64", "arm64") else "linux"
 
 
 def key_tesseract() -> str | None:

@@ -25,11 +25,13 @@ ROOT="$(cd "$HERE/.." && pwd)"
 if [ -z "${IAK_SERVER_SETTINGS:-}" ] && [ -f "$HERE/local.sh" ]; then
     export IAK_SERVER_SETTINGS="$HERE/local.sh"
 fi
-CHAT_PORT=8080 EMBED_PORT=8081 VISION_PORT=8082 TRANSLATE_PORT=8083
-WAIT_SECONDS="${WAIT_SECONDS:-300}"
-ONE_BIG_MODEL="${ONE_BIG_MODEL:-0}"
 # shellcheck source=/dev/null
 [ -n "${IAK_SERVER_SETTINGS:-}" ] && . "$IAK_SERVER_SETTINGS"
+# the defaults after the settings, which write ${VAR:-value} (as llama-server.sh)
+CHAT_PORT="${CHAT_PORT:-8080}" EMBED_PORT="${EMBED_PORT:-8081}"
+VISION_PORT="${VISION_PORT:-8082}" TRANSLATE_PORT="${TRANSLATE_PORT:-8083}"
+WAIT_SECONDS="${WAIT_SECONDS:-300}"
+ONE_BIG_MODEL="${ONE_BIG_MODEL:-0}"
 
 KEEP=0 APP=1 PROFILES=()
 for a in "$@"; do
@@ -112,18 +114,19 @@ for p in "${PROFILES[@]}"; do
 done
 
 [ "$APP" = "1" ] || exit 0
-# Linux: ia-k; macOS: the program inside IA-K.app (run directly, so that this
+# Linux: ia-k (ia-k-arm64 on ARM); macOS: the program inside IA-K.app (run directly, so that this
 # script waits for it to close)
 APP_EXE="$ROOT/ia-k"
+case "$(uname -m)" in aarch64|arm64) APP_EXE="$ROOT/ia-k-arm64" ;; esac   # an ARM Linux
 [ "$(uname -s)" = Darwin ] && APP_EXE="$ROOT/IA-K.app/Contents/MacOS/ia-k"
 if [ ! -x "$APP_EXE" ]; then
     echo "IA-K not found: $APP_EXE" >&2
     exit 1
 fi
-if pgrep -x ia-k >/dev/null 2>&1; then
+if pgrep -x 'ia-k|ia-k-arm64' >/dev/null 2>&1; then
     # another serveurs-*.sh started IA-K: it uses these servers as they come
     echo "IA-K is already open: it uses these servers now. They stop when IA-K closes."
-    while pgrep -x ia-k >/dev/null 2>&1; do sleep 5; done
+    while pgrep -x 'ia-k|ia-k-arm64' >/dev/null 2>&1; do sleep 5; done
     exit 0
 fi
 echo "Starting IA-K..."

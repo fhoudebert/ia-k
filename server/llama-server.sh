@@ -41,7 +41,8 @@ QWENVL_UBATCH="${QWENVL_UBATCH:-2048}"
 QWENVL_CTX="${QWENVL_CTX:-12288}"
 THREADS="${THREADS:-}"         # CPU threads (empty = llama.cpp's choice)
 CTX="${CTX:-16384}"          # chat context (prompt + answer)
-NGL="${NGL:-99}"             # layers on the iGPU (99 = all)
+NGL="${NGL:-99}"             # layers on the GPU (99 = all); per profile: GEMMA12_NGL,
+                             # GEMMA26_NGL, QWENVL_NGL, TRANSLATE_NGL (a card too small)
 N_CPU_MOE="${N_CPU_MOE:-}"   # MoE: experts of N layers on the CPU (gemma26 default 99, 0 = none)
 MMPROJ_CPU="${MMPROJ_CPU:-}" # 1 = vision projector on the CPU (gemma26 default 1)
 KV_Q8="${KV_Q8:-0}"          # 1 = KV cache in q8_0
@@ -80,11 +81,13 @@ need_file() {
 }
 
 case "$PROFILE" in
-    gemma12) MODEL="$GEMMA12_MODEL"; MMPROJ="${GEMMA12_MMPROJ:-}"; ALIAS=gemma-4-12b; PORT="$CHAT_PORT" ;;
+    gemma12) MODEL="$GEMMA12_MODEL"; MMPROJ="${GEMMA12_MMPROJ:-}"; ALIAS=gemma-4-12b; PORT="$CHAT_PORT"
+             NGL="${GEMMA12_NGL:-$NGL}" ;;
     gemma26) MODEL="$GEMMA26_MODEL"; MMPROJ="${GEMMA26_MMPROJ:-}"; ALIAS=gemma-4-26b-a4b; PORT="$CHAT_PORT"
-             N_CPU_MOE="${N_CPU_MOE:-99}"; MMPROJ_CPU="${MMPROJ_CPU:-1}" ;;
+             N_CPU_MOE="${N_CPU_MOE:-99}"; MMPROJ_CPU="${MMPROJ_CPU:-1}"; NGL="${GEMMA26_NGL:-$NGL}" ;;
     qwenvl)  MODEL="$QWENVL_MODEL";  MMPROJ="${QWENVL_MMPROJ:-}";  ALIAS=vision; PORT="$VISION_PORT"; VISION=1
-             UBATCH="$QWENVL_UBATCH"; CTX="$QWENVL_CTX"; N_CPU_MOE="" ;;
+             UBATCH="$QWENVL_UBATCH"; CTX="$QWENVL_CTX"; N_CPU_MOE=""; NGL="${QWENVL_NGL:-$NGL}"
+             MMPROJ_CPU="${QWENVL_MMPROJ_CPU:-${MMPROJ_CPU:-}}" ;;
     embed)
         need_file "$EMBED_MODEL"
         echo "[ia-k] embeddings on http://$HOST:$EMBED_PORT/v1  (alias embeddinggemma)"
@@ -101,7 +104,7 @@ case "$PROFILE" in
         KVT=()
         [ "$KV_Q8" = "1" ] && KVT=(-ctk q8_0 -ctv q8_0)
         exec "$SERVER" -m "$TRANSLATE_MODEL" --alias translategemma --host "$HOST" \
-            --port "$TRANSLATE_PORT" -c "$TRANSLATE_CTX" -ngl "$NGL" -np 1 --jinja \
+            --port "$TRANSLATE_PORT" -c "$TRANSLATE_CTX" -ngl "${TRANSLATE_NGL:-$NGL}" -np 1 --jinja \
             "${KVT[@]}" "${THOPT[@]}" "${EXTRA[@]}"
         ;;
     *)

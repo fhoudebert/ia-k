@@ -90,6 +90,19 @@ not versioned). On Linux and macOS they come from `server/local.sh` (copy
 `~/.lmstudio/models` (`MODELS_DIR`), and `llama-server` installed by Homebrew
 is found without `LLAMA_DIR`. `IAK_SERVER_SETTINGS` can name another settings file.
 
+**A desktop with a graphics card of 8 GB** (a Radeon RX 580, a Ryzen 5
+2600X and 64 GB, on Linux): `server/local.rx580.sh` is a complete
+`local.sh` for it. The card holds one model at a time, and not every one
+whole: the 26B keeps its experts in the main memory (`N_CPU_MOE=99`) and
+puts attention, context and vision projector on the card
+(`MMPROJ_CPU=0`); Qwen3-VL-8B goes on the card with a context of 8192 and a
+micro-batch of 1536; the 12B and TranslateGemma put only part of their
+layers there (`GEMMA12_NGL`, `TRANSLATE_NGL`); 6 threads, KV cache in q8.
+These are starting values: watch the card's memory (`amdgpu_top`,
+`radeontop`) and `data/server-<profile>.log`, and move the `*_NGL` values,
+`N_CPU_MOE` and the contexts until the model loads and leaves no room
+unused.
+
 ### One server at a time
 
 `server/` also holds single launchers for the reference laptop (Windows,
@@ -122,6 +135,8 @@ server\llama-server.bat translate
 | `MODELS_DIR`, `LLAMA_DIR` | `D:\ia\models`, `build\llama` | where the models and `llama-server` are |
 | `CTX` | 16384 | context of the chat server, prompt + answer |
 | `NGL` | 99 | layers on the GPU |
+| `GEMMA26_NGL`, `GEMMA12_NGL`, `QWENVL_NGL`, `TRANSLATE_NGL` | `NGL` | layers on the GPU for one profile (a card too small for the model) |
+| `QWENVL_MMPROJ_CPU` | `MMPROJ_CPU` | the vision server's projector on the CPU |
 | `N_CPU_MOE` | 99 for gemma26 | experts of N layers kept on the CPU |
 | `MMPROJ_CPU` | 1 for gemma26 | vision projector on the CPU |
 | `VISION` | 1 | 0 = no vision projector |

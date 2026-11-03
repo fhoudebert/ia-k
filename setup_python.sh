@@ -4,10 +4,11 @@
 #
 #  Installs a complete, relocatable CPython (python-build-standalone,
 #  stripped build, about 100 MB; 260 MB with the packages) in
-#  build/python/linux (build/python/mac-aarch64 or mac-x86_64 on a Mac, one
-#  per processor, so one key serves both kinds of Mac) and the packages of
-#  backend/requirements.lock into it. Unlike a venv, it does not depend on the
-#  Python of the computer: the key works on any x86-64 Linux, or any Mac.
+#  build/python/linux (linux-aarch64 on an ARM Linux; mac-aarch64 or
+#  mac-x86_64 on a Mac: one per processor, so one key serves them all) and
+#  the packages of backend/requirements.lock into it. Unlike a venv, it does
+#  not depend on the Python of the computer: the key works on any x86-64 or
+#  ARM 64-bit Linux, or any Mac.
 #  The zips built by CI already hold it (Apple silicon only for macOS): this
 #  is then only needed to update it, or on an Intel Mac. Windows has its own
 #  copy (setup_python.bat); all can live side by side on the same key.
@@ -23,6 +24,9 @@ case "$(uname -s)-$(uname -m)" in
     Linux-x86_64)
         OS=linux; TRIPLE=x86_64-unknown-linux-gnu
         SHA256="178d3d83b6e8e99285a65d3fce9c16b87952cc5efdb4d1a0e3ff3be18ff0fc9c" ;;
+    Linux-aarch64|Linux-arm64)
+        OS=linux-aarch64; TRIPLE=aarch64-unknown-linux-gnu
+        SHA256="9467a99bacc7d90b64b02de7fa9ecfc99b72905e64e74f7ff6b460ad95cfed5a" ;;
     Darwin-arm64)
         OS=mac; TRIPLE=aarch64-apple-darwin
         SHA256="9866e11cf2ae9caa1e671383786f248859a52dd8bfb702fb4c0dc2c65f1d36de" ;;
@@ -30,7 +34,7 @@ case "$(uname -s)-$(uname -m)" in
         OS=mac; TRIPLE=x86_64-apple-darwin
         SHA256="d09998f85752b646873a8a6bc7eea442a0d251b1c8d2413aa8ea06ef131c3335" ;;
     *)
-        echo "unsupported system: $(uname -s) $(uname -m) (Linux x86-64 or macOS)" >&2
+        echo "unsupported system: $(uname -s) $(uname -m) (Linux x86-64 or ARM 64-bit, or macOS)" >&2
         exit 1 ;;
 esac
 ASSET="cpython-${PY_VERSION}+${PBS_TAG}-${TRIPLE}-install_only_stripped.tar.gz"
