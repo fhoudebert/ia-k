@@ -48,7 +48,8 @@ architecture).
 1. **Get IA-K and unzip it.** Download `ia-k.zip`, the key for all
    systems, or only `ia-k-windows.zip`, `ia-k-linux.zip` (`ia-k-linux-arm64.zip`
    for an ARM Linux) or `ia-k-mac.zip`
-   (GitHub, *Actions* tab, last successful *CI* run, *Artifacts*), or build
+   (GitHub, *Releases*, or the *Actions* tab, last successful *Release*
+   run, *Artifacts*), or build
    it ([DEVELOPERS.md](DEVELOPERS.md)). Unzip it at the root of the key, for
    instance `E:\ia-k`, `/media/me/KEY/ia-k` or `/Volumes/KEY/ia-k`. Each zip
    holds the application and its engine with their own Python: nothing else

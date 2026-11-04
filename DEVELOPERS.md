@@ -37,7 +37,7 @@ server/              llama-server launchers, start-servers.*, settings (SERVERS.
 serveurs-*.bat, .sh  servers of a use + IA-K in one go
 scripts/             smoke_test.py (model servers), make_portable.py (portable zip)
 setup_python.*       portable Python; iak.* command line
-.github/workflows/   ci.yml
+.github/workflows/   release.yml
 ```
 
 ## Portable Python
@@ -152,7 +152,9 @@ kept, names differing only by case refused (exFAT).
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every push, on `ubuntu-22.04` /
+`.github/workflows/release.yml` runs by hand (*Actions* tab, *Release*, *Run
+workflow*) or when a tag `v*` is pushed (`git tag v0.5 && git push origin
+v0.5`), on `ubuntu-22.04` /
 `ubuntu-latest`, `ubuntu-22.04-arm` / `ubuntu-24.04-arm` (ARM 64-bit Linux,
 built natively), `windows-latest` and `macos-latest`: the engine tests
 (Tesseract with French data), the Rust tests, a release build and the
@@ -160,7 +162,9 @@ portable zip with its Python and its Tesseract (`setup_python` and
 `build_tesseract.py` run first), kept 30 days as
 the run's *Artifacts* (`ia-k-windows`, `ia-k-linux`, `ia-k-linux-arm64`,
 `ia-k-mac`), and the
-`key` job merges them into `ia-k` (`ia-k.zip`, all systems). The desktop
+`key` job merges them into `ia-k` (`ia-k.zip`, all systems); for a tag,
+the `release` job publishes the zips in the GitHub release of that tag
+(created if needed). The desktop
 builds use the latest stable Rust; the `msrv` job builds and tests the
 application with Rust 1.90, the minimum, and the locked dependencies. Check
 it locally with [actionlint](https://github.com/rhysd/actionlint).
