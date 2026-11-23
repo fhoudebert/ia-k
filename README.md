@@ -1,5 +1,7 @@
 # IA-K
 
+*[Version française](lisezMoi.md)*
+
 ![IA-K](assets/ia-k-512.png)
 
 IA-K is a personal, offline desktop assistant for your documents. Give it
@@ -15,6 +17,26 @@ documents with TranslateGemma.
   Windows, Linux and macOS, from the same exFAT key if you like.
 - **French and English** interface.
 - Open source, MIT licence.
+
+## Two things IA-K does especially well
+
+- **Translating a whole book well, with a local model.** A good
+  translation is not done in one go, and IA-K does it in steps: a trial on
+  the first blocks to check the tone, an optional glossary so names and
+  terms stay the same from start to end, then up to three passes
+  (translation, bilingual revision against the original, final
+  proofreading). The layout is kept (EPUB, DOCX, HTML, PDF as an A5 book),
+  and a translation of several hours can be paused and resumed, even after
+  the computer has been turned off. No page of the book leaves your
+  computer.
+- **Getting the full text of a scanned book, with little proofreading
+  left.** Each page is read by Tesseract, checked against the PDF's own OCR
+  layer when it has one, and only the doubtful words go to the vision
+  model, which reads just those lines in the image. The whole book is then
+  finished: paragraphs and notes rebuilt, cut words joined, French
+  typography, long s and old spelling for early prints. Every correction is
+  listed in a `.corrections.tsv` file, so what remains to proofread is
+  known, and pages corrected by hand are never overwritten.
 
 Other guides: [FEATURES.md](FEATURES.md) (what IA-K does and how to use
 it; in French, [FONCTIONNALITES.md](FONCTIONNALITES.md)), [SERVERS.md](SERVERS.md) (running the language models
