@@ -1,6 +1,8 @@
 """Command line for the IA-K backend, until the desktop interface exists.
 
     python -m iak import FILE...          import documents (copied into the library)
+    python -m iak ocr FILE... [--conf]    the text of images or short PDFs, at once
+                                          (Tesseract; nothing stored, no server)
     python -m iak list                    documents, type, state, pages, OCR pages
     python -m iak status                  counts, semantic index, servers
     python -m iak show ID                 units of a document with their text
@@ -86,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
                    help="do not copy the files, only record where they are")
     p.add_argument("--no-embed", action="store_true",
                    help="do not compute vectors now (see the embed command)")
+    p = sub.add_parser("ocr", help="text of images or PDFs, without the library")
+    p.add_argument("files", nargs="+", type=Path)
+    p.add_argument("--conf", action="store_true",
+                   help="also print each page's OCR confidence (on stderr)")
+    p.add_argument("--max-pages", type=int, default=None,
+                   help="refuse longer PDFs (default: 30)")
     sub.add_parser("list")
     sub.add_parser("status")
     p = sub.add_parser("embed")
@@ -236,6 +244,30 @@ def main(argv: list[str] | None = None) -> int:
         host.vision = args.vision_server
     if args.translate_server:
         host.translate = args.translate_server
+
+    if args.cmd == "ocr":
+        # no library: it may be open in the application at the same time
+        from . import extract, ocr
+        opts = extract.Options(langs=args.ocr_langs, tesseract=args.tesseract)
+        limit = args.max_pages or extract.QUICK_MAX_PAGES
+        failed = 0
+        for i, f in enumerate(args.files):
+            try:
+                r = extract.quick_ocr(f, opts, limit)
+            except (extract.ExtractError, ocr.OcrError) as exc:
+                print(f"{f}: {exc}", file=sys.stderr)
+                failed += 1
+                continue
+            if len(args.files) > 1:
+                _out(("\n" if i else "") + f"==> {f} <==")
+            _out(r["text"])
+            for w in r["warnings"]:
+                print(f"{f}: {w}", file=sys.stderr)
+            if args.conf:
+                for pg in r["pages"]:
+                    conf = "native text" if pg["conf"] is None else f"confidence {pg['conf']}"
+                    print(f"{f} {pg['label']}: {conf}", file=sys.stderr)
+        return 1 if failed else 0
 
     if args.cmd == "serve":
         from . import api

@@ -257,3 +257,23 @@ def test_locked_database_message():
     assert api._locked(sqlite3.OperationalError("database is locked"))
     assert not api._locked(sqlite3.OperationalError("no such table: x"))
     assert "another IA-K" in api.BUSY
+
+
+def test_quick_ocr_route(stack, native_pdf, docx_file):
+    app, port, _ = stack
+    s, r, _ = call(port, "POST", "/api/ocr", {"path": str(native_pdf)})
+    assert s == 200 and "relieur" in r["text"] and len(r["pages"]) == 3
+    assert "seconds" in r and r["langs"] == app.ocr_langs
+    # nothing went into the library
+    assert call(port, "GET", "/api/documents")[1] == []
+    assert call(port, "POST", "/api/ocr", {"path": str(docx_file)})[0] == 400
+    assert call(port, "POST", "/api/ocr", {})[0] == 400
+    assert call(port, "POST", "/api/ocr", {"path": str(native_pdf),
+                                           "langs": "fra; rm -rf"})[0] == 400
+
+
+@needs_tesseract
+def test_quick_ocr_route_image(stack, screenshot):
+    _, port, _ = stack
+    s, r, _ = call(port, "POST", "/api/ocr", {"path": str(screenshot), "langs": "eng"})
+    assert s == 200 and "404" in r["text"] and r["conf"] > 0

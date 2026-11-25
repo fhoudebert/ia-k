@@ -34,8 +34,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import (__version__, analyze, answer, book, collection, db, doubt, embed, export, folders,
-               fulltext, ocr, search, servers, transcription, translate)
+from . import (__version__, analyze, answer, book, collection, db, doubt, embed, export, extract,
+               folders, fulltext, ocr, search, servers, transcription, translate)
 from .library import Library
 
 CONTENT_TYPES = {
@@ -49,6 +49,8 @@ CONTENT_TYPES = {
 }
 TAURI_ORIGINS = {"tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"}
 MAX_BODY = 4 << 20
+# Tesseract language codes joined by +: fra, fra+eng, fra+frm...
+OCR_LANGS = re.compile(r"^[A-Za-z_]+(\+[A-Za-z_]+)*$")
 
 # "database is locked": SQLite waited 30 s (db.connect) for another writer
 BUSY = ("the library is busy (database is locked): another IA-K is probably open on "
@@ -774,6 +776,28 @@ class Handler(BaseHTTPRequestHandler):
                                          "reference": bool(body.get("reference"))})
         self._json(202, {"job": job.id})
 
+    @route("POST", "/api/ocr")
+    def quick_ocr(self, query):
+        """The text of an image or a short PDF, read at once by Tesseract:
+        nothing goes into the library and no model server is needed."""
+        body = self._body()
+        path = body.get("path")
+        if not isinstance(path, str) or not path:
+            raise ApiError(400, "path must be a file path")
+        langs = str(body.get("langs") or self.app.ocr_langs).strip()
+        if not OCR_LANGS.match(langs):
+            raise ApiError(400, "langs are Tesseract codes joined by +, e.g. fra+eng")
+        t0 = time.perf_counter()
+        try:
+            r = extract.quick_ocr(path, extract.Options(langs=langs,
+                                                        tesseract=self.app.tesseract))
+        except extract.ExtractError as exc:
+            raise ApiError(400, str(exc))
+        except ocr.OcrError as exc:
+            raise ApiError(503, str(exc))
+        r["seconds"] = round(time.perf_counter() - t0, 1)
+        self._json(200, r)
+
     # -------------------------------------------------- units
     @route("GET", r"/api/units/(\d+)")
     def unit(self, unit_id, query):
@@ -1471,7 +1495,7 @@ class Handler(BaseHTTPRequestHandler):
         with self.app.library() as lib:
             if "ocr_langs" in body:
                 langs = str(body["ocr_langs"]).strip()
-                if not re.match(r"^[A-Za-z_]+(\+[A-Za-z_]+)*$", langs):
+                if not OCR_LANGS.match(langs):
                     raise ApiError(400, "OCR languages look like fra+eng")
                 db.set_setting(lib.con, "ocr_langs", langs)
                 self.app.ocr_langs = langs

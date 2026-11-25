@@ -198,6 +198,7 @@ button.cite { padding: 0 5px; font-size: 11px; border-radius: 4px; background: v
 #tr-text-mode { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
 .tr-columns { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-height: 260px; }
 .tr-columns textarea { resize: none; font-size: 14px; line-height: 1.5; padding: 10px 12px; }
+.tr-columns textarea.over { border-color: var(--accent); background: var(--accent-soft); }
 #tr-output { background: var(--accent-soft); }
 #tr-doc-mode { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
 #tr-doc { max-width: 360px; }

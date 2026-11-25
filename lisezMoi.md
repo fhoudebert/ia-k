@@ -154,6 +154,8 @@ grande) depuis les *Réglages*.
   les mots douteux, sous forme de propositions que vous acceptez ou non.
 - **Traduction** : un texte, un document page par page, ou un livre entier
   avec sa mise en forme, reprenable après une pause.
+- **OCR rapide** : déposer une image sur l'onglet *Traduction* donne son
+  texte en une seconde, avec Tesseract seul : ni serveur, ni import.
 
 Tout, pas à pas : [FONCTIONNALITES.md](FONCTIONNALITES.md).
 

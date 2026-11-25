@@ -164,6 +164,41 @@ def extract_image(path: Path, opts: Options) -> Extraction:
 
 
 # --------------------------------------------------------------------------
+# Quick OCR: the text of an image or a PDF, without the library
+
+# beyond this, a document is better imported (a job, kept, cancellable)
+QUICK_MAX_PAGES = 30
+
+
+def quick_ocr(path: str | Path, opts: Options | None = None,
+              max_pages: int = QUICK_MAX_PAGES) -> dict:
+    """Read an image or a PDF at once, nothing stored: the native text of a
+    PDF page when it has one, else Tesseract. No server is needed."""
+    path = Path(path)
+    if not path.is_file():
+        raise ExtractError(f"no such file: {path}")
+    if kind_of(path) not in ("image", "pdf"):
+        raise ExtractError("quick OCR reads images (PNG, JPEG, TIFF, BMP, WebP) and PDFs")
+    opts = opts or Options()
+    try:
+        with _pymupdf().open(path) as doc:
+            n = doc.page_count
+    except Exception as exc:
+        raise ExtractError(f"cannot open {path.name}: {exc}") from exc
+    if n > max_pages:
+        raise ExtractError(f"{path.name} has {n} pages, more than {max_pages}: "
+                           "import it into the library instead")
+    ex = extract(path, Options(ocr=True, langs=opts.langs, tesseract=opts.tesseract))
+    pages = [{"label": u.label, "text": u.text, "source": u.source, "conf": u.ocr_conf}
+             for u in ex.units]
+    confs = [p["conf"] for p in pages if p["conf"] is not None]
+    return {"name": path.name, "langs": opts.langs,
+            "text": "\n\n".join(p["text"] for p in pages if p["text"]),
+            "conf": round(sum(confs) / len(confs), 1) if confs else None,
+            "pages": pages, "warnings": ex.meta.get("warnings", [])}
+
+
+# --------------------------------------------------------------------------
 # DOCX
 
 def extract_docx(path: Path, opts: Options) -> Extraction:

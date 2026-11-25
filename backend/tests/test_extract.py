@@ -1,3 +1,5 @@
+import pytest
+
 from iak import chunk, extract, ocr
 
 from .conftest import needs_tesseract
@@ -98,3 +100,30 @@ def test_chunk_overlap_and_offsets():
     assert pieces[-1].end == len(text)
     assert chunk.split("  court  ")[0].text == "court"
     assert chunk.split("   ") == []
+
+
+# ---------------------------------------------------------------- quick OCR
+
+@needs_tesseract
+def test_quick_ocr_image(screenshot):
+    r = extract.quick_ocr(screenshot)
+    assert r["name"] == "capture.png" and "404" in r["text"]
+    assert r["conf"] and r["pages"][0]["source"] == "ocr"
+
+
+def test_quick_ocr_native_pdf_needs_no_tesseract(native_pdf, monkeypatch):
+    def no_tesseract(*a, **k):
+        raise AssertionError("Tesseract called for a native PDF")
+    monkeypatch.setattr(extract.tess, "ocr_image_bytes", no_tesseract)
+    r = extract.quick_ocr(native_pdf)
+    assert r["conf"] is None and len(r["pages"]) == 3
+    assert "relieur" in r["text"] and "\n\n" in r["text"]
+
+
+def test_quick_ocr_refusals(native_pdf, docx_file, tmp_path):
+    with pytest.raises(extract.ExtractError, match="images"):
+        extract.quick_ocr(docx_file)
+    with pytest.raises(extract.ExtractError, match="no such file"):
+        extract.quick_ocr(tmp_path / "absent.png")
+    with pytest.raises(extract.ExtractError, match="more than 2"):
+        extract.quick_ocr(native_pdf, max_pages=2)
