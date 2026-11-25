@@ -16,6 +16,7 @@ interface uses.
 ```
 ./iak.sh import ~/docs/*.pdf scans/page12.png     # copied into the library
 ./iak.sh import --reference big-archive.pdf       # only its path is recorded
+./iak.sh ocr photo.jpg [--conf]                   # its text at once: nothing stored, no server
 ./iak.sh list                                     # documents, state, pages, OCR, passages
 ./iak.sh status                                   # counts, semantic index, servers
 ./iak.sh show 3                                   # pages of document 3 with their text
@@ -521,6 +522,7 @@ The interface talks to the engine through an HTTP API:
 | `GET /api/documents/<id>/original` | the original file |
 | `DELETE /api/documents/<id>` | remove (database backed up first) |
 | `POST /api/import` `{"paths": [...], "reference": false}` | job; a folder among the paths is followed (not watched) |
+| `POST /api/ocr` `{"path", "langs": "fra+eng"}` | quick OCR of an image or a PDF of at most 30 pages, answered at once: `{text, conf, pages, langs, seconds}`; nothing stored, no model server |
 | `POST /api/documents/<id>/reindex` `{"extract": true}` | job |
 | `GET /api/units/<id>`, `GET /api/units/<id>/image?max=1600` | text and word boxes; page as PNG |
 | `PUT /api/units/<id>/text` `{"text": "..."}` | OCR correction, reindexed |

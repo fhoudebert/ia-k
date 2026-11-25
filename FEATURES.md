@@ -13,6 +13,12 @@ Installing: [README.md](README.md).
   document's state, pages, OCR pages and passages; the *Jobs* panel shows
   imports and analyses in progress. From the list you can open, summarise or
   delete a document, and compare the documents you tick.
+- **Quick OCR.** To get the text of a picture without importing it, drop it
+  on the *Translate* tab (text mode) or click *Read an image…*: Tesseract
+  reads it in a second or two, with no model server, and its text lands in
+  the box, ready to copy or translate. Also images and PDFs of up to 30
+  pages (a PDF's own text is taken when it has one). On the command line:
+  `./iak.sh ocr photo.jpg`.
 - **Folders.** *Import a folder…* (or drop a folder on the window) brings in
   all the documents of a folder and its subfolders, in a collection named
   after it; by default the files are only referenced and stay where they

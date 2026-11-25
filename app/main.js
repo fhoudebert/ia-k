@@ -1405,6 +1405,45 @@ async function translateText() {
   finally { tr.busy = false; $("#tr-run").disabled = false; }
 }
 
+const OCR_EXTENSIONS = ["png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp", "pdf"];
+
+/** Read images or short PDFs with Tesseract (no server, nothing imported):
+ *  their text goes into the box to translate. */
+async function ocrPaths(paths) {
+  paths = paths.filter((p) => OCR_EXTENSIONS.includes(p.split(".").pop().toLowerCase()));
+  if (!paths.length || tr.busy) return;
+  const info = $("#tr-info");
+  const texts = [];
+  tr.busy = true;
+  $("#tr-run").disabled = $("#tr-ocr").disabled = true;
+  try {
+    for (const path of paths) {
+      const name = path.split(/[\\/]/).pop();
+      info.textContent = t("tr.ocr_running", { name });
+      const r = await post("/api/ocr", { path });
+      if (r.text) texts.push(r.text);
+      info.textContent = !r.text ? t("tr.ocr_empty", { name })
+        : r.conf === null ? t("tr.ocr_native", { name, seconds: r.seconds })
+        : t("tr.ocr_done", { name, langs: r.langs, conf: Math.round(r.conf), seconds: r.seconds });
+      if (r.warnings && r.warnings.length) toast(r.warnings[0], true);
+    }
+    if (texts.length) {
+      $("#tr-input").value = texts.join("\n\n");
+      $("#tr-output").value = "";
+      $("#tr-input").focus();
+    }
+  } catch (e) { info.textContent = ""; fail(e); }
+  finally { tr.busy = false; $("#tr-run").disabled = $("#tr-ocr").disabled = false; }
+}
+
+async function chooseOcrFiles() {
+  if (!TAURI || !TAURI.dialog) { toast("File dialog only available in the application", true); return; }
+  const picked = await TAURI.dialog.open({
+    multiple: true, filters: [{ name: t("lib.filetypes"), extensions: OCR_EXTENSIONS }],
+  });
+  if (picked) await ocrPaths(Array.isArray(picked) ? picked : [picked]);
+}
+
 function trError(msg) {
   if (/could not be detected/.test(msg)) return t("tr.detect_failed");
   if (/no translation or chat server/.test(msg)) return t("tr.no_server");
@@ -1964,6 +2003,7 @@ function wire() {
   $("#tr-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); translateText(); }
   });
+  $("#tr-ocr").addEventListener("click", () => chooseOcrFiles().catch(fail));
   $("#tr-copy").addEventListener("click", () => {
     const text = $("#tr-output").value;
     if (text) navigator.clipboard.writeText(text).then(() => toast(t("tr.copied")), fail);
@@ -2010,11 +2050,15 @@ function wire() {
   // files dropped on the window (Tauri gives their paths)
   if (TAURI && TAURI.webview) {
     TAURI.webview.getCurrentWebview().onDragDropEvent((event) => {
-      const zone = $("#drop-zone");
+      // on the Translate tab (text), the files are read at once, not imported
+      const read = state.view === "translate" && trMode() === "text";
+      const zone = read ? $("#tr-input") : $("#drop-zone");
       const type = event.payload.type;
       if (type === "over" || type === "enter") zone.classList.add("over");
-      else zone.classList.remove("over");
-      if (type === "drop" && backend) { show("library"); importPaths(event.payload.paths || []); }
+      else { $("#drop-zone").classList.remove("over"); $("#tr-input").classList.remove("over"); }
+      if (type !== "drop" || !backend) return;
+      if (read) ocrPaths(event.payload.paths || []);
+      else { show("library"); importPaths(event.payload.paths || []); }
     });
   }
 }

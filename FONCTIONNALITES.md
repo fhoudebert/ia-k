@@ -36,6 +36,12 @@ Installation : [README.md](README.md) ; en anglais : [FEATURES.md](FEATURES.md).
   moyen français et le latin) des pages scannées, avec la confiance de
   lecture de chaque page ; langues réglables (`fra+eng`, `fra+frm` pour le
   moyen français…).
+- **OCR rapide** : pour avoir le texte d'une image sans l'importer, la
+  déposer sur l'onglet *Traduction* (mode texte) ou cliquer *Lire une
+  image…* ; Tesseract la lit en une ou deux secondes, sans aucun serveur de
+  modèle, et le texte arrive dans la zone, prêt à copier ou à traduire.
+  Images et PDF jusqu'à 30 pages (le texte propre du PDF est pris s'il en a
+  un). En ligne de commande : `./iak.sh ocr photo.jpg`.
 - **Dossiers** : « Importer un dossier… » (ou déposer un dossier sur la
   fenêtre) référence tous ses documents, sous-dossiers compris, dans une
   collection du nom du dossier. Un dossier **surveillé** est examiné chaque

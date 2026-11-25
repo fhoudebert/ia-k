@@ -142,6 +142,8 @@ The library can be moved elsewhere (a disk, a bigger key) from *Settings*.
   doubtful words, as proposals you accept or not.
 - **Translation**: a text, a document page by page, or a whole book with
   its layout, resumable after a pause.
+- **Quick OCR**: drop an image on the *Translate* tab and get its text in a
+  second, with Tesseract alone: no server, no import.
 
 Everything, step by step: [FEATURES.md](FEATURES.md).
 
