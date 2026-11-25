@@ -1,6 +1,6 @@
 [package]
 name = "ia-k"
-version = "0.1.0"
+version = "1.0.0"
 description = "IA-K, a local and portable document assistant"
 authors = ["fhoudebert"]
 license = "MIT"
